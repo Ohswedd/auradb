@@ -1,0 +1,54 @@
+# Rust
+/target/
+**/target/
+Cargo.lock.bak
+**/*.rs.bk
+
+# Local data
+.local/
+data/
+auradb-data/
+*.db
+*.sqlite
+*.sqlite3
+*.seg
+*.wal
+*.tmp
+*.auradb
+
+# Logs
+*.log
+logs/
+
+# Coverage and profiling
+tarpaulin-report.html
+lcov.info
+coverage/
+*.profraw
+*.profdata
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+
+# Environment
+.env
+.env.*
+*.pem
+*.key
+*.crt
+*.p12
+*.pfx
+
+# Release artifacts
+dist/
+release/

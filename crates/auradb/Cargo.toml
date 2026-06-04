@@ -1,0 +1,33 @@
+[package]
+name = "auradb"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+description = "The embeddable AuraDB engine: storage, indexes, transactions, and queries composed."
+
+[dependencies]
+auradb-core = { workspace = true }
+auradb-storage = { workspace = true }
+auradb-index = { workspace = true }
+auradb-txn = { workspace = true }
+auradb-query = { workspace = true }
+serde_json = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }
+criterion = { workspace = true }
+
+[[bench]]
+name = "storage"
+harness = false
+
+[[bench]]
+name = "query"
+harness = false
+
+[[bench]]
+name = "vector"
+harness = false

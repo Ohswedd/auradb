@@ -1,0 +1,39 @@
+# Example AuraDB server configuration.
+# All fields have sensible defaults; this file shows every option.
+# CLI flags (--data-dir, --bind, --port) override these values.
+
+# Network bind address and port.
+bind = "127.0.0.1"
+port = 7171
+
+# Directory where segments, manifest, and the schema catalog live.
+data_dir = ".local/auradb"
+
+# Maximum accepted protocol payload size, in bytes (16 MiB).
+max_payload_bytes = 16777216
+
+# Log level / env-filter directive (e.g. "info", "auradb=debug").
+log_level = "info"
+# Emit logs as structured JSON.
+log_json = false
+
+# Idle timeout for server-side cursors, in seconds.
+cursor_timeout_secs = 300
+# Default number of rows returned per query page before a cursor is used.
+page_size = 100
+
+# Fsync the storage log after every commit (durability vs. throughput).
+sync_on_commit = true
+
+# Whether metrics collection is enabled.
+metrics_enabled = true
+
+[tls]
+# TLS termination is not implemented in this single-node release. Setting
+# `enabled = true` fails closed; run a TLS-terminating proxy in front of AuraDB.
+enabled = false
+
+[auth]
+# Optional static-token authentication shape.
+required = false
+static_tokens = []

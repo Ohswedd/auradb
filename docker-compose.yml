@@ -1,0 +1,20 @@
+services:
+  auradb:
+    build: .
+    image: auradb:0.1.0
+    container_name: auradb
+    ports:
+      - "7171:7171"
+    volumes:
+      - auradb-data:/data
+    restart: unless-stopped
+    # Liveness: the CLI status command pings the running server.
+    healthcheck:
+      test: ["CMD", "auradb", "status", "--addr", "127.0.0.1:7171"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 5s
+
+volumes:
+  auradb-data:

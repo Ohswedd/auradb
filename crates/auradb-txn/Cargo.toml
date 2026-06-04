@@ -1,0 +1,13 @@
+[package]
+name = "auradb-txn"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+description = "AuraDB transactions: staged write sets and optimistic conflict detection."
+
+[dependencies]
+auradb-core = { workspace = true }
+auradb-storage = { workspace = true }
