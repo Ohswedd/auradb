@@ -11,3 +11,6 @@ description = "AuraDB transactions: staged write sets and optimistic conflict de
 [dependencies]
 auradb-core = { workspace = true }
 auradb-storage = { workspace = true }
+
+[lib]
+bench = false

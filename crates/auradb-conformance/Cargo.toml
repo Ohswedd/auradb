@@ -19,3 +19,6 @@ serde_json = { workspace = true }
 [dev-dependencies]
 auradb-server = { workspace = true }
 tempfile = { workspace = true }
+
+[lib]
+bench = false

@@ -12,3 +12,6 @@ description = "Core types, ids, values, schema, and errors for AuraDB."
 serde = { workspace = true }
 serde_json = { workspace = true }
 thiserror = { workspace = true }
+
+[lib]
+bench = false

@@ -16,3 +16,6 @@ crc32fast = { workspace = true }
 
 [dev-dependencies]
 tempfile = { workspace = true }
+
+[lib]
+bench = false

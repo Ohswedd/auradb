@@ -21,3 +21,6 @@ criterion = { workspace = true }
 [[bench]]
 name = "protocol"
 harness = false
+
+[lib]
+bench = false

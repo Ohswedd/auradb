@@ -18,7 +18,7 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
 
       - name: Compile benchmarks
-        run: cargo bench --workspace --no-run
+        run: cargo bench --workspace --benches --no-run
 
       - name: Run benchmarks (short)
-        run: cargo bench --workspace -- --warm-up-time 0.5 --measurement-time 1
+        run: cargo bench --workspace --benches -- --warm-up-time 0.5 --measurement-time 1

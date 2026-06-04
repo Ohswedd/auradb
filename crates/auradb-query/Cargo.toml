@@ -14,3 +14,6 @@ auradb-storage = { workspace = true }
 auradb-index = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
+
+[lib]
+bench = false

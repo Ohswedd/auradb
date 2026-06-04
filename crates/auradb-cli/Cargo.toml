@@ -11,6 +11,7 @@ description = "The AuraDB command-line interface."
 [[bin]]
 name = "auradb"
 path = "src/main.rs"
+bench = false
 
 [dependencies]
 auradb-core = { workspace = true }
@@ -26,3 +27,6 @@ anyhow = { workspace = true }
 
 [dev-dependencies]
 tempfile = { workspace = true }
+
+[lib]
+bench = false
