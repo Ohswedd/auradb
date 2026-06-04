@@ -3,7 +3,8 @@
 use auradb::core::{CollectionSchema, Document, FieldDef, FieldType, Value};
 use auradb::query::{FindQuery, VectorSearch};
 use auradb::Engine;
-use criterion::{black_box, criterion_group, criterion_main, Criterion};
+use criterion::{criterion_group, criterion_main, Criterion};
+use std::hint::black_box;
 
 const DIM: usize = 64;
 
