@@ -4,6 +4,96 @@ All notable changes to AuraDB are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and the project uses
 [Semantic Versioning](https://semver.org/).
 
+## [0.2.0] - 2026-06-04
+
+Single-node release focused on security, durability hardening, and public
+usability.
+
+### Added
+
+- **Authentication.** Enforced static-token authentication. An `[auth]` config
+  block (`enabled`, `mode = "static-token"`, `token_hash`,
+  `token_hash_algorithm = "argon2id"`) gates every schema, query, mutation,
+  cursor, explain, migration-estimate, and transaction operation when enabled.
+  Tokens are verified against an Argon2id PHC hash with constant-time
+  comparison and are never stored in plaintext. Clients may authenticate via an
+  `auth_token` in the HELLO handshake or a dedicated AUTH frame (opcode `0x04`,
+  returning `AuthResult` `0x84`). Only HELLO, AUTH, PING, and HEALTH are allowed
+  unauthenticated. Generate a hash with `auradb auth hash-token`.
+- **TLS.** Server-terminated TLS (rustls) via a `[tls]` config block (`enabled`,
+  `cert_path`, `key_path`, `client_ca_path`, `require_client_cert`), including
+  mutual TLS. Generate development-only certificates with
+  `auradb cert generate-dev`. Clients trust the CA with `--tls-ca`.
+- **Persisted indexes.** Indexes are snapshotted to an `indexes/` directory
+  (`INDEX_MANIFEST.json` plus framed, CRC32-checked per-collection `.idx` files)
+  at checkpoints (`auradb compact`, graceful shutdown, `auradb index rebuild`).
+  On open, a snapshot loads only when its content fingerprint, schema field
+  shape, and CRC all match; otherwise the engine safely rebuilds from storage.
+  Persisted kinds: primary key, unique, secondary, document-path, full-text, and
+  exact vector. New `auradb index check` and `auradb index rebuild` commands.
+- **Document-path indexes.** Declared in a schema via
+  `{ "path": "profile.company", "kind": "document_path" }`. Accelerates equality
+  filters on nested document values addressed by a dotted path; reported in
+  EXPLAIN as `strategy: index_lookup` with `used_index`.
+- **Full-text search.** Declared via `{ "path": "body", "kind": "full_text" }`.
+  Case-folded tokenizer split on non-alphanumeric boundaries with no stop-word
+  removal. A `contains_text` filter matches records that contain every distinct
+  query token (boolean AND), ranked by summed term frequency (not BM25). EXPLAIN
+  reports `strategy: full_text_scan`; without an index it falls back to a
+  tokenized `full_scan`.
+- **Transaction-scoped reads.** Reads issued with a transaction id now execute
+  against the transaction view — committed state overlaid with the transaction's
+  own staged writes and deletes — across `find`, `filter`, `count`, `exists`,
+  `explain`, vector nearest, document-path filters, full-text search,
+  relationship `include`, and cursor paging. A transaction sees its staged
+  inserts and updates and does not see its staged deletes (read-your-writes);
+  the effects stay invisible to non-transactional readers until commit. Index
+  seeding (equality, vector, full-text) is served from an overlay index built
+  over the transaction view, so a staged write is never missed and a staged
+  delete is never returned. This removes the prior limitation that reads inside a
+  transaction ignored the transaction id and reflected only committed state.
+  Covered by `crates/auradb/tests/transactions.rs`, the
+  `transactional_read_sees_staged_write_over_the_wire` server test, and the
+  `transaction_scoped_reads` conformance scenario.
+- **Security defaults.** A non-loopback bind with auth disabled is rejected at
+  startup unless `allow_insecure_bind = true` (config) or `--allow-insecure-bind`
+  is passed. `auradb doctor` prints a redacted security summary.
+- **CLI.** `auth hash-token`, `cert generate-dev`, `config validate`,
+  `compatibility`, `index check`, `index rebuild`; `status` gains `--token`,
+  `--tls-ca`, `--tls-server-name`; `server` gains `--allow-insecure-bind`.
+- **Server capabilities.** New advertised capabilities: `authentication`, `tls`,
+  `persisted_indexes`, `document_path_indexes`, `full_text_search`.
+- **Recovery testing.** Deterministic, seeded recovery and corruption tests
+  covering randomized insert/update/delete against a reference model (with and
+  without checkpoint), trailing-segment truncation, mid-batch byte-flip
+  detection, catalog corruption detection, and corrupt/missing index file and
+  manifest repair (`crates/auradb-storage/tests/recovery.rs`,
+  `crates/auradb/tests/recovery.rs`).
+- **Distribution.** A published Docker image at `ghcr.io/ohswedd/auradb`
+  (non-root, healthcheck, `/data` volume) and prebuilt binary release artifacts
+  for Linux, macOS, and Windows targets with a `SHA256SUMS` file, produced by the
+  `release.yml` workflow on `v*` tags.
+
+### Changed
+
+- AWP gains additive fields and opcodes (optional HELLO `auth_token`;
+  `auth_required` and `authenticated` in HELLO_ACK; AUTH/AUTH_RESULT opcodes;
+  `unauthenticated` and `invalid_credentials` error codes). The 44-byte framed
+  header, magic, version, and checksums are unchanged and backward compatible.
+- The Python conformance harness gains `--auth-token`, `--tls-ca`, and
+  `--tls-server-name`, and new document-path, full-text, and EXPLAIN scenarios.
+- New CI workflows: `conformance.yml` (auth disabled, auth enabled with a
+  rejection check, and TLS) and `docker.yml` (build, smoke, and GHCR publish).
+
+### Security
+
+- Tokens are stored only as Argon2id hashes and verified in constant time;
+  secrets are never logged or echoed in error frames.
+- `auth.enabled = true` without `token_hash`, a malformed `token_hash`, missing
+  or invalid TLS material, or `require_client_cert = true` without
+  `client_ca_path` all fail startup (fail closed).
+- Failed authentication increments the `auradb_auth_failures_total` metric.
+
 ## [0.1.0] - 2026-06-04
 
 First single-node developer release.
@@ -42,4 +132,5 @@ approximate (ANN/HNSW) vector indexes; BM25 full-text and hybrid fusion ranking;
 serializable MVCC; enforced TLS and authentication; field-level encryption,
 RBAC; time travel; and change streams. See [docs/ROADMAP.md](docs/ROADMAP.md).
 
+[0.2.0]: https://github.com/Ohswedd/auradb/releases/tag/v0.2.0
 [0.1.0]: https://github.com/Ohswedd/auradb/releases/tag/v0.1.0

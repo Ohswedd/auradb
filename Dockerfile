@@ -1,22 +1,34 @@
 # syntax=docker/dockerfile:1
 
 # ---- build stage ----
-FROM rust:1.85-slim AS build
+# Rust 1.90 (>= the workspace MSRV; some dependencies such as `time` require
+# rustc >= 1.88). CI builds on stable; this pins a concrete builder for the image.
+FROM rust:1.90-slim AS build
+# The TLS stack (ring) compiles C and assembly, so a C toolchain is required.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends build-essential \
+    && rm -rf /var/lib/apt/lists/*
 WORKDIR /src
-# Cache dependencies first.
 COPY Cargo.toml Cargo.lock ./
 COPY crates ./crates
 RUN cargo build --release -p auradb-cli
 
 # ---- runtime stage ----
 FROM debian:bookworm-slim AS runtime
-RUN useradd --system --create-home --uid 10001 auradb
+RUN useradd --system --create-home --uid 10001 auradb \
+    && mkdir -p /data && chown auradb:auradb /data
 COPY --from=build /src/target/release/auradb /usr/local/bin/auradb
 USER auradb
 ENV AURADB_DATA_DIR=/data
 VOLUME ["/data"]
 EXPOSE 7171
+# Liveness: ping the server over the loopback inside the container.
+HEALTHCHECK --interval=30s --timeout=5s --start-period=5s --retries=3 \
+    CMD ["auradb", "status", "--addr", "127.0.0.1:7171"]
 # Default command runs the server. Override it to run any other auradb command,
-# for example: docker run --rm auradb:local auradb version
-# Bind to all interfaces inside the container; publish the port with -p.
-CMD ["auradb", "server", "--data-dir", "/data", "--bind", "0.0.0.0", "--port", "7171"]
+# for example: docker run --rm ghcr.io/ohswedd/auradb:0.2.0 auradb version
+# Bind to all interfaces inside the container; publish the port with -p. AuraDB
+# v0.2.0 refuses a non-loopback bind with auth disabled, so the dev image opts in
+# with --allow-insecure-bind: the operator controls exposure with -p, and should
+# enable [auth]/[tls] (mount a config) before exposing the port publicly.
+CMD ["auradb", "server", "--data-dir", "/data", "--bind", "0.0.0.0", "--port", "7171", "--allow-insecure-bind"]

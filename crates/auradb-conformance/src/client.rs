@@ -8,29 +8,147 @@ use auradb::query::{
     QueryResultPage, ReadRequest, Row,
 };
 use auradb_protocol::{
-    CursorCloseRequest, CursorFetchRequest, ErrorPayload, Frame, HealthReport, HelloAck,
-    HelloRequest, Opcode, RequestId, DEFAULT_MAX_PAYLOAD, FLAG_PAYLOAD_CHECKSUM, HEADER_LEN,
-    PROTOCOL_VERSION,
+    AuthRequest, AuthResult, CursorCloseRequest, CursorFetchRequest, ErrorPayload, Frame,
+    HealthReport, HelloAck, HelloRequest, Opcode, RequestId, DEFAULT_MAX_PAYLOAD,
+    FLAG_PAYLOAD_CHECKSUM, HEADER_LEN, PROTOCOL_VERSION,
 };
+use std::path::PathBuf;
+use std::pin::Pin;
+use std::sync::Arc;
+use std::task::{Context, Poll};
+
 use serde::Serialize;
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, ReadBuf};
 use tokio::net::TcpStream;
+use tokio_rustls::TlsConnector;
+
+/// Client TLS settings: a CA bundle to trust and the server name to verify.
+#[derive(Debug, Clone)]
+pub struct ClientTls {
+    /// PEM CA bundle used to verify the server certificate.
+    pub ca_cert_path: PathBuf,
+    /// The server name verified against the certificate SAN.
+    pub server_name: String,
+}
+
+/// Options controlling how a [`Client`] connects.
+#[derive(Debug, Clone, Default)]
+pub struct ConnectOptions {
+    /// A static token presented at handshake time.
+    pub auth_token: Option<String>,
+    /// TLS settings; `None` connects over plain TCP.
+    pub tls: Option<ClientTls>,
+}
+
+/// A connection that is either plain TCP or a TLS session over TCP.
+enum Conn {
+    Plain(TcpStream),
+    Tls(Box<tokio_rustls::client::TlsStream<TcpStream>>),
+}
+
+impl AsyncRead for Conn {
+    fn poll_read(
+        self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        buf: &mut ReadBuf<'_>,
+    ) -> Poll<std::io::Result<()>> {
+        match self.get_mut() {
+            Conn::Plain(s) => Pin::new(s).poll_read(cx, buf),
+            Conn::Tls(s) => Pin::new(s).poll_read(cx, buf),
+        }
+    }
+}
+
+impl AsyncWrite for Conn {
+    fn poll_write(
+        self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        buf: &[u8],
+    ) -> Poll<std::io::Result<usize>> {
+        match self.get_mut() {
+            Conn::Plain(s) => Pin::new(s).poll_write(cx, buf),
+            Conn::Tls(s) => Pin::new(s).poll_write(cx, buf),
+        }
+    }
+    fn poll_flush(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<std::io::Result<()>> {
+        match self.get_mut() {
+            Conn::Plain(s) => Pin::new(s).poll_flush(cx),
+            Conn::Tls(s) => Pin::new(s).poll_flush(cx),
+        }
+    }
+    fn poll_shutdown(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<std::io::Result<()>> {
+        match self.get_mut() {
+            Conn::Plain(s) => Pin::new(s).poll_shutdown(cx),
+            Conn::Tls(s) => Pin::new(s).poll_shutdown(cx),
+        }
+    }
+}
+
+fn build_tls_connector(tls: &ClientTls) -> Result<TlsConnector> {
+    let bytes = std::fs::read(&tls.ca_cert_path).map_err(Error::Io)?;
+    let mut roots = rustls::RootCertStore::empty();
+    for cert in rustls_pemfile::certs(&mut &bytes[..]) {
+        let cert = cert.map_err(|e| Error::Config(format!("parsing CA bundle: {e}")))?;
+        roots
+            .add(cert)
+            .map_err(|e| Error::Config(format!("adding CA certificate: {e}")))?;
+    }
+    let config = rustls::ClientConfig::builder_with_provider(Arc::new(
+        rustls::crypto::ring::default_provider(),
+    ))
+    .with_safe_default_protocol_versions()
+    .map_err(|e| Error::Config(format!("tls configuration: {e}")))?
+    .with_root_certificates(roots)
+    .with_no_client_auth();
+    Ok(TlsConnector::from(Arc::new(config)))
+}
 
 /// An async AuraDB client connection.
 pub struct Client {
-    stream: TcpStream,
+    stream: Conn,
     next_request_id: u128,
     max_payload: usize,
+    auth_token: Option<String>,
 }
 
 impl Client {
-    /// Connect to an AuraDB server and perform the HELLO handshake.
+    /// Connect to an AuraDB server over plain TCP and perform the HELLO
+    /// handshake.
     pub async fn connect(addr: &str) -> Result<Client> {
-        let stream = TcpStream::connect(addr).await.map_err(Error::Io)?;
+        Client::connect_with(addr, ConnectOptions::default()).await
+    }
+
+    /// Connect over plain TCP and authenticate with a static token presented at
+    /// handshake time.
+    pub async fn connect_with_token(addr: &str, token: &str) -> Result<Client> {
+        Client::connect_with(
+            addr,
+            ConnectOptions {
+                auth_token: Some(token.to_string()),
+                tls: None,
+            },
+        )
+        .await
+    }
+
+    /// Connect with full control over authentication and TLS.
+    pub async fn connect_with(addr: &str, options: ConnectOptions) -> Result<Client> {
+        let tcp = TcpStream::connect(addr).await.map_err(Error::Io)?;
+        let stream = match &options.tls {
+            None => Conn::Plain(tcp),
+            Some(tls) => {
+                let connector = build_tls_connector(tls)?;
+                let name = rustls::pki_types::ServerName::try_from(tls.server_name.clone())
+                    .map_err(|e| Error::Config(format!("invalid TLS server name: {e}")))?;
+                let session = connector.connect(name, tcp).await.map_err(Error::Io)?;
+                Conn::Tls(Box::new(session))
+            }
+        };
         let mut client = Client {
             stream,
             next_request_id: 1,
             max_payload: DEFAULT_MAX_PAYLOAD,
+            auth_token: options.auth_token,
         };
         client.hello().await?;
         Ok(client)
@@ -104,8 +222,19 @@ impl Client {
         let req = HelloRequest {
             client_version: env!("CARGO_PKG_VERSION").to_string(),
             protocol_version: PROTOCOL_VERSION,
+            auth_token: self.auth_token.clone(),
         };
         let frame = self.call_json(Opcode::Hello, 0, &req).await?;
+        frame.decode_json()
+    }
+
+    /// Authenticate the current connection with a static token via an `AUTH`
+    /// frame. Returns the authentication result.
+    pub async fn authenticate(&mut self, token: &str) -> Result<AuthResult> {
+        let req = AuthRequest {
+            token: token.to_string(),
+        };
+        let frame = self.call_json(Opcode::Auth, 0, &req).await?;
         frame.decode_json()
     }
 
@@ -173,18 +302,34 @@ impl Client {
 
     /// Run a find, returning the first page (with a cursor id if more remain).
     pub async fn find_page(&mut self, query: &FindQuery) -> Result<QueryResultPage> {
+        self.find_page_in_txn(0, query).await
+    }
+
+    /// Run a find within a transaction (`txn_id != 0` reads the transaction
+    /// view; `0` is an ordinary committed read).
+    pub async fn find_page_in_txn(
+        &mut self,
+        txn_id: u64,
+        query: &FindQuery,
+    ) -> Result<QueryResultPage> {
         let frame = self
-            .call_json(Opcode::Query, 0, &ReadRequest::Find(query.clone()))
+            .call_json(Opcode::Query, txn_id, &ReadRequest::Find(query.clone()))
             .await?;
         frame.decode_json()
     }
 
     /// Run a find and follow cursors to collect all rows.
     pub async fn find_all(&mut self, query: &FindQuery) -> Result<Vec<Row>> {
-        let mut page = self.find_page(query).await?;
+        self.find_all_in_txn(0, query).await
+    }
+
+    /// Run a find within a transaction, following cursors through the same
+    /// transaction so staged writes stay visible across pages.
+    pub async fn find_all_in_txn(&mut self, txn_id: u64, query: &FindQuery) -> Result<Vec<Row>> {
+        let mut page = self.find_page_in_txn(txn_id, query).await?;
         let mut rows = page.rows;
         while let Some(cursor_id) = page.cursor_id {
-            page = self.cursor_fetch(cursor_id, 100).await?;
+            page = self.cursor_fetch_in_txn(txn_id, cursor_id, 100).await?;
             rows.extend(page.rows);
         }
         Ok(rows)
@@ -192,10 +337,20 @@ impl Client {
 
     /// Fetch a page from a cursor.
     pub async fn cursor_fetch(&mut self, cursor_id: u64, limit: usize) -> Result<QueryResultPage> {
+        self.cursor_fetch_in_txn(0, cursor_id, limit).await
+    }
+
+    /// Fetch a page from a cursor within a transaction.
+    pub async fn cursor_fetch_in_txn(
+        &mut self,
+        txn_id: u64,
+        cursor_id: u64,
+        limit: usize,
+    ) -> Result<QueryResultPage> {
         let frame = self
             .call_json(
                 Opcode::CursorFetch,
-                0,
+                txn_id,
                 &CursorFetchRequest { cursor_id, limit },
             )
             .await?;
@@ -211,8 +366,13 @@ impl Client {
 
     /// Count matching records.
     pub async fn count(&mut self, query: &CountQuery) -> Result<usize> {
+        self.count_in_txn(0, query).await
+    }
+
+    /// Count matching records within a transaction.
+    pub async fn count_in_txn(&mut self, txn_id: u64, query: &CountQuery) -> Result<usize> {
         let frame = self
-            .call_json(Opcode::Query, 0, &ReadRequest::Count(query.clone()))
+            .call_json(Opcode::Query, txn_id, &ReadRequest::Count(query.clone()))
             .await?;
         let v: serde_json::Value = frame.decode_json()?;
         Ok(v["count"].as_u64().unwrap_or(0) as usize)
@@ -220,8 +380,13 @@ impl Client {
 
     /// Test whether any record matches.
     pub async fn exists(&mut self, query: &ExistsQuery) -> Result<bool> {
+        self.exists_in_txn(0, query).await
+    }
+
+    /// Test whether any record matches within a transaction.
+    pub async fn exists_in_txn(&mut self, txn_id: u64, query: &ExistsQuery) -> Result<bool> {
         let frame = self
-            .call_json(Opcode::Query, 0, &ReadRequest::Exists(query.clone()))
+            .call_json(Opcode::Query, txn_id, &ReadRequest::Exists(query.clone()))
             .await?;
         let v: serde_json::Value = frame.decode_json()?;
         Ok(v["exists"].as_bool().unwrap_or(false))
@@ -285,6 +450,8 @@ fn error_from_payload(p: ErrorPayload) -> Error {
         ErrorCode::NotFound => Error::NotFound(p.message),
         ErrorCode::SchemaViolation => Error::SchemaViolation(p.message),
         ErrorCode::Unsupported => Error::unsupported(p.message),
+        ErrorCode::Unauthenticated => Error::Unauthenticated(p.message),
+        ErrorCode::InvalidCredentials => Error::InvalidCredentials,
         ErrorCode::InvalidRequest => Error::InvalidRequest(p.message),
         ErrorCode::Protocol => Error::Protocol(p.message),
         ErrorCode::Corruption => Error::Corruption(p.message),

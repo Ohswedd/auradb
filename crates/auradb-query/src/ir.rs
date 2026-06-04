@@ -69,6 +69,14 @@ pub enum Filter {
         /// The field (dotted path supported).
         field: String,
     },
+    /// Full-text match: the field's tokens contain all tokens of `query`.
+    /// Uses a full-text index when one exists, otherwise a tokenized scan.
+    ContainsText {
+        /// The text field (dotted path supported).
+        field: String,
+        /// The query text; all of its distinct tokens must be present.
+        query: String,
+    },
 }
 
 /// An ordering key.

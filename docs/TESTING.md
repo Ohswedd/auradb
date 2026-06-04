@@ -37,6 +37,13 @@ cargo build --workspace --all-features
   ping, health, schema, CRUD, stream, vector, explain, migration estimate.
 - **Recovery** (`tests/recovery`): kill-and-reopen persistence and torn-tail
   truncation.
+- **Seeded recovery/fuzz** (`crates/auradb-storage/tests/recovery.rs`,
+  `crates/auradb/tests/recovery.rs`): deterministic, fixed-seed randomized tests
+  (never flaky) covering random insert/update/delete sequences verified against a
+  reference model after restart (with and without a checkpoint), trailing-segment
+  truncation recovery, mid-batch byte-flip corruption detection, catalog
+  corruption detection (fail closed), corrupt/missing index file repair, and
+  corrupt index manifest repair.
 - **Conformance** (`auradb-conformance`, `tests/conformance`): the full Aura
   Connector scenario list run over the wire protocol.
 

@@ -7,13 +7,15 @@
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]
 
+pub mod auth;
 mod config;
 mod cursor;
 mod dispatch;
 mod server;
+mod tls;
 mod wire;
 
-pub use config::{AuthConfig, Config, TlsConfig};
+pub use config::{AuthConfig, AuthMode, Config, TlsConfig, TokenHashAlgorithm};
 pub use cursor::{CursorPage, CursorRegistry};
 pub use dispatch::{respond, ServerContext, Session};
 pub use server::Server;

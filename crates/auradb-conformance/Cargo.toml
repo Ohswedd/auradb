@@ -15,10 +15,14 @@ auradb = { workspace = true }
 tokio = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
+rustls = { workspace = true }
+tokio-rustls = { workspace = true }
+rustls-pemfile = { workspace = true }
 
 [dev-dependencies]
 auradb-server = { workspace = true }
 tempfile = { workspace = true }
+rcgen = { workspace = true }
 
 [lib]
 bench = false

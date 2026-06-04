@@ -74,6 +74,8 @@ pub struct Metrics {
     pub queries_total: AtomicU64,
     /// Total mutations executed.
     pub mutations_total: AtomicU64,
+    /// Total failed authentication attempts (invalid or missing credentials).
+    pub auth_failures_total: AtomicU64,
     /// Bytes read from the wire.
     pub bytes_read: AtomicU64,
     /// Bytes written to the wire.
@@ -132,6 +134,7 @@ impl Metrics {
             errors_total: self.errors_total.load(Ordering::Relaxed),
             queries_total: self.queries_total.load(Ordering::Relaxed),
             mutations_total: self.mutations_total.load(Ordering::Relaxed),
+            auth_failures_total: self.auth_failures_total.load(Ordering::Relaxed),
             bytes_read: self.bytes_read.load(Ordering::Relaxed),
             bytes_written: self.bytes_written.load(Ordering::Relaxed),
             active_connections: self.active_connections.load(Ordering::Relaxed),
@@ -155,6 +158,8 @@ pub struct MetricsSnapshot {
     pub queries_total: u64,
     /// Total mutations.
     pub mutations_total: u64,
+    /// Total failed authentication attempts.
+    pub auth_failures_total: u64,
     /// Bytes read.
     pub bytes_read: u64,
     /// Bytes written.
@@ -184,6 +189,7 @@ impl MetricsSnapshot {
         counter("auradb_errors_total", self.errors_total);
         counter("auradb_queries_total", self.queries_total);
         counter("auradb_mutations_total", self.mutations_total);
+        counter("auradb_auth_failures_total", self.auth_failures_total);
         counter("auradb_bytes_read_total", self.bytes_read);
         counter("auradb_bytes_written_total", self.bytes_written);
         let mut gauge = |name: &str, value: u64| {

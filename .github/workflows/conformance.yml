@@ -1,0 +1,102 @@
+name: Conformance
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  python-awp:
+    name: Aura Wire Protocol conformance (Python)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-conformance-${{ hashFiles('**/Cargo.lock') }}
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Build server
+        run: cargo build --release -p auradb-cli
+
+      - name: Conformance with auth disabled
+        run: |
+          ./target/release/auradb server --data-dir .local/c-open --bind 127.0.0.1 --port 7171 &
+          SRV=$!
+          sleep 2
+          python tests/conformance/python/run_conformance.py --addr 127.0.0.1:7171
+          kill $SRV
+
+      - name: Conformance with auth enabled
+        run: |
+          HASH=$(./target/release/auradb auth hash-token --token ci-secret)
+          printf 'data_dir = ".local/c-auth"\nbind = "127.0.0.1"\nport = 7172\n\n[auth]\nenabled = true\nmode = "static-token"\ntoken_hash = "%s"\ntoken_hash_algorithm = "argon2id"\n' "$HASH" > .local/auth.toml
+          ./target/release/auradb server --config .local/auth.toml &
+          SRV=$!
+          sleep 2
+          # Unauthenticated clients are rejected for data operations.
+          if python tests/conformance/python/run_conformance.py --addr 127.0.0.1:7172; then
+            echo "ERROR: unauthenticated conformance should have failed"; kill $SRV; exit 1
+          fi
+          # Authenticated clients pass the full suite.
+          python tests/conformance/python/run_conformance.py --addr 127.0.0.1:7172 --auth-token ci-secret
+          kill $SRV
+
+      - name: Conformance over TLS
+        run: |
+          ./target/release/auradb cert generate-dev --out-dir .local/certs
+          HASH=$(./target/release/auradb auth hash-token --token ci-secret)
+          printf 'data_dir = ".local/c-tls"\nbind = "127.0.0.1"\nport = 7173\n\n[tls]\nenabled = true\ncert_path = ".local/certs/server.crt"\nkey_path = ".local/certs/server.key"\n\n[auth]\nenabled = true\nmode = "static-token"\ntoken_hash = "%s"\ntoken_hash_algorithm = "argon2id"\n' "$HASH" > .local/tls.toml
+          ./target/release/auradb server --config .local/tls.toml &
+          SRV=$!
+          sleep 2
+          python tests/conformance/python/run_conformance.py --addr 127.0.0.1:7173 --tls-ca .local/certs/ca.crt --tls-server-name localhost --auth-token ci-secret
+          kill $SRV
+
+  connector:
+    name: Aura Connector conformance (published client)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Build server
+        run: cargo build --release -p auradb-cli
+
+      - name: Install Aura Connector (>= 0.3.0)
+        run: |
+          # The native AuraDB backend ships in aura-connector 0.3.0, the matching
+          # client for AuraDB 0.2.0. It is published, so this install is required
+          # and must succeed; a failure fails the job.
+          python -m pip install --upgrade "aura-connector>=0.3.0"
+          python -c "import aura; assert aura.__version__ >= '0.3.0', aura.__version__"
+
+      - name: Connector conformance (auth disabled)
+        run: |
+          ./target/release/auradb server --data-dir .local/conn --bind 127.0.0.1 --port 7181 &
+          SRV=$!
+          sleep 2
+          python tests/conformance/python/run_connector_conformance.py --addr 127.0.0.1:7181
+          kill $SRV

@@ -9,8 +9,8 @@ use auradb::{Engine, Transaction};
 use auradb_core::{Error, Result, ServerCapabilities};
 use auradb_observability::Metrics;
 use auradb_protocol::{
-    CursorCloseRequest, CursorFetchRequest, ErrorPayload, Frame, HealthReport, HealthStatus,
-    HelloAck, HelloRequest, Opcode, PROTOCOL_VERSION,
+    AuthRequest, AuthResult, CursorCloseRequest, CursorFetchRequest, ErrorPayload, Frame,
+    HealthReport, HealthStatus, HelloAck, HelloRequest, Opcode, PROTOCOL_VERSION,
 };
 use serde::{Deserialize, Serialize};
 
@@ -35,6 +35,8 @@ pub struct ServerContext {
 pub struct Session {
     /// Negotiated protocol version (0 until HELLO).
     pub negotiated_version: u8,
+    /// Whether this connection has authenticated (always true when auth is off).
+    pub authenticated: bool,
     /// Open transactions keyed by transaction id.
     pub transactions: HashMap<u64, Transaction>,
     /// Cursor ids owned by this connection (for cleanup on disconnect).
@@ -94,17 +96,77 @@ pub fn respond(ctx: &ServerContext, session: &mut Session, frame: Frame) -> Fram
     }
 }
 
+/// Whether an opcode is gated behind authentication. The handshake, auth,
+/// liveness, and readiness probes are always permitted so a client can connect,
+/// authenticate, and be health-checked; every data, schema, cursor, explain,
+/// migration, and transaction operation requires an authenticated session.
+fn requires_auth(opcode: Opcode) -> bool {
+    !matches!(
+        opcode,
+        Opcode::Hello | Opcode::Auth | Opcode::Ping | Opcode::Health
+    )
+}
+
+/// Verify a presented token against the configured token hash. Returns false if
+/// auth is misconfigured (no hash) rather than panicking; config validation
+/// guarantees a hash is present whenever auth is enabled.
+fn verify_session_token(ctx: &ServerContext, token: &str) -> bool {
+    match ctx.config.auth.token_hash.as_deref() {
+        Some(hash) => crate::auth::verify_token(hash, token).unwrap_or(false),
+        None => false,
+    }
+}
+
 fn handle(ctx: &ServerContext, session: &mut Session, frame: &Frame) -> Result<Frame> {
+    // Fail closed: when authentication is enabled, gated operations are refused
+    // until the session is authenticated.
+    if ctx.config.auth.enabled && !session.authenticated && requires_auth(frame.opcode) {
+        Metrics::incr(&ctx.metrics.auth_failures_total);
+        return Err(Error::Unauthenticated(
+            "authentication required before this operation".into(),
+        ));
+    }
+
     match frame.opcode {
         Opcode::Hello => {
             let req: HelloRequest = frame.decode_json()?;
             let negotiated = req.protocol_version.min(PROTOCOL_VERSION);
             session.negotiated_version = negotiated;
+            let auth_required = ctx.config.auth.enabled;
+            if !auth_required {
+                session.authenticated = true;
+            } else if let Some(token) = req.auth_token.as_deref() {
+                // Fast-path authentication carried in the handshake.
+                if verify_session_token(ctx, token) {
+                    session.authenticated = true;
+                } else {
+                    Metrics::incr(&ctx.metrics.auth_failures_total);
+                }
+            }
             let ack = HelloAck {
                 protocol_version: negotiated,
                 capabilities: ServerCapabilities::current(PROTOCOL_VERSION),
+                auth_required,
+                authenticated: session.authenticated,
             };
             Frame::json(Opcode::HelloAck, frame.request_id, 0, &ack)
+        }
+        Opcode::Auth => {
+            let req: AuthRequest = frame.decode_json()?;
+            if !ctx.config.auth.enabled || verify_session_token(ctx, &req.token) {
+                session.authenticated = true;
+                Frame::json(
+                    Opcode::AuthResult,
+                    frame.request_id,
+                    0,
+                    &AuthResult {
+                        authenticated: true,
+                    },
+                )
+            } else {
+                Metrics::incr(&ctx.metrics.auth_failures_total);
+                Err(Error::InvalidCredentials)
+            }
         }
         Opcode::Ping => Ok(Frame::new(
             Opcode::Pong,
@@ -156,7 +218,18 @@ fn handle(ctx: &ServerContext, session: &mut Session, frame: &Frame) -> Result<F
         }
         Opcode::CursorFetch => {
             let req: CursorFetchRequest = frame.decode_json()?;
-            let page = ctx.cursors.fetch(req.cursor_id, req.limit, &ctx.engine)?;
+            // A cursor opened inside a transaction is paged through that same
+            // transaction so staged writes stay visible across fetches.
+            let page = if frame.txn_id != 0 {
+                let txn = session
+                    .transactions
+                    .get(&frame.txn_id)
+                    .ok_or_else(|| Error::NotFound(format!("transaction {}", frame.txn_id)))?;
+                ctx.cursors
+                    .fetch_with(req.cursor_id, req.limit, &ctx.engine, Some(txn))?
+            } else {
+                ctx.cursors.fetch(req.cursor_id, req.limit, &ctx.engine)?
+            };
             if !page.more {
                 session.cursor_ids.remove(&req.cursor_id);
             }
@@ -176,7 +249,15 @@ fn handle(ctx: &ServerContext, session: &mut Session, frame: &Frame) -> Result<F
         }
         Opcode::Explain => {
             let query: FindQuery = frame.decode_json()?;
-            let plan = ctx.engine.explain(&query)?;
+            let plan = if frame.txn_id != 0 {
+                let txn = session
+                    .transactions
+                    .get(&frame.txn_id)
+                    .ok_or_else(|| Error::NotFound(format!("transaction {}", frame.txn_id)))?;
+                ctx.engine.txn_explain(txn, &query)?
+            } else {
+                ctx.engine.explain(&query)?
+            };
             Frame::json(Opcode::Ok, frame.request_id, 0, &plan)
         }
         Opcode::MigrationEstimate => {
@@ -227,6 +308,7 @@ fn handle(ctx: &ServerContext, session: &mut Session, frame: &Frame) -> Result<F
         Opcode::HelloAck
         | Opcode::Pong
         | Opcode::HealthResult
+        | Opcode::AuthResult
         | Opcode::Ok
         | Opcode::QueryResult
         | Opcode::Error => Err(Error::Protocol(format!(
@@ -242,18 +324,36 @@ fn handle_query(
     frame: &Frame,
     req: ReadRequest,
 ) -> Result<Frame> {
+    // When a transaction id is present, every read executes against that
+    // transaction's view (committed state overlaid with its staged writes and
+    // deletes). Non-transactional reads (txn_id == 0) keep their prior path.
     match req {
         ReadRequest::Find(query) => {
-            let planned = ctx.engine.plan_find(&query)?;
             let page_size = ctx.config.page_size;
-            let first_end = planned.ordered.len().min(page_size);
-            let rows = ctx
-                .engine
-                .materialize(&query, &planned.ordered[..first_end])?;
-            let cursor_id = if planned.ordered.len() > first_end {
-                let id = ctx
-                    .cursors
-                    .open(query.clone(), planned.ordered[first_end..].to_vec());
+            // Plan and materialize the first page, against the transaction view
+            // when one applies. Results are owned, so the transaction borrow is
+            // released before the cursor is registered below.
+            let (rows, remaining) = if frame.txn_id != 0 {
+                let txn = session
+                    .transactions
+                    .get(&frame.txn_id)
+                    .ok_or_else(|| Error::NotFound(format!("transaction {}", frame.txn_id)))?;
+                let planned = ctx.engine.txn_plan_find(txn, &query)?;
+                let first_end = planned.ordered.len().min(page_size);
+                let rows =
+                    ctx.engine
+                        .txn_materialize(txn, &query, &planned.ordered[..first_end])?;
+                (rows, planned.ordered[first_end..].to_vec())
+            } else {
+                let planned = ctx.engine.plan_find(&query)?;
+                let first_end = planned.ordered.len().min(page_size);
+                let rows = ctx
+                    .engine
+                    .materialize(&query, &planned.ordered[..first_end])?;
+                (rows, planned.ordered[first_end..].to_vec())
+            };
+            let cursor_id = if !remaining.is_empty() {
+                let id = ctx.cursors.open(query.clone(), remaining);
                 session.cursor_ids.insert(id);
                 Metrics::gauge_set(&ctx.metrics.active_cursors, ctx.cursors.len() as u64);
                 Some(id)
@@ -264,20 +364,36 @@ fn handle_query(
             Frame::json(Opcode::QueryResult, frame.request_id, frame.txn_id, &result)
         }
         ReadRequest::Count(query) => {
-            let count = ctx.engine.count(&query)?;
+            let count = if frame.txn_id != 0 {
+                let txn = session
+                    .transactions
+                    .get(&frame.txn_id)
+                    .ok_or_else(|| Error::NotFound(format!("transaction {}", frame.txn_id)))?;
+                ctx.engine.txn_count(txn, &query)?
+            } else {
+                ctx.engine.count(&query)?
+            };
             Frame::json(
                 Opcode::Ok,
                 frame.request_id,
-                0,
+                frame.txn_id,
                 &serde_json::json!({ "count": count }),
             )
         }
         ReadRequest::Exists(query) => {
-            let exists = ctx.engine.exists(&query)?;
+            let exists = if frame.txn_id != 0 {
+                let txn = session
+                    .transactions
+                    .get(&frame.txn_id)
+                    .ok_or_else(|| Error::NotFound(format!("transaction {}", frame.txn_id)))?;
+                ctx.engine.txn_exists(txn, &query)?
+            } else {
+                ctx.engine.exists(&query)?
+            };
             Frame::json(
                 Opcode::Ok,
                 frame.request_id,
-                0,
+                frame.txn_id,
                 &serde_json::json!({ "exists": exists }),
             )
         }

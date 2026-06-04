@@ -8,6 +8,12 @@ storage on open and kept consistent on every mutation.
 - **Primary key** - a unique map from the primary-key value to the record id.
 - **Unique** - per-field maps enforcing uniqueness on insert and update.
 - **Secondary** - per-field equality maps for fields marked `indexed`.
+- **Document-path** - equality maps on a nested document value addressed by a
+  dotted path, declared via a schema `indexes` entry
+  `{ "path": "profile.company", "kind": "document_path" }`. See
+  [DOCUMENTS.md](DOCUMENTS.md).
+- **Full-text** - a tokenized inverted index on a string field, declared via
+  `{ "path": "body", "kind": "full_text" }`. See [FULL_TEXT.md](FULL_TEXT.md).
 - **Vector** - an exact (brute-force) index per vector field, behind the
   `VectorIndex` trait.
 
@@ -26,15 +32,51 @@ equality semantics across types.
 ## Query use
 
 The query planner uses an equality index to seed candidate selection when a
-top-level `eq` filter targets an indexed field; otherwise it falls back to a full
-scan (and EXPLAIN warns on large scans). Ranges, ordering, and `contains` are
-evaluated over candidates rather than via the index.
+top-level `eq` filter targets an indexed field, including a document-path index
+for a dotted-path equality (EXPLAIN reports `strategy: index_lookup` and the
+`used_index`). A `contains_text` filter uses a full-text index when present
+(EXPLAIN reports `strategy: full_text_scan`). Otherwise the planner falls back to
+a full scan (and EXPLAIN warns on large scans). Ranges, ordering, and `contains`
+are evaluated over candidates rather than via the index.
 
 ## Persistence model
 
-Indexes are in-memory and rebuilt from the durable record log on startup; they
-are not separately persisted. This is correct and simple for the first release
-and is documented as such. A persisted/incremental index build is future work.
+Indexes are held in memory and also snapshotted to disk so they are not always
+rebuilt on open.
+
+### Snapshot layout
+
+Snapshots live in an `indexes/` directory under the data dir: an
+`INDEX_MANIFEST.json` and per-collection `.idx` files. Each `.idx` file has a
+framed header: a 4-byte magic `AIDX`, a `u32` format version, a `u32` payload
+length, a `u32` CRC32 of the payload, then a JSON payload. Persisted kinds are
+primary key, unique, secondary, document-path, full-text, and exact vector.
+
+### Checkpoints
+
+Snapshots are written at checkpoints: `auradb compact`, graceful server
+shutdown, and `auradb index rebuild`.
+
+### Load and staleness detection
+
+On open, the engine loads a snapshot only when all of the following hold:
+
+- its content fingerprint (an FNV-1a hash over each record's id and version)
+  matches the current storage state,
+- the snapshot's index field shape matches the schema, and
+- the CRC is valid.
+
+Otherwise the engine safely rebuilds the index from storage and records that it
+rebuilt. A crash between checkpoints is detected on the next open as a
+fingerprint mismatch and triggers a rebuild; queries never return incorrect
+results from a stale snapshot.
+
+### Inspecting and rebuilding
+
+`auradb index check` reports how indexes loaded (how many from a snapshot, how
+many rebuilt) and verifies consistency. `auradb index rebuild` rebuilds from
+storage and persists fresh snapshots. `auradb check` and `auradb compact` also
+validate and preserve indexes.
 
 ## Vector indexes
 

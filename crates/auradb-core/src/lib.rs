@@ -22,5 +22,7 @@ pub use clock::LogicalClock;
 pub use error::{Error, ErrorCode, Result};
 pub use ids::{CollectionId, RecordId, SchemaId, TxnId};
 pub use record::Record;
-pub use schema::{Cardinality, CollectionSchema, FieldDef, FieldType, OnDelete, Relationship};
+pub use schema::{
+    Cardinality, CollectionSchema, FieldDef, FieldType, IndexDef, IndexKind, OnDelete, Relationship,
+};
 pub use value::{Document, Value};

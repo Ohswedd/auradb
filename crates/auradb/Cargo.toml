@@ -19,6 +19,7 @@ serde_json = { workspace = true }
 [dev-dependencies]
 tempfile = { workspace = true }
 criterion = { workspace = true }
+rand = { workspace = true }
 
 [[bench]]
 name = "storage"

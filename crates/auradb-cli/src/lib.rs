@@ -21,6 +21,23 @@ pub fn cmd_version() -> String {
     format!("auradb {VERSION}")
 }
 
+/// `auradb auth hash-token` - hash a token with Argon2id for use as
+/// `auth.token_hash` in the server configuration.
+///
+/// With `--token`, the token is taken non-interactively (useful for scripts and
+/// tests). Without it, the token is read from the terminal without echoing.
+pub fn cmd_auth_hash_token(token: Option<String>) -> Result<String> {
+    let token = match token {
+        Some(t) => t,
+        None => rpassword::prompt_password("Token: ").context("reading token from terminal")?,
+    };
+    if token.is_empty() {
+        anyhow::bail!("token must not be empty");
+    }
+    let hash = auradb_server::auth::hash_token(&token).map_err(|e| anyhow::anyhow!("{e}"))?;
+    Ok(hash)
+}
+
 /// `auradb init` - create the data directory and write a default config file.
 pub fn cmd_init(data_dir: &Path, config_path: &Path) -> Result<()> {
     std::fs::create_dir_all(data_dir)
@@ -36,7 +53,8 @@ pub fn cmd_init(data_dir: &Path, config_path: &Path) -> Result<()> {
     Ok(())
 }
 
-/// `auradb doctor` - validate config and data directory and report stats.
+/// `auradb doctor` - validate config and data directory and report stats. The
+/// report includes a redacted security summary and never prints secrets.
 pub fn cmd_doctor(data_dir: &Path, config: &Config) -> Result<String> {
     config.validate().context("config validation")?;
     let mut report = String::new();
@@ -47,11 +65,103 @@ pub fn cmd_doctor(data_dir: &Path, config: &Config) -> Result<String> {
     report.push_str(&format!("collections: {}\n", stats.collections));
     report.push_str(&format!("records: {}\n", stats.records));
     report.push_str(&format!("schema_version: {}\n", stats.schema_version));
+    let load = engine.index_load_report();
+    report.push_str(&format!(
+        "indexes: {} loaded, {} rebuilt\n",
+        load.loaded, load.rebuilt
+    ));
     let checked = engine.check_consistency().context("consistency check")?;
     report.push_str(&format!(
         "index_consistency: ok ({checked} records verified)\n"
     ));
+    report.push_str(&security_summary(config));
     Ok(report)
+}
+
+/// A redacted summary of the security-relevant configuration. Secrets (the
+/// token hash, certificate/key contents) are never printed.
+fn security_summary(config: &Config) -> String {
+    let mut s = String::new();
+    s.push_str(&format!("bind: {} ({})\n", config.bind, config.port));
+    s.push_str(&format!(
+        "public_bind: {}\n",
+        if config.is_public_bind() { "yes" } else { "no" }
+    ));
+    s.push_str(&format!(
+        "auth: {}\n",
+        if config.auth.enabled {
+            "enabled (static-token, argon2id)"
+        } else {
+            "disabled"
+        }
+    ));
+    s.push_str(&format!(
+        "auth_token_hash: {}\n",
+        if config.auth.token_hash.is_some() {
+            "configured (redacted)"
+        } else {
+            "not set"
+        }
+    ));
+    if config.tls.enabled {
+        s.push_str("tls: enabled\n");
+        if config.tls.require_client_cert {
+            s.push_str("mutual_tls: required\n");
+        }
+    } else {
+        s.push_str("tls: disabled\n");
+    }
+    if config.is_public_bind() && !config.auth.enabled {
+        s.push_str("warning: public bind without authentication (insecure)\n");
+    }
+    s
+}
+
+/// `auradb config validate` - load and validate a config file, failing on any
+/// invalid or unsafe setting.
+pub fn cmd_config_validate(config_path: &Path) -> Result<String> {
+    let config =
+        Config::load(config_path).with_context(|| format!("loading {}", config_path.display()))?;
+    config.validate().context("invalid configuration")?;
+    let mut out = String::from("configuration is valid\n");
+    out.push_str(&security_summary(&config));
+    Ok(out)
+}
+
+/// `auradb compatibility` - print AuraDB version, protocol version, advertised
+/// capabilities, and the tested Aura Connector version.
+pub fn cmd_compatibility() -> String {
+    use auradb::core::Capability;
+    let caps: Vec<&str> = Capability::implemented()
+        .iter()
+        .map(|c| match c {
+            Capability::PersistentStorage => "persistent_storage",
+            Capability::Transactions => "transactions",
+            Capability::SecondaryIndexes => "secondary_indexes",
+            Capability::DocumentFields => "document_fields",
+            Capability::VectorExactSearch => "vector_exact_search",
+            Capability::Relationships => "relationships",
+            Capability::ServerCursors => "server_cursors",
+            Capability::Explain => "explain",
+            Capability::MigrationEstimate => "migration_estimate",
+            Capability::Observability => "observability",
+            Capability::Authentication => "authentication",
+            Capability::Tls => "tls",
+            Capability::PersistedIndexes => "persisted_indexes",
+            Capability::DocumentPathIndexes => "document_path_indexes",
+            Capability::FullTextSearch => "full_text_search",
+        })
+        .collect();
+    format!(
+        "AuraDB {ver}\n\
+         Aura Wire Protocol: AWP {proto}\n\
+         Aura Connector (tested): 0.3.x\n\
+         Capabilities: {caps}\n\
+         See docs/COMPATIBILITY.md for the full matrix.",
+        ver = VERSION,
+        proto = auradb_protocol::PROTOCOL_VERSION,
+        caps = caps.join(", "),
+    )
 }
 
 /// `auradb check` - verify index consistency.
@@ -59,6 +169,30 @@ pub fn cmd_check(data_dir: &Path) -> Result<String> {
     let engine = Engine::open(data_dir)?;
     let checked = engine.check_consistency()?;
     Ok(format!("index consistency OK; {checked} records verified"))
+}
+
+/// `auradb index check` - report how indexes loaded and verify their
+/// consistency against stored records.
+pub fn cmd_index_check(data_dir: &Path) -> Result<String> {
+    let engine = Engine::open(data_dir)?;
+    let report = engine.index_load_report();
+    let checked = engine.check_consistency()?;
+    Ok(format!(
+        "indexes: {} loaded from snapshot, {} rebuilt from storage; \
+         consistency OK ({checked} records verified)",
+        report.loaded, report.rebuilt
+    ))
+}
+
+/// `auradb index rebuild` - rebuild every index from storage and persist fresh
+/// snapshots.
+pub fn cmd_index_rebuild(data_dir: &Path) -> Result<String> {
+    let engine = Engine::open(data_dir)?;
+    let report = engine.rebuild_indexes()?;
+    Ok(format!(
+        "rebuilt {} index set(s) from storage and persisted snapshots",
+        report.rebuilt
+    ))
 }
 
 /// `auradb compact` - compact storage.
@@ -155,9 +289,23 @@ pub async fn cmd_server(config: Config) -> Result<()> {
     Ok(())
 }
 
-/// `auradb status` - connect to a running server and report health.
-pub async fn cmd_status(addr: &str) -> Result<String> {
-    let mut client = auradb_conformance::Client::connect(addr)
+/// `auradb status` - connect to a running server and report health. Supports
+/// authenticating with a token and connecting over TLS.
+pub async fn cmd_status(
+    addr: &str,
+    token: Option<String>,
+    tls_ca: Option<PathBuf>,
+    server_name: &str,
+) -> Result<String> {
+    use auradb_conformance::{ClientTls, ConnectOptions};
+    let opts = ConnectOptions {
+        auth_token: token,
+        tls: tls_ca.map(|ca| ClientTls {
+            ca_cert_path: ca,
+            server_name: server_name.to_string(),
+        }),
+    };
+    let mut client = auradb_conformance::Client::connect_with(addr, opts)
         .await
         .with_context(|| format!("connecting to {addr}"))?;
     client.ping().await.context("ping")?;
@@ -167,6 +315,79 @@ pub async fn cmd_status(addr: &str) -> Result<String> {
         health.status, health.ready, health.version, health.collections
     ))
 }
+
+/// `auradb cert generate-dev` - generate a self-signed development CA and a
+/// server certificate (SAN localhost/127.0.0.1) signed by it. The output is
+/// suitable for local TLS testing only.
+pub fn cmd_cert_generate_dev(out_dir: &Path) -> Result<String> {
+    use rcgen::{
+        BasicConstraints, CertificateParams, DistinguishedName, DnType, ExtendedKeyUsagePurpose,
+        IsCa, KeyPair, KeyUsagePurpose,
+    };
+
+    std::fs::create_dir_all(out_dir).with_context(|| format!("creating {}", out_dir.display()))?;
+
+    let mut ca_params = CertificateParams::new(Vec::new()).map_err(|e| anyhow::anyhow!("{e}"))?;
+    ca_params.is_ca = IsCa::Ca(BasicConstraints::Unconstrained);
+    ca_params.use_authority_key_identifier_extension = true;
+    ca_params.key_usages = vec![KeyUsagePurpose::KeyCertSign, KeyUsagePurpose::CrlSign];
+    let mut ca_dn = DistinguishedName::new();
+    ca_dn.push(DnType::CommonName, "AuraDB Development CA");
+    ca_params.distinguished_name = ca_dn;
+    let ca_key = KeyPair::generate().map_err(|e| anyhow::anyhow!("{e}"))?;
+    let ca_cert = ca_params
+        .self_signed(&ca_key)
+        .map_err(|e| anyhow::anyhow!("{e}"))?;
+
+    let mut srv_params =
+        CertificateParams::new(vec!["localhost".to_string(), "127.0.0.1".to_string()])
+            .map_err(|e| anyhow::anyhow!("{e}"))?;
+    srv_params.use_authority_key_identifier_extension = true;
+    srv_params.key_usages = vec![
+        KeyUsagePurpose::DigitalSignature,
+        KeyUsagePurpose::KeyEncipherment,
+    ];
+    srv_params.extended_key_usages = vec![ExtendedKeyUsagePurpose::ServerAuth];
+    let mut srv_dn = DistinguishedName::new();
+    srv_dn.push(DnType::CommonName, "localhost");
+    srv_params.distinguished_name = srv_dn;
+    let srv_key = KeyPair::generate().map_err(|e| anyhow::anyhow!("{e}"))?;
+    let srv_cert = srv_params
+        .signed_by(&srv_key, &ca_cert, &ca_key)
+        .map_err(|e| anyhow::anyhow!("{e}"))?;
+
+    let ca_path = out_dir.join("ca.crt");
+    let ca_key_path = out_dir.join("ca.key");
+    let cert_path = out_dir.join("server.crt");
+    let key_path = out_dir.join("server.key");
+    std::fs::write(&ca_path, ca_cert.pem())?;
+    std::fs::write(&ca_key_path, ca_key.serialize_pem())?;
+    std::fs::write(&cert_path, srv_cert.pem())?;
+    std::fs::write(&key_path, srv_key.serialize_pem())?;
+    restrict_key_permissions(&ca_key_path);
+    restrict_key_permissions(&key_path);
+
+    Ok(format!(
+        "WARNING: self-signed development certificates. Do not use them in production.\n\
+         wrote:\n  {ca}\n  {ca_key}\n  {cert}\n  {key}\n\n\
+         Enable TLS in the server config:\n  [tls]\n  enabled = true\n  \
+         cert_path = \"{cert}\"\n  key_path = \"{key}\"\n\n\
+         Point clients at the CA with {ca} (server name: localhost).",
+        ca = ca_path.display(),
+        ca_key = ca_key_path.display(),
+        cert = cert_path.display(),
+        key = key_path.display(),
+    ))
+}
+
+#[cfg(unix)]
+fn restrict_key_permissions(path: &Path) {
+    use std::os::unix::fs::PermissionsExt;
+    let _ = std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600));
+}
+
+#[cfg(not(unix))]
+fn restrict_key_permissions(_path: &Path) {}
 
 /// `auradb bench` - run a local insert/read/vector benchmark.
 pub fn cmd_bench(data_dir: &Path, records: usize) -> Result<String> {
@@ -224,6 +445,7 @@ pub fn build_config(
     data_dir: Option<PathBuf>,
     bind: Option<String>,
     port: Option<u16>,
+    allow_insecure_bind: bool,
 ) -> Result<Config> {
     let mut config = match config_path {
         Some(path) => Config::load(path).with_context(|| format!("loading {}", path.display()))?,
@@ -238,6 +460,7 @@ pub fn build_config(
     if let Some(p) = port {
         config.port = p;
     }
+    config.allow_insecure_bind = config.allow_insecure_bind || allow_insecure_bind;
     Ok(config)
 }
 
@@ -309,5 +532,88 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let out = cmd_bench(dir.path(), 50).unwrap();
         assert!(out.contains("ops/s"));
+    }
+
+    #[test]
+    fn hash_token_produces_verifiable_argon2id_hash() {
+        let hash = cmd_auth_hash_token(Some("dev-secret".into())).unwrap();
+        assert!(hash.starts_with("$argon2id$"));
+        assert!(!hash.contains("dev-secret"));
+        assert!(auradb_server::auth::verify_token(&hash, "dev-secret").unwrap());
+        assert!(!auradb_server::auth::verify_token(&hash, "wrong").unwrap());
+    }
+
+    #[test]
+    fn hash_token_rejects_empty() {
+        assert!(cmd_auth_hash_token(Some(String::new())).is_err());
+    }
+
+    #[test]
+    fn config_validate_accepts_default_rejects_insecure() {
+        let dir = tempfile::tempdir().unwrap();
+        let cfg = dir.path().join("ok.toml");
+        cmd_init(&dir.path().join("data"), &cfg).unwrap();
+        assert!(cmd_config_validate(&cfg).unwrap().contains("valid"));
+
+        let bad = dir.path().join("bad.toml");
+        std::fs::write(&bad, "bind = \"0.0.0.0\"\nport = 7171\n").unwrap();
+        assert!(cmd_config_validate(&bad).is_err());
+    }
+
+    #[test]
+    fn compatibility_reports_versions_and_capabilities() {
+        let out = cmd_compatibility();
+        assert!(out.contains(VERSION));
+        assert!(out.contains("AWP"));
+        assert!(out.contains("authentication"));
+        assert!(out.contains("full_text_search"));
+    }
+
+    #[test]
+    fn doctor_redacts_secrets() {
+        let dir = tempfile::tempdir().unwrap();
+        let data = dir.path().join("data");
+        cmd_init(&data, &dir.path().join("c.toml")).unwrap();
+        let hash = auradb_server::auth::hash_token("super-secret").unwrap();
+        let config = auradb_server::Config {
+            data_dir: data.clone(),
+            auth: auradb_server::AuthConfig {
+                enabled: true,
+                token_hash: Some(hash.clone()),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let report = cmd_doctor(&data, &config).unwrap();
+        assert!(report.contains("auth: enabled"));
+        assert!(report.contains("redacted"));
+        assert!(
+            !report.contains(&hash),
+            "the token hash must not be printed"
+        );
+        assert!(!report.contains("super-secret"));
+    }
+
+    #[test]
+    fn cert_generate_dev_creates_usable_files() {
+        let dir = tempfile::tempdir().unwrap();
+        let out = dir.path().join("certs");
+        let report = cmd_cert_generate_dev(&out).unwrap();
+        assert!(report.contains("WARNING"));
+        for f in ["ca.crt", "ca.key", "server.crt", "server.key"] {
+            assert!(out.join(f).exists(), "{f} should be written");
+        }
+        // The generated server cert/key must load into the server's TLS stack.
+        let scfg = auradb_server::Config {
+            data_dir: dir.path().join("data"),
+            tls: auradb_server::TlsConfig {
+                enabled: true,
+                cert_path: Some(out.join("server.crt")),
+                key_path: Some(out.join("server.key")),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        auradb_server::Server::open(scfg).expect("generated cert should load");
     }
 }

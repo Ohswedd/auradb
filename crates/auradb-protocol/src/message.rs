@@ -17,6 +17,13 @@ pub struct HelloRequest {
     pub client_version: String,
     /// The highest protocol version the client supports.
     pub protocol_version: u8,
+    /// An optional static authentication token presented at handshake time.
+    ///
+    /// Backward-compatible: clients that do not authenticate omit this field. A
+    /// server with authentication enabled rejects gated operations until the
+    /// session is authenticated, either by this field or by a later `AUTH` frame.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub auth_token: Option<String>,
 }
 
 /// Server handshake acknowledgement payload (`HELLO_ACK`).
@@ -26,6 +33,27 @@ pub struct HelloAck {
     pub protocol_version: u8,
     /// The server's advertised capabilities.
     pub capabilities: ServerCapabilities,
+    /// Whether the server requires authentication before gated operations.
+    #[serde(default)]
+    pub auth_required: bool,
+    /// Whether this connection is already authenticated (for example because a
+    /// valid `auth_token` was supplied in the handshake).
+    #[serde(default)]
+    pub authenticated: bool,
+}
+
+/// Client authentication payload (`AUTH`).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct AuthRequest {
+    /// The static authentication token to verify.
+    pub token: String,
+}
+
+/// Server authentication result payload (`AUTH_RESULT`).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct AuthResult {
+    /// Whether the connection is now authenticated.
+    pub authenticated: bool,
 }
 
 /// Structured error payload carried in an [`Opcode::Error`] frame.
@@ -131,9 +159,41 @@ mod tests {
         let ack = HelloAck {
             protocol_version: 1,
             capabilities: ServerCapabilities::current(1),
+            auth_required: true,
+            authenticated: false,
         };
         let frame = Frame::json(Opcode::HelloAck, RequestId::ZERO, 0, &ack).unwrap();
         let back: HelloAck = frame.decode_json().unwrap();
         assert_eq!(back, ack);
+    }
+
+    #[test]
+    fn hello_request_without_token_omits_field() {
+        let req = HelloRequest {
+            client_version: "test".into(),
+            protocol_version: 1,
+            auth_token: None,
+        };
+        let json = serde_json::to_string(&req).unwrap();
+        assert!(!json.contains("auth_token"));
+        let back: HelloRequest = serde_json::from_str(&json).unwrap();
+        assert_eq!(back, req);
+    }
+
+    #[test]
+    fn auth_messages_roundtrip() {
+        let req = AuthRequest {
+            token: "secret".into(),
+        };
+        let frame = Frame::json(Opcode::Auth, RequestId::ZERO, 0, &req).unwrap();
+        let back: AuthRequest = frame.decode_json().unwrap();
+        assert_eq!(back, req);
+
+        let res = AuthResult {
+            authenticated: true,
+        };
+        let frame = Frame::json(Opcode::AuthResult, RequestId::ZERO, 0, &res).unwrap();
+        let back: AuthResult = frame.decode_json().unwrap();
+        assert_eq!(back, res);
     }
 }

@@ -142,6 +142,29 @@ impl FieldDef {
     }
 }
 
+/// The kind of a named collection index (beyond the per-field `indexed` flag).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum IndexKind {
+    /// An equality index over a dotted document path (e.g. `profile.company`).
+    DocumentPath,
+    /// A tokenized full-text inverted index over a string field.
+    FullText,
+}
+
+/// A named collection index over a field or document path.
+///
+/// Document-path indexes accelerate equality filters on nested document values;
+/// full-text indexes support tokenized text search on a string field. These are
+/// declared separately from [`FieldDef`] so a single field can carry several.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct IndexDef {
+    /// The dotted document path (document_path) or field name (full_text).
+    pub path: String,
+    /// The index kind.
+    pub kind: IndexKind,
+}
+
 /// A complete schema for one collection (entity type).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct CollectionSchema {
@@ -152,6 +175,9 @@ pub struct CollectionSchema {
     /// Relationship (link) fields.
     #[serde(default)]
     pub relationships: Vec<Relationship>,
+    /// Named document-path and full-text indexes.
+    #[serde(default)]
+    pub indexes: Vec<IndexDef>,
 }
 
 impl CollectionSchema {
@@ -161,6 +187,7 @@ impl CollectionSchema {
             name: name.into(),
             fields: Vec::new(),
             relationships: Vec::new(),
+            indexes: Vec::new(),
         }
     }
 
@@ -174,6 +201,28 @@ impl CollectionSchema {
     pub fn with_relationship(mut self, rel: Relationship) -> Self {
         self.relationships.push(rel);
         self
+    }
+
+    /// Builder: add a named index.
+    pub fn with_index(mut self, index: IndexDef) -> Self {
+        self.indexes.push(index);
+        self
+    }
+
+    /// The dotted paths with a document-path index.
+    pub fn document_path_indexes(&self) -> impl Iterator<Item = &str> {
+        self.indexes
+            .iter()
+            .filter(|i| i.kind == IndexKind::DocumentPath)
+            .map(|i| i.path.as_str())
+    }
+
+    /// The field names with a full-text index.
+    pub fn full_text_indexes(&self) -> impl Iterator<Item = &str> {
+        self.indexes
+            .iter()
+            .filter(|i| i.kind == IndexKind::FullText)
+            .map(|i| i.path.as_str())
     }
 
     /// The primary-key field, if one is declared.
@@ -209,6 +258,54 @@ impl CollectionSchema {
                     "relationship {} collides with a field of the same name",
                     rel.name
                 )));
+            }
+        }
+        for index in &self.indexes {
+            self.validate_index(index)?;
+        }
+        Ok(())
+    }
+
+    fn validate_index(&self, index: &IndexDef) -> Result<()> {
+        if index.path.trim().is_empty() {
+            return Err(Error::SchemaViolation("index path is empty".into()));
+        }
+        let segments: Vec<&str> = index.path.split('.').collect();
+        if segments.iter().any(|s| s.is_empty()) {
+            return Err(Error::SchemaViolation(format!(
+                "index path {} has an empty segment",
+                index.path
+            )));
+        }
+        let root = segments[0];
+        let field = self.field(root).ok_or_else(|| {
+            Error::SchemaViolation(format!(
+                "index path {} references unknown field {root}",
+                index.path
+            ))
+        })?;
+        match index.kind {
+            IndexKind::DocumentPath => {
+                if segments.len() > 1 && field.field_type != FieldType::Document {
+                    return Err(Error::SchemaViolation(format!(
+                        "document-path index {} requires {root} to be a document field",
+                        index.path
+                    )));
+                }
+            }
+            IndexKind::FullText => {
+                if segments.len() != 1 {
+                    return Err(Error::SchemaViolation(format!(
+                        "full-text index {} must target a single string field",
+                        index.path
+                    )));
+                }
+                if field.field_type != FieldType::String {
+                    return Err(Error::SchemaViolation(format!(
+                        "full-text index {} requires {root} to be a string field",
+                        index.path
+                    )));
+                }
             }
         }
         Ok(())

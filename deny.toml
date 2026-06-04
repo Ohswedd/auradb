@@ -3,6 +3,12 @@
 [advisories]
 version = 2
 yanked = "deny"
+# Accepted advisories with no actionable fix:
+# - RUSTSEC-2025-0134: rustls-pemfile is unmaintained. It is pulled in transitively
+#   by the rustls TLS stack; its functionality moved into rustls-pki-types and there
+#   is no safe drop-in upgrade at our pinned rustls major. It is an unmaintained
+#   notice, not a vulnerability. Revisit when the rustls stack drops the dependency.
+ignore = ["RUSTSEC-2025-0134"]
 
 [licenses]
 version = 2

@@ -10,7 +10,9 @@ use auradb::{Engine, EngineOptions};
 use auradb_core::Result;
 use auradb_observability::{Metrics, MetricsSnapshot};
 use auradb_protocol::{ErrorPayload, RequestId};
-use tokio::net::{TcpListener, TcpStream};
+use tokio::io::{AsyncRead, AsyncWrite};
+use tokio::net::TcpListener;
+use tokio_rustls::TlsAcceptor;
 
 use crate::config::Config;
 use crate::cursor::CursorRegistry;
@@ -20,12 +22,20 @@ use crate::wire::{read_frame, write_frame};
 /// A configured AuraDB server.
 pub struct Server {
     ctx: ServerContext,
+    tls: Option<TlsAcceptor>,
 }
 
 impl Server {
     /// Build a server from a validated configuration, opening the engine.
     pub fn open(config: Config) -> Result<Server> {
         config.validate()?;
+        // Build the TLS acceptor before opening anything else so an invalid
+        // certificate aborts startup (fail closed) rather than serving plaintext.
+        let tls = if config.tls.enabled {
+            Some(crate::tls::build_acceptor(&config.tls)?)
+        } else {
+            None
+        };
         let engine = Engine::open_with(
             &config.data_dir,
             EngineOptions {
@@ -44,7 +54,12 @@ impl Server {
             cursors,
             config: Arc::new(config),
         };
-        Ok(Server { ctx })
+        Ok(Server { ctx, tls })
+    }
+
+    /// Whether this server terminates TLS.
+    pub fn tls_enabled(&self) -> bool {
+        self.tls.is_some()
     }
 
     /// The shared server context.
@@ -72,7 +87,7 @@ impl Server {
         shutdown: F,
     ) -> Result<()> {
         let reaper = spawn_reaper(self.ctx.clone());
-        tokio::select! {
+        let result = tokio::select! {
             result = self.accept_loop(&listener) => {
                 reaper.abort();
                 result
@@ -82,16 +97,38 @@ impl Server {
                 reaper.abort();
                 Ok(())
             }
+        };
+        // Persist a durable index checkpoint so the next open loads snapshots
+        // rather than rebuilding from storage.
+        if let Err(e) = self.ctx.engine.checkpoint() {
+            tracing::warn!(error = %e, "index checkpoint on shutdown failed");
         }
+        result
     }
 
     async fn accept_loop(&self, listener: &TcpListener) -> Result<()> {
         loop {
             let (socket, peer) = listener.accept().await?;
+            socket.set_nodelay(true).ok();
             let ctx = self.ctx.clone();
+            let tls = self.tls.clone();
             tokio::spawn(async move {
-                if let Err(e) = handle_connection(ctx, socket).await {
-                    tracing::debug!(%peer, error = %e, "connection ended with error");
+                match tls {
+                    Some(acceptor) => match acceptor.accept(socket).await {
+                        Ok(stream) => {
+                            if let Err(e) = handle_connection(ctx, stream).await {
+                                tracing::debug!(%peer, error = %e, "connection ended with error");
+                            }
+                        }
+                        Err(e) => {
+                            tracing::debug!(%peer, error = %e, "TLS handshake failed");
+                        }
+                    },
+                    None => {
+                        if let Err(e) = handle_connection(ctx, socket).await {
+                            tracing::debug!(%peer, error = %e, "connection ended with error");
+                        }
+                    }
                 }
             });
         }
@@ -113,9 +150,11 @@ fn spawn_reaper(ctx: ServerContext) -> tokio::task::JoinHandle<()> {
     })
 }
 
-async fn handle_connection(ctx: ServerContext, socket: TcpStream) -> Result<()> {
-    socket.set_nodelay(true).ok();
-    let (mut reader, mut writer) = socket.into_split();
+async fn handle_connection<S>(ctx: ServerContext, socket: S) -> Result<()>
+where
+    S: AsyncRead + AsyncWrite + Unpin + Send + 'static,
+{
+    let (mut reader, mut writer) = tokio::io::split(socket);
     Metrics::gauge_inc(&ctx.metrics.active_connections);
     let mut session = Session::default();
     let max_payload = ctx.config.max_payload_bytes;

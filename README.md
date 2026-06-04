@@ -4,12 +4,14 @@
 [![Security](https://github.com/Ohswedd/auradb/actions/workflows/security.yml/badge.svg)](https://github.com/Ohswedd/auradb/actions/workflows/security.yml)
 [![Rust](https://img.shields.io/badge/rust-1.85%2B-orange.svg)](https://www.rust-lang.org)
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
-[![Release](https://img.shields.io/badge/release-v0.1.0-green.svg)](CHANGELOG.md)
+[![Release](https://img.shields.io/badge/release-v0.2.0-green.svg)](CHANGELOG.md)
 
 AuraDB is a single-node, Rust-native database server for the Aura ecosystem. It
 speaks the Aura Wire Protocol, persists data locally, and provides typed schema,
 document fields, relationship includes, exact vector search, transactions,
-cursors, observability, and CLI tooling.
+cursors, observability, and CLI tooling. As of 0.2.0 it also provides enforced
+token authentication, server-terminated TLS, persisted index snapshots,
+document-path indexes, and basic full-text search.
 
 This repository is the database engine side of the Aura ecosystem. It implements
 a real, persistent, recoverable, single-node server, not a mock or an in-memory
@@ -17,14 +19,17 @@ demo.
 
 ## Scope and honesty
 
-AuraDB 0.1.0 is an early single-node developer release. It is a complete
-single-node server, and it is honest about its boundaries. The following are not
-implemented and not claimed in this release: distributed clustering,
-replication, sharding, failover, multi-region, and Raft; approximate (ANN/HNSW)
-vector indexes; BM25 full-text and hybrid fusion ranking; serializable MVCC; and
-enforced TLS or authentication. Unsupported operations return a structured
-error. See [Limitations](#limitations) and the [roadmap](docs/ROADMAP.md). Do
-not use this release for mission-critical deployments.
+AuraDB 0.2.0 is a single-node developer release focused on security, durability
+hardening, and public usability. It is a complete single-node server, and it is
+honest about its boundaries. The following are not implemented and not claimed:
+distributed clustering, replication, sharding, failover, multi-region, and Raft;
+approximate (ANN/HNSW) vector indexes; BM25 full-text and hybrid fusion ranking;
+and serializable MVCC. Authentication and TLS are now implemented and enforced
+when enabled, but RBAC, field-level encryption, encryption at rest, and audit
+logging are not. Unsupported operations return a structured error. See
+[Limitations](#security-model-and-current-limits) and the
+[roadmap](docs/ROADMAP.md). Do not use this release for mission-critical
+deployments.
 
 ## Why AuraDB
 
@@ -40,30 +45,47 @@ transactional store. The forward direction is captured in the
 Aura Connector is the client; AuraDB is the server. AuraDB implements the Aura
 Wire Protocol (AWP) and an Aura-Connector-compatible Query IR. The conformance
 suite ([`crates/auradb-conformance`](crates/auradb-conformance)) exercises every
-first-release capability over the wire, and a Python harness lives in
-[`tests/conformance/python`](tests/conformance/python).
+capability over the wire, and a Python harness lives in
+[`tests/conformance/python`](tests/conformance/python). The published Aura
+Connector 0.3.x ships a native AuraDB-over-TCP backend that speaks AWP 1
+(including auth and TLS); see
+[`docs/AURA_CONNECTOR_COMPATIBILITY.md`](docs/AURA_CONNECTOR_COMPATIBILITY.md)
+and [`docs/COMPATIBILITY.md`](docs/COMPATIBILITY.md).
 
-## What works in 0.1.0
+## What works in 0.2.0
 
 - **Persistent storage.** Append-only checksummed segment log, manifest, crash
   recovery, corruption detection, and compaction.
+- **Persisted indexes.** Indexes are snapshotted to disk at checkpoints and
+  loaded on open when a content fingerprint and schema shape match; otherwise the
+  engine safely rebuilds from storage. See [`docs/INDEXING.md`](docs/INDEXING.md).
 - **Transactions.** Atomic commit, rollback, optimistic conflict detection,
   read-your-writes, and crash recovery.
 - **Schema catalog.** Typed fields, primary keys, unique and secondary indexes,
-  document and vector fields, relationships, and validation.
+  document and vector fields, document-path and full-text indexes, relationships,
+  and validation.
 - **Query engine.** Find, filter (`=, !=, <, <=, >, >=, in`, `contains`,
-  `AND/OR/NOT`, document paths), order/limit/offset, projection, count, exists,
-  insert/bulk/update/delete/upsert, relationship includes, exact vector
-  nearest-neighbour search, and `EXPLAIN`.
+  `contains_text`, `AND/OR/NOT`, document paths), order/limit/offset, projection,
+  count, exists, insert/bulk/update/delete/upsert, relationship includes, exact
+  vector nearest-neighbour search, and `EXPLAIN`.
+- **Document-path indexes.** Equality acceleration on nested document values
+  addressed by a dotted path. See [`docs/DOCUMENTS.md`](docs/DOCUMENTS.md).
+- **Full-text search.** A tokenized inverted index with boolean-AND
+  `contains_text` matching and term-frequency ranking (not BM25). See
+  [`docs/FULL_TEXT.md`](docs/FULL_TEXT.md).
+- **Security.** Enforced static-token authentication (Argon2id-hashed) and
+  server-terminated TLS with optional mutual TLS (rustls), both fail-closed. See
+  [`docs/SECURITY.md`](docs/SECURITY.md).
 - **Operations.** Migration impact estimation, server-side cursors,
-  observability (metrics and tracing), a full CLI, Docker support, and CI.
+  observability (metrics and tracing), a full CLI, a published Docker image,
+  prebuilt binary release artifacts, and CI.
 
 ## What is intentionally not claimed yet
 
 Distributed clustering, replication, sharding, failover, multi-region, and Raft;
 ANN/HNSW vector indexes; BM25 full-text and hybrid fusion ranking; serializable
-MVCC; enforced TLS and authentication; RBAC, field-level encryption, audit
-logging; time-travel queries; and change streams. These are tracked in the
+MVCC; RBAC, field-level encryption, encryption at rest, and audit logging;
+time-travel queries; and change streams. These are tracked in the
 [roadmap](docs/ROADMAP.md).
 
 ## Quick start
@@ -102,15 +124,65 @@ cargo build --release
 The server listens for Aura Wire Protocol frames over TCP. Configuration can come
 from `AuraDB.toml`, the data directory, and CLI flags.
 
-## Connect with Aura Connector
+Binding loopback (`127.0.0.1`) is local developer mode and may leave auth
+disabled. Binding a non-loopback address (for example `0.0.0.0`) with auth
+disabled is rejected at startup unless you set `allow_insecure_bind = true` in
+config or pass `--allow-insecure-bind`.
 
-Aura Connector talks to AuraDB over AWP. When the official `aura-connector`
-Python package is installed, point it at the server address:
+## Authentication and TLS quickstart
+
+Enforced static-token authentication and server-terminated TLS are both opt-in
+and fail closed. Full details are in [`docs/SECURITY.md`](docs/SECURITY.md).
 
 ```bash
-python -m pip install aura-connector
-python tests/conformance/python/run_conformance.py --addr 127.0.0.1:7171
+# Generate an Argon2id token hash to paste into the [auth] config block.
+auradb auth hash-token --token "your-secret"
+# Output: $argon2id$v=19$m=19456,t=2,p=1$...$...
 ```
+
+```toml
+[auth]
+enabled = true
+mode = "static-token"
+token_hash = "$argon2id$v=19$m=19456,t=2,p=1$...$..."
+token_hash_algorithm = "argon2id"
+```
+
+```bash
+# Generate development-only certificates (CA, server cert/key) for local TLS.
+auradb cert generate-dev --out-dir .local/certs
+```
+
+```toml
+[tls]
+enabled = true
+cert_path = ".local/certs/server.crt"
+key_path  = ".local/certs/server.key"
+```
+
+```bash
+# Connect over TLS, trusting the dev CA, and present the token.
+auradb status --addr 127.0.0.1:7171 --tls-ca .local/certs/ca.crt --token "your-secret"
+```
+
+Tokens are never stored or compared in plaintext, secrets are never logged or
+echoed in error frames, and `auradb doctor` prints a redacted security summary.
+
+## Connect with Aura Connector
+
+Aura Connector talks to AuraDB over AWP. The published Aura Connector 0.3.x
+ships a native AuraDB-over-TCP backend that speaks AWP 1, including auth and TLS.
+Point it at the server address:
+
+```bash
+python -m pip install "aura-connector>=0.3.0"
+python tests/conformance/python/run_conformance.py --addr 127.0.0.1:7171 \
+  --auth-token "your-secret" --tls-ca .local/certs/ca.crt
+```
+
+Aura Connector 0.2.x uses a different internal framing and is not wire
+compatible; use 0.3.x. See
+[`docs/AURA_CONNECTOR_COMPATIBILITY.md`](docs/AURA_CONNECTOR_COMPATIBILITY.md).
 
 The Rust conformance client in `crates/auradb-conformance` stands in for the
 client in automated tests and exercises the same scenarios over the wire.
@@ -124,22 +196,31 @@ auradb doctor --data-dir .local/auradb
 auradb check --data-dir .local/auradb
 auradb bench --data-dir .local/auradb
 auradb status --addr 127.0.0.1:7171
+auradb auth hash-token --token "your-secret"
+auradb cert generate-dev --out-dir .local/certs
+auradb index check --data-dir .local/auradb
 ```
 
 | Command | Description |
 |---|---|
 | `auradb version` | Print the version |
 | `auradb init` | Create a data directory and config file |
-| `auradb server` | Start the server |
-| `auradb doctor` | Validate config and data directory |
-| `auradb status` | Ping a running server and report health |
+| `auradb server` | Start the server (`--allow-insecure-bind` to permit a public bind without auth) |
+| `auradb doctor` | Validate config and data directory; print a redacted security summary |
+| `auradb status` | Ping a running server and report health (`--token`, `--tls-ca`, `--tls-server-name`) |
 | `auradb check` | Verify on-disk index consistency |
-| `auradb compact` | Compact the storage log |
+| `auradb compact` | Compact the storage log and write fresh index snapshots |
 | `auradb dump` | Export schemas and records to JSONL |
 | `auradb restore` | Restore from a JSONL dump |
 | `auradb bench` | Run a local insert/read/vector benchmark |
+| `auradb auth hash-token` | Generate an Argon2id token hash for the config |
+| `auradb cert generate-dev` | Generate development-only TLS certificates |
+| `auradb config validate` | Validate a config file (fails on invalid or unsafe config) |
+| `auradb compatibility` | Print version, AWP version, capabilities, and tested connector version |
+| `auradb index check` | Report how indexes loaded and verify consistency |
+| `auradb index rebuild` | Rebuild indexes from storage and persist fresh snapshots |
 
-See [`docs/CLI.md`](docs/CLI.md).
+See [`docs/CLI.md`](docs/CLI.md) and [`docs/COMPATIBILITY.md`](docs/COMPATIBILITY.md).
 
 ## Data model overview
 
@@ -167,9 +248,14 @@ torn tail record is detected by checksum and truncated. Transactions buffer a
 write set, then commit by acquiring the engine write lock, performing optimistic
 write-write conflict detection against the versions read at transaction start,
 and appending a commit batch atomically with the commit marker written last.
-Rollback discards the write set. The isolation model is snapshot reads with
-optimistic conflict detection on commit; serializable MVCC is not claimed. See
-[`docs/STORAGE_ENGINE.md`](docs/STORAGE_ENGINE.md) and
+Rollback discards the write set. Reads issued with a transaction execute against
+the transaction view — committed state overlaid with that transaction's own
+staged writes and deletes — so a transaction sees its uncommitted inserts and
+updates and not its deletes (read-your-writes), uniformly across find, filter,
+count, exists, explain, vector, document-path, full-text, relationship include,
+and cursor paging. The isolation model is read-your-writes over committed state
+with optimistic conflict detection on commit; serializable MVCC is not claimed.
+See [`docs/STORAGE_ENGINE.md`](docs/STORAGE_ENGINE.md) and
 [`docs/TRANSACTIONS.md`](docs/TRANSACTIONS.md).
 
 ## Vector, document, and relationship support
@@ -194,11 +280,19 @@ are exposed. No external collector is required to run the server. See
 
 ## Docker usage
 
-```bash
-docker compose up --build
-# server is now listening on localhost:7171
+A published image is available on the GitHub Container Registry:
 
-# Or build and run the image directly.
+```bash
+docker run --rm -p 7171:7171 -v auradb-data:/data ghcr.io/ohswedd/auradb:0.2.0
+```
+
+The image runs as a non-root user, exposes `7171`, stores data in the `/data`
+volume, and ships a `HEALTHCHECK` that calls `auradb status`. To enable TLS,
+mount your certificates into the container and reference them in the config.
+
+```bash
+# Or use docker compose, or build the image locally.
+docker compose up --build
 docker build -t auradb:local .
 docker run --rm auradb:local auradb version
 ```
@@ -209,8 +303,10 @@ docker run --rm auradb:local auradb version
 cargo test --workspace --all-features
 ```
 
-Tests span unit, integration (a real server over TCP), recovery (restart and
-torn-tail), and conformance. See [`docs/TESTING.md`](docs/TESTING.md).
+Tests span unit, integration (a real server over TCP), deterministic seeded
+recovery and corruption tests (restart, torn-tail truncation, byte-flip
+detection, catalog and index repair), and conformance. See
+[`docs/TESTING.md`](docs/TESTING.md).
 
 ## Benchmarks
 
@@ -226,18 +322,21 @@ full-scan queries, exact vector search, and cursor paging.
 ## Security model and current limits
 
 Payload limits, frame validation, fail-closed storage, and
-`#![forbid(unsafe_code)]` are in place across every crate. TLS and authentication
-are configuration shapes only in this release and are not enforced; a TLS
-configuration fails closed so plaintext is never served under it. Run AuraDB on a
-trusted network or behind a TLS-terminating, authenticating proxy. See
+`#![forbid(unsafe_code)]` are in place across every crate. Static-token
+authentication (Argon2id-hashed, constant-time verification) and
+server-terminated TLS with optional mutual TLS (rustls) are implemented and
+enforced when enabled; both fail closed, so plaintext is never served under a TLS
+configuration and a public bind without auth is rejected at startup. Tokens and
+other secrets are never logged or echoed. Not implemented: RBAC, field-level
+encryption, encryption at rest, and audit logging. AuraDB is single node. See
 [`SECURITY.md`](SECURITY.md) and [`docs/SECURITY.md`](docs/SECURITY.md).
 
 ## Roadmap
 
-Planned directions, including ANN vector indexes, full-text and hybrid ranking,
-enforced TLS and authentication, RBAC, persisted secondary indexes, document
-path indexes, change streams, time travel, and distribution, are described in
-[`docs/ROADMAP.md`](docs/ROADMAP.md).
+Planned directions, including ANN vector indexes, BM25 full-text and hybrid
+ranking, RBAC, field-level encryption, audit logging, change streams, time
+travel, and distribution (replication, clustering, sharding, Raft), are described
+in [`docs/ROADMAP.md`](docs/ROADMAP.md).
 
 ## Contributing
 
