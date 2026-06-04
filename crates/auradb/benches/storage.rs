@@ -4,7 +4,8 @@ use auradb::core::{CollectionSchema, Document, FieldDef, FieldType, Value};
 use auradb::query::{CompareOp, Filter, FindQuery};
 use auradb::storage::StorageOptions;
 use auradb::{Engine, EngineOptions};
-use criterion::{black_box, criterion_group, criterion_main, Criterion};
+use criterion::{criterion_group, criterion_main, Criterion};
+use std::hint::black_box;
 
 fn engine() -> (tempfile::TempDir, Engine) {
     let dir = tempfile::tempdir().unwrap();

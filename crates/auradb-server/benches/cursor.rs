@@ -6,7 +6,8 @@ use auradb::core::{CollectionSchema, Document, FieldDef, FieldType, Value};
 use auradb::query::FindQuery;
 use auradb::Engine;
 use auradb_server::CursorRegistry;
-use criterion::{black_box, criterion_group, criterion_main, Criterion};
+use criterion::{criterion_group, criterion_main, Criterion};
+use std::hint::black_box;
 
 fn bench_cursor(c: &mut Criterion) {
     let dir = tempfile::tempdir().unwrap();

@@ -1,7 +1,8 @@
 //! Benchmarks for AWP frame encoding and decoding.
 
 use auradb_protocol::{Frame, Opcode, RequestId, DEFAULT_MAX_PAYLOAD};
-use criterion::{black_box, criterion_group, criterion_main, Criterion};
+use criterion::{criterion_group, criterion_main, Criterion};
+use std::hint::black_box;
 
 fn bench_frame(c: &mut Criterion) {
     let payload = serde_json::to_vec(&serde_json::json!({
