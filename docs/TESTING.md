@@ -35,6 +35,22 @@ cargo build --workspace --all-features
   bounded memory.
 - **Server / integration** (`tests/integration`): end-to-end client → server for
   ping, health, schema, CRUD, stream, vector, explain, migration estimate.
+- **Backup / restore** (`crates/auradb-cli/tests/backup_restore.rs`): dump and
+  restore a database containing scalar, document, vector, relationship,
+  full-text, and document-path data, then verify records, schema, every index
+  kind, search, relationship include, count, exists, and `auradb check` on the
+  restored directory.
+- **Upgrade** (`crates/auradb/tests/upgrade_v0_1_0.rs`): open a committed v0.1.0
+  data directory (written by the v0.1.0 binary) with the current engine; verify
+  the catalog and records load, indexes rebuild from storage, rebuilt indexes
+  serve lookups, `auradb check` passes, a post-upgrade backup round-trips, and an
+  unknown future storage format is rejected rather than silently opened.
+- **Chaos restart** (`crates/auradb/tests/chaos_restart.rs`): a deterministic,
+  seeded stream of writes, updates, deletes, and transactions with the engine
+  dropped and reopened from disk at fixed intervals, comparing the recovered
+  state (records and every index kind) against a reference model after each
+  restart, plus a dump/restore check. A heavier stress run is available behind
+  `--ignored`.
 - **Recovery** (`tests/recovery`): kill-and-reopen persistence and torn-tail
   truncation.
 - **Seeded recovery/fuzz** (`crates/auradb-storage/tests/recovery.rs`,
@@ -45,7 +61,18 @@ cargo build --workspace --all-features
   corruption detection (fail closed), corrupt/missing index file repair, and
   corrupt index manifest repair.
 - **Conformance** (`auradb-conformance`, `tests/conformance`): the full Aura
-  Connector scenario list run over the wire protocol.
+  Connector scenario list run over the wire protocol. In addition to the Rust and
+  standard-library Python harnesses, the published Aura Connector drives the
+  server through `run_connector_smoke.py` and `run_connector_conformance.py`. For
+  the v0.2.1 release these were validated locally with `aura-connector` 0.3.0
+  (from PyPI) in plaintext, auth, and TLS-plus-auth modes, with no secret in the
+  server logs. See [CONFORMANCE.md](CONFORMANCE.md).
+- **Secure deployment** (`docker-compose.secure.yml`): the secure Compose example
+  was validated at runtime with development certificates and a generated token
+  hash. The container reports healthy over TLS with authentication, a plaintext
+  client is rejected, the connector smoke passes against it over TLS plus auth,
+  and the token, its hash, and the private key never appear in the container
+  logs. See [DEPLOYMENT.md](DEPLOYMENT.md).
 
 ## Honesty check
 

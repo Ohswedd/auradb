@@ -2,11 +2,13 @@
 
 This document is the connector-focused companion to the
 [Compatibility Matrix](COMPATIBILITY.md). It records which Aura Connector release
-talks to AuraDB 0.2.0, what it can drive, and what it cannot.
+talks to AuraDB 0.2.1, what it can drive, and what it cannot. AuraDB 0.2.1 is an
+operational-polish release that preserves all v0.2.0 wire and feature behavior,
+so the same connector compatibility applies.
 
 ## Summary
 
-- **AuraDB 0.2.0 speaks AWP 1** (the 44-byte framed Aura Wire Protocol header,
+- **AuraDB 0.2.1 speaks AWP 1** (the 44-byte framed Aura Wire Protocol header,
   CRC32-checked, with JSON payloads). See [PROTOCOL.md](PROTOCOL.md).
 - **Use Aura Connector 0.3.x.** The published Aura Connector 0.3.x ships a native
   AuraDB-over-TCP backend that speaks AWP 1, including authentication and TLS.
@@ -16,8 +18,13 @@ talks to AuraDB 0.2.0, what it can drive, and what it cannot.
 
 | AuraDB | Aura Connector | Protocol | Status |
 | ------ | -------------- | -------- | ------ |
+| 0.2.1  | 0.3.x          | AWP 1    | Supported (native AuraDB backend) |
 | 0.2.0  | 0.3.x          | AWP 1    | Supported (native AuraDB backend) |
-| 0.2.0  | 0.2.x          | n/a      | Not wire compatible |
+| 0.2.x  | 0.2.x          | n/a      | Not wire compatible |
+
+The connector side is exercised by `run_connector_smoke.py` (a minimal real
+scenario) and `run_connector_conformance.py` (the full suite) in
+`conformance.yml`, against servers with auth disabled and with auth plus TLS.
 
 ## Required connector extras
 
@@ -62,7 +69,7 @@ The pure-standard-library Python conformance client at
   `exists`, boolean `and`/`or`/`not`, document-path equality, count, exists,
   relationship includes, exact vector nearest, EXPLAIN, migration estimate.
 - Mutations: insert, bulk insert, update, delete, upsert.
-- Transactions: begin/commit/rollback with read-your-writes — reads carrying a
+- Transactions: begin/commit/rollback with read-your-writes. Reads carrying a
   transaction id observe that transaction's staged writes and deletes across
   find, filter, count, exists, explain, vector, document-path, full-text,
   relationship include, and cursor paging.

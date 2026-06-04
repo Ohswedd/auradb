@@ -3,6 +3,17 @@
 The server is configured by a TOML file (see `AuraDB.toml`) with sensible
 defaults; CLI flags override file values.
 
+Ready-to-use templates live under `examples/`:
+
+- [`auradb.local.toml`](../examples/auradb.local.toml) - local development
+  (loopback, auth and TLS disabled).
+- [`auradb.secure.toml`](../examples/auradb.secure.toml) - secure deployment
+  (auth and TLS enabled, redacted token-hash placeholder).
+- [`auradb.toml`](../examples/auradb.toml) - a balanced default that documents
+  every option.
+
+See [DEPLOYMENT.md](DEPLOYMENT.md) for the secure Docker Compose example.
+
 ## Top-level options
 
 | Key | Default | Description |
@@ -44,6 +55,11 @@ token_hash_algorithm = "argon2id"  # only supported algorithm
 - `token_hash` is an Argon2id PHC string, never a plaintext token. Generate it
   with `auradb auth hash-token`.
 - When `enabled = true`, a missing or malformed `token_hash` fails startup.
+- Rotate the token in place with `auradb auth rotate-token --config <file>
+  --token <new>`: it re-hashes the new token, rewrites the config atomically with
+  unrelated fields preserved, optionally backs up the previous config, and
+  validates the result. A running server keeps the token it loaded at startup;
+  restart it to enforce the new token. See [SECURITY.md](SECURITY.md).
 
 ## `[tls]`
 
@@ -76,10 +92,15 @@ zero payload limit, zero page size), on unsafe configuration (a public bind
 without auth and without `allow_insecure_bind`), and on incomplete security
 material (auth enabled without a valid `token_hash`, TLS enabled without valid
 certificate/key, mutual TLS without a client CA). Validate a config without
-starting the server with `auradb config validate --config AuraDB.toml`.
+starting the server with `auradb config validate --config AuraDB.toml`. To
+validate a deployment template whose TLS files live on the target host, add
+`--no-file-checks`, which checks structure without requiring the certificate and
+key to exist on the machine running the check; every other check still applies.
 
 ## Docker
 
-The image reads the same flags; `docker-compose.yml` binds `0.0.0.0:7171` inside
-the container and mounts `/data` as a volume. To enable TLS, mount certificates
-into the container and reference them under `[tls]`.
+The image reads the same flags. `docker-compose.yml` is a development example
+that binds `0.0.0.0:7171` inside the container and mounts `/data` as a volume.
+For a deployment, use `docker-compose.secure.yml`, which enables auth and TLS,
+mounts a config and a certificate directory, and injects the token hash from the
+environment so no secret is committed. See [DEPLOYMENT.md](DEPLOYMENT.md).

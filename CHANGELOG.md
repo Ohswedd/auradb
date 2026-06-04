@@ -4,6 +4,65 @@ All notable changes to AuraDB are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and the project uses
 [Semantic Versioning](https://semver.org/).
 
+## [0.2.1] - 2026-06-05
+
+Operational polish, safer defaults, release confidence, and deployment
+readiness. This patch release preserves all v0.2.0 behavior; it adds deployment
+examples, an operational token-rotation command, and durability and
+compatibility coverage in CI.
+
+### Added
+
+- Secure Docker Compose example (`docker-compose.secure.yml`) that runs AuraDB
+  with authentication and TLS enabled, a non-root user, a mounted config, a data
+  volume, a mounted certificate directory, and a healthcheck. The token hash is
+  supplied through an environment variable rather than committed in plaintext.
+- Production configuration templates: `examples/auradb.secure.toml` (auth and
+  TLS enabled, redacted token-hash placeholder) and `examples/auradb.local.toml`
+  (loopback, auth and TLS disabled, development only), plus an
+  `examples/production/` deployment bundle.
+- Token rotation support: `auradb auth rotate-token` re-hashes a new token with
+  Argon2id, writes the configuration atomically, preserves unrelated fields,
+  optionally backs up the previous configuration, validates the result, and
+  never writes a plaintext token.
+- Backup and restore verification: an integration test that dumps a database
+  containing scalar, document, vector, relationship, full-text, and
+  document-path data and restores it into a fresh data directory, then verifies
+  records, schema, indexes, and search.
+- Upgrade coverage from an AuraDB v0.1.0 data directory: a committed fixture
+  written by the v0.1.0 binary is opened by v0.2.1, validated, and its indexes
+  rebuilt, with `auradb check` passing afterward.
+- Chaos restart test that drives writes, updates, and deletes against the engine
+  with deterministic crash-and-reopen cycles and compares the recovered state
+  against a reference model.
+- Connector compatibility smoke script
+  (`tests/conformance/python/run_connector_smoke.py`) that runs a minimal real
+  Aura Connector scenario against a running server.
+- Benchmark baseline snapshot (`benches/baseline/v0.2.1.json`) produced by
+  `auradb bench --json`, with `docs/BENCHMARKS.md`.
+- JSON output for `auradb status`, `auradb doctor`, and `auradb bench`
+  (`--json`), and a richer health and readiness report.
+
+### Changed
+
+- Improved Docker security defaults and deployment documentation; the secure
+  Compose example is now the recommended deployment path.
+- `auradb dump` accepts `--output` (alias of `--out`) and `auradb restore`
+  accepts `--input` (alias of `--in`) for consistency with the documentation.
+- Improved release-validation and operational health-check documentation.
+
+### Fixed
+
+- Pinned the Docker build stage to `rust:1.90-slim-bookworm` so its glibc matches
+  the `debian:bookworm-slim` runtime. The unpinned `rust:1.90-slim` tag had moved
+  to a newer Debian, producing an image whose binary failed at startup with a
+  missing-glibc-version error.
+- `auradb dump` now writes collections in dependency order so that a
+  relationship target is restored before the collection that references it;
+  restoring a dump with relationships no longer depends on collection ordering.
+- Documentation consistency and version references across the README and the
+  `docs/` tree.
+
 ## [0.2.0] - 2026-06-04
 
 Single-node release focused on security, durability hardening, and public
@@ -132,5 +191,6 @@ approximate (ANN/HNSW) vector indexes; BM25 full-text and hybrid fusion ranking;
 serializable MVCC; enforced TLS and authentication; field-level encryption,
 RBAC; time travel; and change streams. See [docs/ROADMAP.md](docs/ROADMAP.md).
 
+[0.2.1]: https://github.com/Ohswedd/auradb/releases/tag/v0.2.1
 [0.2.0]: https://github.com/Ohswedd/auradb/releases/tag/v0.2.0
 [0.1.0]: https://github.com/Ohswedd/auradb/releases/tag/v0.1.0

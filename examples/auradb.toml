@@ -1,6 +1,15 @@
-# Example AuraDB server configuration.
-# All fields have sensible defaults; this file shows every option.
-# CLI flags (--data-dir, --bind, --port, --allow-insecure-bind) override these.
+# Example AuraDB server configuration: a balanced default that documents every
+# option. CLI flags (--data-dir, --bind, --port, --allow-insecure-bind) override
+# these values.
+#
+# For ready-to-use starting points see:
+#   examples/auradb.local.toml   - local development (loopback, no auth/TLS)
+#   examples/auradb.secure.toml  - secure deployment (auth + TLS enabled)
+#
+# As written, this file binds loopback with auth and TLS disabled, which is
+# appropriate for local development. Before exposing AuraDB on a non-loopback
+# interface, enable [auth] and [tls]; a public bind with auth disabled is
+# rejected at startup unless allow_insecure_bind is set (development only).
 
 # Network bind address and port.
 bind = "127.0.0.1"

@@ -1,0 +1,56 @@
+# Benchmarks
+
+AuraDB ships two complementary benchmark paths:
+
+1. **Criterion microbenchmarks** under `crates/*/benches`, run with `cargo bench`.
+2. **A baseline snapshot runner** in the CLI, run with `auradb bench`, which
+   measures a representative set of engine operations and emits a JSON report.
+
+Benchmarks are **hardware-dependent**. They exist to catch regressions between
+revisions on the same machine. They are not universal performance claims, and a
+result from one machine is not comparable to a result from another.
+
+## Baseline snapshots
+
+```bash
+# Text summary.
+cargo run -p auradb-cli -- bench --records 10000
+
+# JSON report written to a baseline file.
+cargo run -p auradb-cli -- bench --json --output benches/baseline/v0.2.1.json
+```
+
+The report includes the AuraDB version, the record count, the exact command, the
+source commit (when git is available), machine information (OS, architecture,
+logical CPUs), and one measurement per category. Every value is measured live.
+
+### Categories
+
+| Category | Unit | What it measures |
+| --- | --- | --- |
+| `storage_append` | ops/sec | Inserting records into the append-only log |
+| `point_lookup` | ops/sec | Primary-key equality lookup |
+| `secondary_index_lookup` | ops/sec | Equality lookup on a secondary index |
+| `document_path_index_lookup` | ops/sec | Equality lookup on a document-path index |
+| `full_text_lookup` | ops/sec | `contains_text` token match |
+| `vector_exact_nearest` | ops/sec | Exact k-nearest-neighbour vector search |
+| `cursor_paging` | ops/sec | Paging through a collection with limit/offset |
+| `frame_encode_decode` | ns/op | Aura Wire Protocol frame round trip |
+| `dump_restore` | seconds | Full dump and restore round trip |
+
+The runner opens the engine with `sync_on_commit = false` so it measures engine
+work rather than fsync latency.
+
+## Comparing runs
+
+To check for a regression, take a new snapshot on the same machine and compare it
+to the committed baseline for the previous version. Treat large relative changes
+in `ops/sec` (down) or `ns/op` (up) as a regression to investigate. Because the
+numbers are machine-specific, always compare snapshots taken on the same host.
+
+## CI
+
+CI compiles all benchmarks (`cargo bench --workspace --benches --no-run`) so a
+benchmark that fails to build is caught, without spending CI time on full
+measured runs. The committed baseline under `benches/baseline/` is updated
+deliberately as part of a release.

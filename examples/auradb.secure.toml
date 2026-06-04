@@ -1,0 +1,53 @@
+# AuraDB secure deployment configuration template.
+#
+# Authentication and TLS are enabled. Copy this file to the target host, replace
+# the token hash and certificate paths, and validate it with:
+#
+#   auradb config validate --config auradb.secure.toml --no-file-checks
+#
+# (--no-file-checks validates structure without requiring the certificate files
+# to exist on the machine running the check. Drop it once the files are in place
+# on the server.)
+
+# Bind a routable interface. The container or host firewall controls exposure.
+bind = "0.0.0.0"
+port = 7171
+
+data_dir = "/var/lib/auradb"
+
+# Conservative payload and cursor limits.
+max_payload_bytes = 16777216
+cursor_timeout_secs = 120
+page_size = 100
+
+# Durability on; structured logs for aggregation.
+sync_on_commit = true
+log_level = "info"
+log_json = true
+metrics_enabled = true
+
+# allow_insecure_bind is intentionally absent: with auth enabled it is not
+# needed, and it must never be set on a public deployment.
+
+[tls]
+# Server-terminated TLS. Replace these paths with the deployed certificate and
+# private key. Missing or invalid material fails startup (it never serves
+# plaintext).
+enabled = true
+cert_path = "/etc/auradb/certs/server.crt"
+key_path = "/etc/auradb/certs/server.key"
+# Optional mutual TLS: require clients to present a certificate trusted by this
+# CA bundle.
+# client_ca_path = "/etc/auradb/certs/ca.crt"
+# require_client_cert = true
+
+[auth]
+# Enforced static-token authentication. Generate the hash with
+#   auradb auth hash-token
+# and never commit the plaintext token. The value below is a placeholder hash
+# (the token is "change-me"); rotate it before deploying with
+#   auradb auth rotate-token --config auradb.secure.toml
+enabled = true
+mode = "static-token"
+token_hash = "$argon2id$v=19$m=19456,t=2,p=1$Ln1pCYCd60hrJoRiT3Epaw$Zvf1tpQuLtErCDhibSlNjUVwDfTYu6n25ZvWa8q/KhE"
+token_hash_algorithm = "argon2id"

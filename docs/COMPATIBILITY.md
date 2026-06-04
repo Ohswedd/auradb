@@ -1,24 +1,26 @@
 # AuraDB Compatibility Matrix
 
-This document records what AuraDB v0.2.0 implements and how it interoperates with
-the Aura Connector client library and the Aura Wire Protocol (AWP).
+This document records what AuraDB v0.2.1 implements and how it interoperates with
+the Aura Connector client library and the Aura Wire Protocol (AWP). v0.2.1 is an
+operational-polish release that preserves all v0.2.0 wire and feature behavior.
 
 | AuraDB | Aura Connector | Protocol | Status |
 | ------ | -------------- | -------- | ------ |
+| 0.2.1  | 0.3.x          | AWP 1    | Supported (native AuraDB backend) |
 | 0.2.0  | 0.3.x          | AWP 1    | Supported (native AuraDB backend) |
-| 0.2.0  | 0.2.x          | n/a      | Not wire compatible (see note below) |
+| 0.2.x  | 0.2.x          | n/a      | Not wire compatible (see note below) |
 | 0.1.0  | 0.3.x          | AWP 1    | Basic compatible (no auth, no TLS, no document-path/full-text indexes) |
 
 **Note on Aura Connector 0.2.x:** the 0.2.x connector release ships a different
 internal framing for its in-process reference backend and cannot complete a
 handshake with the AuraDB network server. The coordinated **Aura Connector
 0.3.0** adds a native AuraDB-over-TCP backend that speaks AWP 1 (including auth
-and TLS). Use Aura Connector 0.3.x to connect to an AuraDB 0.2.0 server. See
+and TLS). Use Aura Connector 0.3.x to connect to an AuraDB 0.2.x server. See
 [AURA_CONNECTOR_COMPATIBILITY.md](AURA_CONNECTOR_COMPATIBILITY.md).
 
 ## Versions
 
-- **AuraDB:** 0.2.0
+- **AuraDB:** 0.2.1
 - **Aura Wire Protocol:** AWP 1 (44-byte framed header, CRC32-checked, JSON
   payloads). See [PROTOCOL.md](PROTOCOL.md).
 - **Aura Connector (tested):** 0.3.x
@@ -98,8 +100,10 @@ and TLS). Use Aura Connector 0.3.x to connect to an AuraDB 0.2.0 server. See
 
 ## Verification
 
-- **Test date:** 2026-06-04
-- **CI workflows:** `ci.yml` (build, fmt, clippy, test), `conformance.yml`
-  (Python AWP conformance: auth disabled, auth enabled, and TLS),
-  `security.yml` (cargo audit and deny), `docker.yml`, `release.yml`.
+- **Test date:** 2026-06-05
+- **CI workflows:** `ci.yml` (build, fmt, clippy, test, benchmark compilation),
+  `conformance.yml` (Python AWP conformance: auth disabled, auth enabled, and
+  TLS, plus the Aura Connector smoke and conformance suites), `security.yml`
+  (cargo audit and deny), `docker.yml`, `release.yml`.
 - **Conformance harness:** `tests/conformance/python/run_conformance.py`.
+- **Connector smoke:** `tests/conformance/python/run_connector_smoke.py`.

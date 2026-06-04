@@ -34,6 +34,23 @@ The `Health` opcode returns a `HealthReport { status, ready, version,
 collections }`. The CLI `status` command uses it. Readiness is true once the
 engine has opened successfully.
 
+### JSON output
+
+- `auradb status --json` connects to a running server and emits the address,
+  reachability, status, readiness, server version, protocol version, collection
+  count, and whether TLS was used.
+- `auradb doctor --json` inspects a local data directory and emits the version,
+  protocol version, data directory, storage/catalog/index status, the index load
+  report (loaded versus rebuilt), the consistency result, and a redacted security
+  summary (bind, public-bind flag, auth status, TLS status, mutual-TLS and
+  insecure-bind flags).
+
+Both redact secrets: the token hash and certificate or key material are never
+included. The `status` JSON carries the fields the health frame exposes plus the
+client-known protocol version; richer server-runtime counters (active
+connections, transactions, and cursors) are available through the metrics
+registry above.
+
 ## Roadmap
 
 OpenTelemetry export and per-query-fingerprint metrics are future work; the

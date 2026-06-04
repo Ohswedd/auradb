@@ -4,7 +4,7 @@
 [![Security](https://github.com/Ohswedd/auradb/actions/workflows/security.yml/badge.svg)](https://github.com/Ohswedd/auradb/actions/workflows/security.yml)
 [![Rust](https://img.shields.io/badge/rust-1.85%2B-orange.svg)](https://www.rust-lang.org)
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
-[![Release](https://img.shields.io/badge/release-v0.2.0-green.svg)](CHANGELOG.md)
+[![Release](https://img.shields.io/badge/release-v0.2.1-green.svg)](CHANGELOG.md)
 
 AuraDB is a single-node, Rust-native database server for the Aura ecosystem. It
 speaks the Aura Wire Protocol, persists data locally, and provides typed schema,
@@ -19,8 +19,11 @@ demo.
 
 ## Scope and honesty
 
-AuraDB 0.2.0 is a single-node developer release focused on security, durability
-hardening, and public usability. It is a complete single-node server, and it is
+AuraDB 0.2.1 is an operational-polish release on top of the 0.2.0 single-node
+release: it adds a secure Docker Compose example, production configuration
+templates, token rotation, backup/restore, v0.1.0 upgrade and chaos-restart test
+coverage, a connector compatibility smoke, and a benchmark baseline, while
+preserving all 0.2.0 behavior. It is a complete single-node server, and it is
 honest about its boundaries. The following are not implemented and not claimed:
 distributed clustering, replication, sharding, failover, multi-region, and Raft;
 approximate (ANN/HNSW) vector indexes; BM25 full-text and hybrid fusion ranking;
@@ -52,7 +55,7 @@ Connector 0.3.x ships a native AuraDB-over-TCP backend that speaks AWP 1
 [`docs/AURA_CONNECTOR_COMPATIBILITY.md`](docs/AURA_CONNECTOR_COMPATIBILITY.md)
 and [`docs/COMPATIBILITY.md`](docs/COMPATIBILITY.md).
 
-## What works in 0.2.0
+## What works in 0.2.1
 
 - **Persistent storage.** Append-only checksummed segment log, manifest, crash
   recovery, corruption detection, and compaction.
@@ -74,11 +77,18 @@ and [`docs/COMPATIBILITY.md`](docs/COMPATIBILITY.md).
   `contains_text` matching and term-frequency ranking (not BM25). See
   [`docs/FULL_TEXT.md`](docs/FULL_TEXT.md).
 - **Security.** Enforced static-token authentication (Argon2id-hashed) and
-  server-terminated TLS with optional mutual TLS (rustls), both fail-closed. See
+  server-terminated TLS with optional mutual TLS (rustls), both fail-closed. In
+  place token rotation with `auradb auth rotate-token`. See
   [`docs/SECURITY.md`](docs/SECURITY.md).
+- **Deployment.** A secure Docker Compose example (auth and TLS enabled, non-root,
+  no committed secret) and production configuration templates. See
+  [`docs/DEPLOYMENT.md`](docs/DEPLOYMENT.md).
 - **Operations.** Migration impact estimation, server-side cursors,
-  observability (metrics and tracing), a full CLI, a published Docker image,
-  prebuilt binary release artifacts, and CI.
+  observability (metrics and tracing, plus `--json` health output for `status`
+  and `doctor`), backup and restore, verified upgrade from a v0.1.0 data
+  directory, a full CLI, a published Docker image, prebuilt binary release
+  artifacts, a benchmark baseline ([`docs/BENCHMARKS.md`](docs/BENCHMARKS.md)),
+  and CI.
 
 ## What is intentionally not claimed yet
 
@@ -175,8 +185,8 @@ ships a native AuraDB-over-TCP backend that speaks AWP 1, including auth and TLS
 Point it at the server address:
 
 ```bash
-python -m pip install "aura-connector>=0.3.0"
-python tests/conformance/python/run_conformance.py --addr 127.0.0.1:7171 \
+python -m pip install "aura-connector>=0.3,<0.4"
+python tests/conformance/python/run_connector_smoke.py --addr 127.0.0.1:7171 \
   --auth-token "your-secret" --tls-ca .local/certs/ca.crt
 ```
 
@@ -192,12 +202,16 @@ client in automated tests and exercises the same scenarios over the wire.
 ```bash
 auradb version
 auradb init --data-dir .local/auradb
-auradb doctor --data-dir .local/auradb
+auradb doctor --data-dir .local/auradb --json
 auradb check --data-dir .local/auradb
-auradb bench --data-dir .local/auradb
-auradb status --addr 127.0.0.1:7171
+auradb bench --json --output benches/baseline/v0.2.1.json
+auradb status --addr 127.0.0.1:7171 --json
 auradb auth hash-token --token "your-secret"
+auradb auth rotate-token --config AuraDB.toml --token "new-secret" --backup
 auradb cert generate-dev --out-dir .local/certs
+auradb config validate --config examples/auradb.secure.toml --no-file-checks
+auradb dump --data-dir .local/auradb --output backup.jsonl
+auradb restore --data-dir .local/restored --input backup.jsonl
 auradb index check --data-dir .local/auradb
 ```
 
@@ -206,16 +220,17 @@ auradb index check --data-dir .local/auradb
 | `auradb version` | Print the version |
 | `auradb init` | Create a data directory and config file |
 | `auradb server` | Start the server (`--allow-insecure-bind` to permit a public bind without auth) |
-| `auradb doctor` | Validate config and data directory; print a redacted security summary |
-| `auradb status` | Ping a running server and report health (`--token`, `--tls-ca`, `--tls-server-name`) |
+| `auradb doctor` | Validate config and data directory; print a redacted security summary (`--json`) |
+| `auradb status` | Ping a running server and report health (`--token`, `--tls-ca`, `--tls-server-name`, `--json`) |
 | `auradb check` | Verify on-disk index consistency |
 | `auradb compact` | Compact the storage log and write fresh index snapshots |
-| `auradb dump` | Export schemas and records to JSONL |
-| `auradb restore` | Restore from a JSONL dump |
-| `auradb bench` | Run a local insert/read/vector benchmark |
+| `auradb dump` | Export schemas and records to JSONL (`--output`) |
+| `auradb restore` | Restore from a JSONL dump (`--input`) |
+| `auradb bench` | Run the local benchmark suite (`--json`, `--output`) |
 | `auradb auth hash-token` | Generate an Argon2id token hash for the config |
+| `auradb auth rotate-token` | Rotate the static token in a config file (`--backup`) |
 | `auradb cert generate-dev` | Generate development-only TLS certificates |
-| `auradb config validate` | Validate a config file (fails on invalid or unsafe config) |
+| `auradb config validate` | Validate a config file (`--no-file-checks` for templates) |
 | `auradb compatibility` | Print version, AWP version, capabilities, and tested connector version |
 | `auradb index check` | Report how indexes loaded and verify consistency |
 | `auradb index rebuild` | Rebuild indexes from storage and persist fresh snapshots |
@@ -249,8 +264,8 @@ write set, then commit by acquiring the engine write lock, performing optimistic
 write-write conflict detection against the versions read at transaction start,
 and appending a commit batch atomically with the commit marker written last.
 Rollback discards the write set. Reads issued with a transaction execute against
-the transaction view — committed state overlaid with that transaction's own
-staged writes and deletes — so a transaction sees its uncommitted inserts and
+the transaction view (committed state overlaid with that transaction's own
+staged writes and deletes), so a transaction sees its uncommitted inserts and
 updates and not its deletes (read-your-writes), uniformly across find, filter,
 count, exists, explain, vector, document-path, full-text, relationship include,
 and cursor paging. The isolation model is read-your-writes over committed state
@@ -283,19 +298,37 @@ are exposed. No external collector is required to run the server. See
 A published image is available on the GitHub Container Registry:
 
 ```bash
-docker run --rm -p 7171:7171 -v auradb-data:/data ghcr.io/ohswedd/auradb:0.2.0
+docker run --rm -p 7171:7171 -v auradb-data:/data ghcr.io/ohswedd/auradb:0.2.1
 ```
 
 The image runs as a non-root user, exposes `7171`, stores data in the `/data`
-volume, and ships a `HEALTHCHECK` that calls `auradb status`. To enable TLS,
-mount your certificates into the container and reference them in the config.
+volume, and ships a `HEALTHCHECK` that calls `auradb status`. This base image is
+for development; it binds all interfaces with `--allow-insecure-bind`.
+
+For a deployment, use `docker-compose.secure.yml`, which enables authentication
+and TLS, runs as a non-root user with a read-only root filesystem, mounts a
+config and a certificate directory, and injects the token hash from the
+environment so no secret is committed. See [`docs/DEPLOYMENT.md`](docs/DEPLOYMENT.md).
 
 ```bash
-# Or use docker compose, or build the image locally.
+# Development image (build locally or pull from GHCR).
 docker compose up --build
 docker build -t auradb:local .
 docker run --rm auradb:local auradb version
+
+# Validate the secure deployment compose file.
+docker compose -f docker-compose.secure.yml config
 ```
+
+## Upgrading
+
+The on-disk storage format is unchanged across v0.1.0, v0.2.0, and v0.2.1, so
+upgrading is a drop-in binary replacement. When v0.2.1 opens an older data
+directory it validates the manifest (rejecting an unknown future format rather
+than opening it), loads the catalog and records, and rebuilds indexes from
+storage when no valid snapshot is present. This is covered by a test against a
+committed v0.1.0 fixture. Take a backup with `auradb dump` first. See
+[`docs/UPGRADING.md`](docs/UPGRADING.md).
 
 ## Testing
 
@@ -303,21 +336,28 @@ docker run --rm auradb:local auradb version
 cargo test --workspace --all-features
 ```
 
-Tests span unit, integration (a real server over TCP), deterministic seeded
-recovery and corruption tests (restart, torn-tail truncation, byte-flip
-detection, catalog and index repair), and conformance. See
+Tests span unit, integration (a real server over TCP), backup/restore, upgrade
+from a v0.1.0 data directory, deterministic chaos restart under write load,
+deterministic seeded recovery and corruption tests (restart, torn-tail
+truncation, byte-flip detection, catalog and index repair), and conformance. See
 [`docs/TESTING.md`](docs/TESTING.md).
 
 ## Benchmarks
 
-Criterion benchmarks measure real code with no fabricated numbers:
+Benchmarks measure real code with no fabricated numbers. Criterion
+microbenchmarks run with `cargo bench --workspace` and cover frame encode and
+decode, storage writes and reads, indexed versus full-scan queries, exact vector
+search, and cursor paging.
+
+The CLI also runs a baseline suite and writes a JSON snapshot:
 
 ```bash
-cargo bench --workspace
+auradb bench --json --output benches/baseline/v0.2.1.json
 ```
 
-Targets cover frame encode and decode, storage writes and reads, indexed versus
-full-scan queries, exact vector search, and cursor paging.
+Benchmarks are hardware-dependent and exist to catch regressions on the same
+machine, not as universal claims. See [`docs/BENCHMARKS.md`](docs/BENCHMARKS.md)
+and the committed baseline under `benches/baseline/`.
 
 ## Security model and current limits
 

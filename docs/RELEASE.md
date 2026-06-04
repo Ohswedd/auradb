@@ -1,7 +1,7 @@
 # Release guide
 
 This guide describes how a maintainer cuts an AuraDB release. The current release
-is `0.2.0`.
+is `0.2.1`.
 
 ## Pre-release checklist
 
@@ -9,6 +9,10 @@ is `0.2.0`.
 - [ ] Workspace version in `Cargo.toml` is bumped.
 - [ ] Documentation reflects any new or changed behavior.
 - [ ] All limitations are stated honestly; nothing unimplemented is claimed.
+- [ ] The backup/restore, v0.1.0 upgrade, and chaos restart tests pass.
+- [ ] The benchmark baseline under `benches/baseline/` is refreshed on the
+      release machine with
+      `auradb bench --json --output benches/baseline/<version>.json`.
 
 ## Validation
 
@@ -21,15 +25,39 @@ cargo test --workspace --all-features
 cargo build --workspace --all-features --release
 ```
 
-CI must be green on the target branch: `ci.yml` (fmt, clippy, test, build),
+Also validate the official client and the secure deployment locally before
+tagging, using a virtual environment under an ignored path:
+
+```bash
+python3 -m venv .local/connector-venv && . .local/connector-venv/bin/activate
+python -m pip install "aura-connector>=0.3,<0.4"
+# Start a server (plaintext, then auth, then TLS plus auth) and run:
+python tests/conformance/python/run_connector_smoke.py --addr 127.0.0.1:7171
+# ...repeating with --auth-token and --tls-ca as appropriate.
+
+# Secure Compose runtime, with development certs and a generated token hash:
+auradb cert generate-dev --out-dir ./examples/production/certs
+export AURADB_AUTH_TOKEN_HASH="$(auradb auth hash-token --token 'a-strong-token')"
+docker compose -f docker-compose.secure.yml up -d   # expect a healthy container
+docker compose -f docker-compose.secure.yml down -v
+```
+
+For the v0.2.1 release these were validated locally with `aura-connector` 0.3.0:
+the connector smoke passed in plaintext, auth, and TLS-plus-auth modes, the full
+connector conformance passed over TLS plus auth, and the secure Compose container
+reached a healthy state over TLS with authentication with no secret in its logs.
+
+CI must be green on the target branch: `ci.yml` (fmt, clippy, test including the
+backup/restore, upgrade, and chaos tests, build, and benchmark compilation),
 `security.yml` (cargo audit and deny), `conformance.yml` (Python AWP conformance
-for auth disabled, auth enabled, and TLS), and `docker.yml` (build and smoke).
+for auth disabled, auth enabled, and TLS, plus the Aura Connector smoke and
+conformance suites), and `docker.yml` (build and smoke).
 
 ## Docker
 
 `docker.yml` builds and smoke-tests the image on every push and, on a version
 tag, publishes it to the GitHub Container Registry at `ghcr.io/ohswedd/auradb`.
-The image is a multi-stage build (a `rust:1.85-slim` build stage that installs
+The image is a multi-stage build (a `rust:1.90-slim-bookworm` build stage that installs
 `build-essential` for the TLS stack, and a `debian:bookworm-slim` runtime),
 runs as a non-root user (uid 10001), exposes `7171`, defaults its command to
 `auradb server`, stores data in the `/data` volume, and ships a `HEALTHCHECK`
@@ -61,8 +89,8 @@ GitHub release.
 ## Tag and GitHub release
 
 ```bash
-git tag v0.2.0
-git push origin v0.2.0
+git tag v0.2.1
+git push origin v0.2.1
 ```
 
 Pushing the tag triggers `release.yml` (binaries and `SHA256SUMS`) and the

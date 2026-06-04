@@ -49,16 +49,36 @@ python tests/conformance/python/run_conformance.py --addr 127.0.0.1:7171 \
   --auth-token "your-secret" --tls-ca .local/certs/ca.crt
 ```
 
+## Official-client harnesses
+
+Two Python harnesses drive a running server through the published Aura Connector
+and its native AuraDB backend:
+
+- `tests/conformance/python/run_connector_smoke.py` - a minimal, fast scenario
+  (connect, ping, auth, TLS, schema, insert, find, stream, read-your-writes
+  transaction, vector nearest, full-text, document path, close).
+- `tests/conformance/python/run_connector_conformance.py` - the full scenario
+  suite.
+
+Both accept `--auth-token`, `--tls-ca`, and `--tls-server-name`.
+
 ## CI
 
-The `conformance.yml` workflow runs the Python harness against a live server in
-three configurations: auth disabled, auth enabled (including a check that
-unauthenticated requests are rejected), and TLS.
+The `conformance.yml` workflow runs the standard-library Python harness against a
+live server in three configurations (auth disabled, auth enabled with a rejection
+check, and TLS), and runs the connector smoke (auth disabled and auth plus TLS)
+and the full connector conformance against a freshly built server with the
+published connector installed.
 
 ## Status
 
-All Rust scenarios pass in CI via `cargo test`. The Python harness passes all
-scenarios against a locally running server.
+All Rust scenarios pass in CI via `cargo test`. The standard-library Python
+harness passes all scenarios against a locally running server. The connector
+harnesses were also validated locally with the published `aura-connector` 0.3.0
+(installed from PyPI within `aura-connector>=0.3,<0.4`): the smoke passed in
+plaintext, auth, and TLS-plus-auth modes (11/11 checks each) and the full
+connector conformance passed over TLS-plus-auth (16/16 scenarios), with no secret
+appearing in the server logs.
 
 ## Official client
 
