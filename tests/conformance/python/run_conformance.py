@@ -1,19 +1,21 @@
 #!/usr/bin/env python3
 """AuraDB conformance harness (Python).
 
-This is a real, runnable Aura Wire Protocol client implemented in pure Python
-(standard library only). It connects to a running AuraDB server and exercises
-every first-release capability, mirroring the Rust conformance suite.
+A real, runnable Aura Wire Protocol client implemented in pure Python (standard
+library only). It connects to a running AuraDB server and exercises every
+v0.2.0 capability over the wire, optionally authenticating with a static token
+and connecting over TLS.
 
 Usage:
     # Start a server first, e.g.:
     #   auradb server --data-dir .local/auradb --bind 127.0.0.1 --port 7171
     python run_conformance.py --addr 127.0.0.1:7171
+    python run_conformance.py --addr 127.0.0.1:7171 --auth-token dev-secret
+    python run_conformance.py --addr 127.0.0.1:7171 \
+        --tls-ca .local/certs/ca.crt --tls-server-name localhost --auth-token dev-secret
 
-When the official Aura Connector Python package is published, you may instead
-run the scenarios through it:
-    python -m pip install aura-connector
-    # then adapt the client below to `import aura_connector`.
+The published Aura Connector drives the same server through its native AuraDB
+backend (aura-connector >= 0.3.0); see docs/AURA_CONNECTOR_COMPATIBILITY.md.
 
 Exit code is 0 if all scenarios pass, 1 otherwise.
 """
@@ -21,6 +23,7 @@ Exit code is 0 if all scenarios pass, 1 otherwise.
 import argparse
 import json
 import socket
+import ssl
 import struct
 import sys
 import zlib
@@ -35,6 +38,7 @@ OP = {
     "Hello": 0x01,
     "Ping": 0x02,
     "Health": 0x03,
+    "Auth": 0x04,
     "SchemaCreate": 0x10,
     "SchemaGet": 0x12,
     "SchemaList": 0x13,
@@ -50,6 +54,7 @@ OP = {
     "HelloAck": 0x81,
     "Pong": 0x82,
     "HealthResult": 0x83,
+    "AuthResult": 0x84,
     "Ok": 0x90,
     "QueryResult": 0x91,
     "Error": 0xFF,
@@ -62,9 +67,15 @@ class AuraError(Exception):
 
 
 class Client:
-    def __init__(self, host, port):
-        self.sock = socket.create_connection((host, port))
+    def __init__(self, host, port, auth_token=None, tls_ca=None, server_name="localhost"):
+        raw = socket.create_connection((host, port))
+        if tls_ca:
+            ctx = ssl.create_default_context(cafile=tls_ca)
+            self.sock = ctx.wrap_socket(raw, server_hostname=server_name)
+        else:
+            self.sock = raw
         self.req_id = 0
+        self.auth_token = auth_token
         self.hello()
 
     def _encode(self, opcode, txn_id, payload):
@@ -114,7 +125,13 @@ class Client:
         return opcode, (json.loads(resp) if resp else None)
 
     def hello(self):
-        return self.call("Hello", {"client_version": "py", "protocol_version": 1})[1]
+        payload = {"client_version": "py", "protocol_version": 1}
+        if self.auth_token is not None:
+            payload["auth_token"] = self.auth_token
+        return self.call("Hello", payload)[1]
+
+    def authenticate(self, token):
+        return self.call("Auth", {"token": token})[1]
 
     def ping(self):
         op, _ = self.call("Ping", None)
@@ -132,20 +149,26 @@ class Client:
     def mutate(self, mutation, txn_id=0):
         return self.call("Mutate", mutation, txn_id=txn_id)[1]
 
-    def find_all(self, query):
-        op, page = self.call("Query", {"query": "find", **query})
+    def find_all(self, query, txn_id=0):
+        op, page = self.call("Query", {"query": "find", **query}, txn_id=txn_id)
         rows = page["rows"]
         while page.get("cursor_id") is not None:
-            op, page = self.call("CursorFetch", {"cursor_id": page["cursor_id"], "limit": 100})
+            op, page = self.call(
+                "CursorFetch", {"cursor_id": page["cursor_id"], "limit": 100}, txn_id=txn_id
+            )
             rows += page["rows"]
         return rows
 
-    def count(self, collection, flt=None):
-        _, v = self.call("Query", {"query": "count", "collection": collection, "filter": flt})
+    def count(self, collection, flt=None, txn_id=0):
+        _, v = self.call(
+            "Query", {"query": "count", "collection": collection, "filter": flt}, txn_id=txn_id
+        )
         return v["count"]
 
-    def exists(self, collection, flt=None):
-        _, v = self.call("Query", {"query": "exists", "collection": collection, "filter": flt})
+    def exists(self, collection, flt=None, txn_id=0):
+        _, v = self.call(
+            "Query", {"query": "exists", "collection": collection, "filter": flt}, txn_id=txn_id
+        )
         return v["exists"]
 
     def explain(self, query):
@@ -174,19 +197,28 @@ def vector_field(name, dim):
     return {"name": name, "field_type": {"kind": "vector", "dim": dim}}
 
 
-USER_SCHEMA = {"name": "User", "fields": [field("id", "uuid", primary_key=True, unique=True, nullable=False)], "relationships": []}
+USER_SCHEMA = {
+    "name": "User",
+    "fields": [field("id", "uuid", primary_key=True, unique=True, nullable=False)],
+    "relationships": [],
+}
 DOC_SCHEMA = {
     "name": "Doc",
     "fields": [
         field("id", "uuid", primary_key=True, unique=True, nullable=False),
         field("status", "string", indexed=True),
         field("title", "string"),
+        field("body", "string"),
         field("views", "int"),
         field("metadata", "document"),
         vector_field("embedding", 3),
     ],
     "relationships": [
         {"name": "owner", "target": "User", "cardinality": "to_one", "on_delete": "restrict"}
+    ],
+    "indexes": [
+        {"path": "metadata.source", "kind": "document_path"},
+        {"path": "body", "kind": "full_text"},
     ],
 }
 
@@ -196,6 +228,7 @@ def doc(id, status, views, emb):
         "id": id,
         "status": status,
         "title": f"Title {id}",
+        "body": f"alpha document number {id}",
         "views": views,
         "owner": "u1",
         "embedding": {"$vector": emb},
@@ -255,6 +288,26 @@ def document_field(c):
 
 
 @scenario
+def document_path_index(c):
+    flt = {"type": "compare", "field": "metadata.source", "op": "eq", "value": "import"}
+    plan = c.explain({"collection": "Doc", "filter": flt})
+    assert plan["used_index"] == "metadata.source", plan
+    assert plan["strategy"] == "index_lookup", plan
+    assert len(c.find_all({"collection": "Doc", "filter": flt})) == 3
+
+
+@scenario
+def full_text_search(c):
+    common = {"type": "contains_text", "field": "body", "query": "document"}
+    assert len(c.find_all({"collection": "Doc", "filter": common})) == 3
+    unique = {"type": "contains_text", "field": "body", "query": "d1"}
+    assert len(c.find_all({"collection": "Doc", "filter": unique})) == 1
+    plan = c.explain({"collection": "Doc", "filter": common})
+    assert plan["strategy"] == "full_text_scan", plan
+    assert plan["used_index"] == "body", plan
+
+
+@scenario
 def relationship_include(c):
     rows = c.find_all({"collection": "Doc", "includes": ["owner"], "limit": 1})
     assert rows and len(rows[0]["includes"]["owner"]) == 1
@@ -311,12 +364,35 @@ def transaction(c):
     assert not c.exists("Doc", {"type": "compare", "field": "id", "op": "eq", "value": "d5"})
 
 
+@scenario
+def transaction_scoped_reads(c):
+    id_eq = {"type": "compare", "field": "id", "op": "eq", "value": "d6"}
+    txn = c.begin()
+    c.mutate({"mutation": "insert", "collection": "Doc", "fields": doc("d6", "draft", 1, [0.0, 0.0, 1.0])}, txn_id=txn)
+    # Read-your-writes: visible to the transaction's own reads...
+    assert c.exists("Doc", id_eq, txn_id=txn), "staged write must be visible within the transaction"
+    assert len(c.find_all({"collection": "Doc", "filter": id_eq}, txn_id=txn)) == 1
+    # ...but not to a non-transactional read until commit.
+    assert not c.exists("Doc", id_eq), "staged write must be invisible to non-transactional reads"
+    c.commit(txn)
+    assert c.exists("Doc", id_eq), "committed write must be visible after commit"
+
+
 def main():
     parser = argparse.ArgumentParser(description="AuraDB Python conformance harness")
     parser.add_argument("--addr", default="127.0.0.1:7171")
+    parser.add_argument("--auth-token", default=None, help="static token for an auth-enabled server")
+    parser.add_argument("--tls-ca", default=None, help="PEM CA bundle to trust (enables TLS)")
+    parser.add_argument("--tls-server-name", default="localhost")
     args = parser.parse_args()
     host, port = args.addr.rsplit(":", 1)
-    client = Client(host, int(port))
+    client = Client(
+        host,
+        int(port),
+        auth_token=args.auth_token,
+        tls_ca=args.tls_ca,
+        server_name=args.tls_server_name,
+    )
 
     passed, failed = 0, 0
     for fn in SCENARIOS:

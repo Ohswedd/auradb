@@ -109,6 +109,95 @@ async fn concurrent_clients() {
     shutdown.notify_one();
 }
 
+async fn request<T: serde::Serialize>(
+    stream: &mut TcpStream,
+    opcode: Opcode,
+    txn_id: u64,
+    payload: &T,
+) -> Frame {
+    let req = Frame::json(opcode, RequestId(777), txn_id, payload).unwrap();
+    write_frame(stream, &req).await.unwrap();
+    read_frame(stream, DEFAULT_MAX_PAYLOAD)
+        .await
+        .unwrap()
+        .unwrap()
+}
+
+/// End-to-end proof that reads carrying a transaction id execute against the
+/// transaction view over the wire: a staged insert is visible to the
+/// transaction's own find but invisible to a concurrent non-transactional
+/// reader until commit.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn transactional_read_sees_staged_write_over_the_wire() {
+    use auradb::query::{FindQuery, Mutation, QueryResultPage, ReadRequest};
+    use auradb_core::{CollectionSchema, Document, FieldDef, FieldType, Value};
+
+    let dir = tempfile::tempdir().unwrap();
+    let (addr, shutdown) = start(dir.path()).await;
+    let mut stream = TcpStream::connect(&addr).await.unwrap();
+    let _ = hello(&mut stream).await;
+
+    // Create a minimal collection.
+    let schema = CollectionSchema::new("Doc").with_field(FieldDef {
+        name: "id".into(),
+        field_type: FieldType::Uuid,
+        primary_key: true,
+        unique: true,
+        nullable: false,
+        indexed: false,
+    });
+    let resp = request(&mut stream, Opcode::SchemaCreate, 0, &schema).await;
+    assert_eq!(resp.opcode, Opcode::Ok);
+
+    // Begin a transaction; the response txn id is echoed in the frame header.
+    let resp = request(&mut stream, Opcode::TxnBegin, 0, &serde_json::json!({})).await;
+    assert_eq!(resp.opcode, Opcode::Ok);
+    let txn_id = resp.txn_id;
+    assert_ne!(txn_id, 0);
+
+    // Stage an insert within the transaction.
+    let mut fields = Document::new();
+    fields.insert("id".into(), Value::Text("t1".into()));
+    let resp = request(
+        &mut stream,
+        Opcode::Mutate,
+        txn_id,
+        &Mutation::Insert {
+            collection: "Doc".into(),
+            fields,
+        },
+    )
+    .await;
+    assert_eq!(resp.opcode, Opcode::Ok);
+
+    // A find carrying the txn id sees the staged insert.
+    let find = ReadRequest::Find(FindQuery::new("Doc"));
+    let resp = request(&mut stream, Opcode::Query, txn_id, &find).await;
+    assert_eq!(resp.opcode, Opcode::QueryResult);
+    let page: QueryResultPage = resp.decode_json().unwrap();
+    assert_eq!(page.rows.len(), 1);
+
+    // A find with no txn id (txn_id == 0) does not.
+    let resp = request(&mut stream, Opcode::Query, 0, &find).await;
+    let page: QueryResultPage = resp.decode_json().unwrap();
+    assert_eq!(page.rows.len(), 0);
+
+    // After commit the write is visible non-transactionally.
+    let resp = request(
+        &mut stream,
+        Opcode::TxnCommit,
+        txn_id,
+        &serde_json::json!({}),
+    )
+    .await;
+    assert_eq!(resp.opcode, Opcode::Ok);
+    let resp = request(&mut stream, Opcode::Query, 0, &find).await;
+    let page: QueryResultPage = resp.decode_json().unwrap();
+    assert_eq!(page.rows.len(), 1);
+
+    shutdown.notify_one();
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn oversized_payload_rejected_by_server() {
     let dir = tempfile::tempdir().unwrap();

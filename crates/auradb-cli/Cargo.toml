@@ -15,6 +15,7 @@ bench = false
 
 [dependencies]
 auradb-core = { workspace = true }
+auradb-protocol = { workspace = true }
 auradb = { workspace = true }
 auradb-server = { workspace = true }
 auradb-observability = { workspace = true }
@@ -24,6 +25,9 @@ tokio = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 anyhow = { workspace = true }
+rcgen = { workspace = true }
+rustls-pemfile = { workspace = true }
+rpassword = { workspace = true }
 
 [dev-dependencies]
 tempfile = { workspace = true }

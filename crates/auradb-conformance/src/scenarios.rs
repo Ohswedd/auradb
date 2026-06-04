@@ -473,5 +473,52 @@ pub async fn run_all(addr: &str) -> Result<ConformanceReport> {
         .await,
     );
 
+    report.record(
+        "transaction_scoped_reads",
+        async {
+            let id_eq = |id: &str| ExistsQuery {
+                collection: "Doc".into(),
+                filter: Some(Filter::Compare {
+                    field: "id".into(),
+                    op: CompareOp::Eq,
+                    value: Value::Text(id.into()),
+                }),
+            };
+            let txn = client.begin().await?;
+            client
+                .mutate(
+                    txn,
+                    &Mutation::Insert {
+                        collection: "Doc".into(),
+                        fields: doc("d6", "draft", 1, vec![0.0, 0.0, 1.0]),
+                    },
+                )
+                .await?;
+
+            // Read-your-writes: the transaction sees its staged insert.
+            let in_txn = client.exists_in_txn(txn, &id_eq("d6")).await?;
+            // Isolation: a non-transactional read does not, before commit.
+            let out_txn = client.exists(&id_eq("d6")).await?;
+            // The transaction's find also returns the staged row.
+            let mut q = FindQuery::new("Doc");
+            q.filter = Some(Filter::Compare {
+                field: "id".into(),
+                op: CompareOp::Eq,
+                value: Value::Text("d6".into()),
+            });
+            let txn_rows = client.find_all_in_txn(txn, &q).await?;
+
+            client.commit(txn).await?;
+            let after_commit = client.exists(&id_eq("d6")).await?;
+
+            check(
+                in_txn && !out_txn && txn_rows.len() == 1 && after_commit,
+                "transaction-scoped read sees staged write before commit; \
+                 non-transactional read does not until commit",
+            )
+        }
+        .await,
+    );
+
     Ok(report)
 }

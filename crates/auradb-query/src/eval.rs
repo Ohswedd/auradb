@@ -25,6 +25,22 @@ pub fn matches(record: &Record, filter: &Filter) -> bool {
             Some(actual) => compare(actual, *op, value),
             None => false,
         },
+        Filter::ContainsText { field, query } => {
+            match record.get_path(field).and_then(Value::as_text) {
+                Some(text) => {
+                    let mut terms = auradb_index::tokenize(query);
+                    terms.sort();
+                    terms.dedup();
+                    if terms.is_empty() {
+                        return false;
+                    }
+                    let doc: std::collections::HashSet<String> =
+                        auradb_index::tokenize(text).into_iter().collect();
+                    terms.iter().all(|t| doc.contains(t))
+                }
+                None => false,
+            }
+        }
     }
 }
 

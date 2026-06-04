@@ -20,7 +20,7 @@ pub use frame::{
     PROTOCOL_VERSION,
 };
 pub use message::{
-    CursorCloseRequest, CursorFetchRequest, ErrorPayload, HealthReport, HealthStatus, HelloAck,
-    HelloRequest,
+    AuthRequest, AuthResult, CursorCloseRequest, CursorFetchRequest, ErrorPayload, HealthReport,
+    HealthStatus, HelloAck, HelloRequest,
 };
 pub use opcode::Opcode;

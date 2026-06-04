@@ -34,7 +34,7 @@
 mod engine;
 mod idgen;
 
-pub use engine::{Engine, EngineOptions, EngineStats};
+pub use engine::{Engine, EngineOptions, EngineStats, IndexLoadReport};
 
 /// Re-export of core types.
 pub mod core {

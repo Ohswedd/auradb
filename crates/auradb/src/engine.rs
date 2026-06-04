@@ -1,8 +1,8 @@
 //! The AuraDB engine: storage, indexes, transactions, and query execution
 //! composed behind a single synchronous, thread-safe API.
 
-use std::collections::{HashMap, HashSet};
-use std::path::Path;
+use std::collections::{BTreeMap, HashMap, HashSet};
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, MutexGuard};
 
 use auradb_core::{
@@ -38,10 +38,22 @@ pub struct EngineStats {
     pub schema_version: u64,
 }
 
+/// How collection indexes were initialized when the engine opened.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct IndexLoadReport {
+    /// Collections whose indexes were loaded from a valid persisted snapshot.
+    pub loaded: usize,
+    /// Collections whose indexes were rebuilt from storage (snapshot absent,
+    /// stale, corrupt, or schema-incompatible).
+    pub rebuilt: usize,
+}
+
 struct Inner {
     storage: Storage,
     indexes: HashMap<String, CollectionIndexes>,
     clock: LogicalClock,
+    index_dir: PathBuf,
+    load_report: IndexLoadReport,
 }
 
 /// The embeddable AuraDB engine. Cheap to clone (shares one locked core).
@@ -73,6 +85,82 @@ impl DataSource for Inner {
     }
 }
 
+/// Iterate a collection's records *as seen within a transaction*: committed
+/// records overlaid with the transaction's staged puts, with staged deletes and
+/// put-shadowed committed records removed. This is the primitive that gives
+/// transactional reads read-your-writes semantics.
+fn overlay_scan<'a>(
+    inner: &'a Inner,
+    txn: &'a Transaction,
+    collection: &str,
+) -> impl Iterator<Item = &'a Record> + 'a {
+    let cid = CollectionId::new(collection.to_string());
+    let scan_cid = cid.clone();
+    // Committed records, minus any the transaction has staged (a staged put
+    // shadows the committed version; a staged delete removes it).
+    let committed = inner
+        .storage
+        .scan(&scan_cid)
+        .filter(move |r| txn.staged(&Key::new(scan_cid.clone(), r.id)).is_none());
+    // The transaction's staged puts for this collection.
+    let staged = txn.staged_ops().filter_map(move |(_key, op)| match op {
+        StagedOp::Put(record) if record.collection == cid => Some(record),
+        StagedOp::Put(_) | StagedOp::Delete => None,
+    });
+    committed.chain(staged)
+}
+
+/// A read-only view of the engine's data *through a transaction*: committed
+/// state overlaid with that transaction's staged writes and deletes.
+///
+/// The view owns a freshly-built overlay [`CollectionIndexes`] for the queried
+/// collection so that index-seeded candidate selection (equality lookup, vector
+/// nearest, full-text) reflects staged writes. Correctness comes before
+/// performance: the overlay index is rebuilt per query (see `docs/TRANSACTIONS.md`).
+struct TxnView<'a> {
+    inner: &'a Inner,
+    txn: &'a Transaction,
+    /// Overlay indexes keyed by collection, built over the transaction view so
+    /// candidate selection is consistent with [`TxnView::scan`]/[`TxnView::get`].
+    overlay: HashMap<String, CollectionIndexes>,
+}
+
+impl DataSource for TxnView<'_> {
+    fn schema(&self, collection: &str) -> Option<&CollectionSchema> {
+        self.inner.storage.get_schema(collection)
+    }
+
+    fn indexes(&self, collection: &str) -> Option<&CollectionIndexes> {
+        // Prefer the transaction-overlay index when one was built for this
+        // collection; otherwise the committed index is identical to the view
+        // (no staged ops affect it) and is safe to reuse.
+        self.overlay
+            .get(collection)
+            .or_else(|| self.inner.indexes.get(collection))
+    }
+
+    fn scan<'b>(&'b self, collection: &str) -> Box<dyn Iterator<Item = &'b Record> + 'b> {
+        Box::new(overlay_scan(self.inner, self.txn, collection))
+    }
+
+    fn get(&self, collection: &str, id: RecordId) -> Option<&Record> {
+        let key = Key::new(CollectionId::new(collection.to_string()), id);
+        match self.txn.staged(&key) {
+            Some(StagedOp::Put(record)) => Some(record),
+            Some(StagedOp::Delete) => None,
+            None => self
+                .inner
+                .storage
+                .get(&CollectionId::new(collection.to_string()), id),
+        }
+    }
+
+    fn resolve_link(&self, target: &str, key: &Value) -> Option<&Record> {
+        let id = crate::idgen::derive_id(target, key);
+        self.get(target, id)
+    }
+}
+
 impl Engine {
     /// Open (creating if necessary) the database at `dir` with default options.
     pub fn open(dir: impl AsRef<Path>) -> Result<Engine> {
@@ -81,14 +169,40 @@ impl Engine {
 
     /// Open (creating if necessary) the database at `dir`.
     pub fn open_with(dir: impl AsRef<Path>, options: EngineOptions) -> Result<Engine> {
-        let storage = Storage::open_with(dir, options.storage)?;
+        let dir = dir.as_ref().to_path_buf();
+        let storage = Storage::open_with(&dir, options.storage)?;
         let clock = LogicalClock::new(storage.max_txn_id() + 1);
+        let index_dir = dir.join("indexes");
 
-        // Build and populate indexes for every registered collection.
+        // For each collection, load a valid persisted index snapshot if one
+        // exists and matches the current storage state; otherwise rebuild from
+        // storage. Loading never returns incorrect results: a snapshot is used
+        // only when its content fingerprint and schema field shape both match.
+        let manifest = auradb_index::persist::load_manifest(&index_dir);
         let mut indexes = HashMap::new();
+        let mut load_report = IndexLoadReport::default();
         for schema in storage.list_schemas() {
-            let mut idx = CollectionIndexes::from_schema(schema);
-            idx.rebuild(storage.scan(&CollectionId::new(schema.name.clone())))?;
+            let cid = CollectionId::new(schema.name.clone());
+            let fingerprint = auradb_index::fingerprint(storage.scan(&cid));
+            let loaded = manifest
+                .as_ref()
+                .and_then(|m| m.files.get(&schema.name))
+                .map(|f| index_dir.join(f))
+                .and_then(|path| auradb_index::persist::read_snapshot(&path).ok())
+                .filter(|snap| snap.fingerprint == fingerprint)
+                .and_then(|snap| CollectionIndexes::from_snapshot(schema, snap).ok());
+            let idx = match loaded {
+                Some(idx) => {
+                    load_report.loaded += 1;
+                    idx
+                }
+                None => {
+                    let mut idx = CollectionIndexes::from_schema(schema);
+                    idx.rebuild(storage.scan(&cid))?;
+                    load_report.rebuilt += 1;
+                    idx
+                }
+            };
             indexes.insert(schema.name.clone(), idx);
         }
 
@@ -97,6 +211,8 @@ impl Engine {
                 storage,
                 indexes,
                 clock,
+                index_dir,
+                load_report,
             })),
         })
     }
@@ -253,6 +369,66 @@ impl Engine {
         }
     }
 
+    // ----- transaction-scoped reads -----
+    //
+    // Every read below executes against a [`TxnView`]: the committed state
+    // overlaid with the transaction's own staged writes and deletes. This gives
+    // read-your-writes (a transaction sees its staged inserts/updates and does
+    // not see its staged deletes) while leaving non-transactional reads, which
+    // never construct a `TxnView`, exactly as they were.
+
+    /// Plan a find within a transaction. Candidate selection (index lookup,
+    /// vector, full-text) runs against the transaction view, so staged writes
+    /// are visible and staged deletes are hidden.
+    pub fn txn_plan_find(&self, txn: &Transaction, q: &FindQuery) -> Result<query::PlannedFind> {
+        let inner = self.lock();
+        let view = inner.txn_view(txn, &q.collection)?;
+        query::execute_find(&view, q)
+    }
+
+    /// Materialize specific rows of a transactional find (used for cursor
+    /// paging within a transaction).
+    pub fn txn_materialize(
+        &self,
+        txn: &Transaction,
+        q: &FindQuery,
+        page: &[(RecordId, Option<f32>)],
+    ) -> Result<Vec<Row>> {
+        let inner = self.lock();
+        let view = inner.txn_view(txn, &q.collection)?;
+        query::materialize(&view, q, page)
+    }
+
+    /// Run a find to completion within a transaction, returning all matching
+    /// rows from the transaction view.
+    pub fn txn_find(&self, txn: &Transaction, q: &FindQuery) -> Result<Vec<Row>> {
+        let inner = self.lock();
+        let view = inner.txn_view(txn, &q.collection)?;
+        let planned = query::execute_find(&view, q)?;
+        query::materialize(&view, q, &planned.ordered)
+    }
+
+    /// Count matching records within a transaction.
+    pub fn txn_count(&self, txn: &Transaction, q: &CountQuery) -> Result<usize> {
+        let inner = self.lock();
+        let view = inner.txn_view(txn, &q.collection)?;
+        query::execute_count(&view, q)
+    }
+
+    /// Test whether any record matches within a transaction.
+    pub fn txn_exists(&self, txn: &Transaction, q: &ExistsQuery) -> Result<bool> {
+        let inner = self.lock();
+        let view = inner.txn_view(txn, &q.collection)?;
+        query::execute_exists(&view, q)
+    }
+
+    /// Produce an EXPLAIN plan for a find within a transaction.
+    pub fn txn_explain(&self, txn: &Transaction, q: &FindQuery) -> Result<ExplainPlan> {
+        let inner = self.lock();
+        let view = inner.txn_view(txn, &q.collection)?;
+        query::explain(&view, q)
+    }
+
     /// Commit a transaction atomically, with optimistic conflict detection.
     pub fn commit(&self, txn: Transaction) -> Result<()> {
         let mut inner = self.lock();
@@ -267,14 +443,57 @@ impl Engine {
 
     // ----- maintenance -----
 
-    /// Compact storage, preserving all live data.
+    /// Compact storage, preserving all live data, then refresh persisted index
+    /// snapshots so a subsequent open loads them directly.
     pub fn compact(&self) -> Result<auradb_storage::CompactionReport> {
-        self.lock().storage.compact()
+        let mut inner = self.lock();
+        let report = inner.storage.compact()?;
+        inner.persist_indexes()?;
+        Ok(report)
     }
 
     /// Flush storage durably.
     pub fn flush(&self) -> Result<()> {
         self.lock().storage.flush()
+    }
+
+    /// Flush storage and persist index snapshots: a durable checkpoint after
+    /// which a fresh open loads indexes from disk rather than rebuilding them.
+    pub fn checkpoint(&self) -> Result<()> {
+        let mut inner = self.lock();
+        inner.storage.flush()?;
+        inner.persist_indexes()
+    }
+
+    /// Persist index snapshots without flushing storage.
+    pub fn persist_indexes(&self) -> Result<()> {
+        self.lock().persist_indexes()
+    }
+
+    /// How indexes were initialized on open (loaded from disk vs rebuilt).
+    pub fn index_load_report(&self) -> IndexLoadReport {
+        self.lock().load_report.clone()
+    }
+
+    /// Rebuild every index from storage and persist fresh snapshots. Used by
+    /// `auradb index rebuild` and as a recovery path.
+    pub fn rebuild_indexes(&self) -> Result<IndexLoadReport> {
+        let mut inner = self.lock();
+        let schemas: Vec<CollectionSchema> =
+            inner.storage.list_schemas().into_iter().cloned().collect();
+        inner.indexes.clear();
+        for schema in &schemas {
+            let cid = CollectionId::new(schema.name.clone());
+            let mut idx = CollectionIndexes::from_schema(schema);
+            idx.rebuild(inner.storage.scan(&cid))?;
+            inner.indexes.insert(schema.name.clone(), idx);
+        }
+        inner.load_report = IndexLoadReport {
+            loaded: 0,
+            rebuilt: schemas.len(),
+        };
+        inner.persist_indexes()?;
+        Ok(inner.load_report.clone())
     }
 
     /// Verify that every index is consistent with stored records.
@@ -306,6 +525,45 @@ enum WriteMode {
 }
 
 impl Inner {
+    /// Write a persisted snapshot for every collection index plus an updated
+    /// manifest, and prune snapshot files for dropped collections.
+    fn persist_indexes(&self) -> Result<()> {
+        use auradb_index::persist;
+
+        std::fs::create_dir_all(&self.index_dir)?;
+        let schema_version = self.storage.schema_version();
+        let mut files = BTreeMap::new();
+        for (name, idx) in &self.indexes {
+            let cid = CollectionId::new(name.clone());
+            let fingerprint = auradb_index::fingerprint(self.storage.scan(&cid));
+            let snapshot = idx.snapshot(schema_version, fingerprint);
+            let file = persist::index_filename(name);
+            persist::write_snapshot(&self.index_dir.join(&file), &snapshot)?;
+            files.insert(name.clone(), file);
+        }
+
+        // Remove snapshot files for collections that no longer exist.
+        let keep: HashSet<String> = files.values().cloned().collect();
+        if let Ok(entries) = std::fs::read_dir(&self.index_dir) {
+            for entry in entries.flatten() {
+                let name = entry.file_name();
+                let name = name.to_string_lossy();
+                if name.ends_with(".idx") && !keep.contains(name.as_ref()) {
+                    let _ = std::fs::remove_file(entry.path());
+                }
+            }
+        }
+
+        persist::save_manifest(
+            &self.index_dir,
+            &persist::IndexManifest {
+                format_version: persist::INDEX_FORMAT_VERSION,
+                files,
+            },
+        )?;
+        Ok(())
+    }
+
     fn schema_for(&self, collection: &str) -> Result<CollectionSchema> {
         self.storage
             .get_schema(collection)
@@ -580,6 +838,32 @@ impl Inner {
             result.ids.push(old.id.to_string());
         }
         Ok(result)
+    }
+
+    // ----- transactional reads -----
+
+    /// Build a [`TxnView`] for reading within `txn`. An overlay index is built
+    /// for `collection` (the query target) so index-seeded selection reflects
+    /// staged writes; other collections fall back to their committed indexes,
+    /// which are unaffected because relationship hydration uses `get`, not an
+    /// index seed.
+    fn txn_view<'a>(&'a self, txn: &'a Transaction, collection: &str) -> Result<TxnView<'a>> {
+        let mut overlay = HashMap::new();
+        // Only the queried collection needs an overlay index, and only when the
+        // transaction has staged something at all (otherwise the view equals the
+        // committed state and the committed index is exact).
+        if !txn.is_empty() {
+            if let Some(schema) = self.storage.get_schema(collection) {
+                let mut idx = CollectionIndexes::from_schema(schema);
+                idx.rebuild(overlay_scan(self, txn, collection))?;
+                overlay.insert(collection.to_string(), idx);
+            }
+        }
+        Ok(TxnView {
+            inner: self,
+            txn,
+            overlay,
+        })
     }
 
     // ----- transactional staging -----

@@ -14,5 +14,5 @@
 mod client;
 mod scenarios;
 
-pub use client::Client;
+pub use client::{Client, ClientTls, ConnectOptions};
 pub use scenarios::{run_all, ConformanceReport, ScenarioOutcome};

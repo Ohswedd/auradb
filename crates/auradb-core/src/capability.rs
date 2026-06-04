@@ -32,6 +32,16 @@ pub enum Capability {
     MigrationEstimate,
     /// Metrics and health endpoints.
     Observability,
+    /// Static-token client authentication (Argon2id verified).
+    Authentication,
+    /// TLS transport encryption (rustls).
+    Tls,
+    /// Persisted index snapshots loaded on open with safe rebuild.
+    PersistedIndexes,
+    /// Equality indexes over dotted document paths.
+    DocumentPathIndexes,
+    /// Tokenized full-text search over string fields.
+    FullTextSearch,
 }
 
 impl Capability {
@@ -48,6 +58,11 @@ impl Capability {
             Capability::Explain,
             Capability::MigrationEstimate,
             Capability::Observability,
+            Capability::Authentication,
+            Capability::Tls,
+            Capability::PersistedIndexes,
+            Capability::DocumentPathIndexes,
+            Capability::FullTextSearch,
         ]
     }
 }

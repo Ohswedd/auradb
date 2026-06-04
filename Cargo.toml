@@ -15,7 +15,7 @@ members = [
 ]
 
 [workspace.package]
-version = "0.1.0"
+version = "0.2.0"
 edition = "2021"
 rust-version = "1.85"
 license = "Apache-2.0"
@@ -24,16 +24,16 @@ authors = ["AuraDB Contributors"]
 description = "A single-node, Rust-native multi-model database server for the Aura ecosystem."
 
 [workspace.dependencies]
-auradb-core = { path = "crates/auradb-core", version = "0.1.0" }
-auradb-protocol = { path = "crates/auradb-protocol", version = "0.1.0" }
-auradb-storage = { path = "crates/auradb-storage", version = "0.1.0" }
-auradb-index = { path = "crates/auradb-index", version = "0.1.0" }
-auradb-txn = { path = "crates/auradb-txn", version = "0.1.0" }
-auradb-query = { path = "crates/auradb-query", version = "0.1.0" }
-auradb = { path = "crates/auradb", version = "0.1.0" }
-auradb-observability = { path = "crates/auradb-observability", version = "0.1.0" }
-auradb-server = { path = "crates/auradb-server", version = "0.1.0" }
-auradb-conformance = { path = "crates/auradb-conformance", version = "0.1.0" }
+auradb-core = { path = "crates/auradb-core", version = "0.2.0" }
+auradb-protocol = { path = "crates/auradb-protocol", version = "0.2.0" }
+auradb-storage = { path = "crates/auradb-storage", version = "0.2.0" }
+auradb-index = { path = "crates/auradb-index", version = "0.2.0" }
+auradb-txn = { path = "crates/auradb-txn", version = "0.2.0" }
+auradb-query = { path = "crates/auradb-query", version = "0.2.0" }
+auradb = { path = "crates/auradb", version = "0.2.0" }
+auradb-observability = { path = "crates/auradb-observability", version = "0.2.0" }
+auradb-server = { path = "crates/auradb-server", version = "0.2.0" }
+auradb-conformance = { path = "crates/auradb-conformance", version = "0.2.0" }
 
 tokio = { version = "1", features = ["full"] }
 bytes = "1"
@@ -49,6 +49,15 @@ crc32fast = "1"
 tempfile = "3"
 criterion = "0.5"
 proptest = "1"
+
+# Security: authentication (Argon2id password hashing) and TLS (rustls).
+argon2 = "0.5"
+rand = "0.8"
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12", "logging"] }
+tokio-rustls = { version = "0.26", default-features = false, features = ["ring", "tls12", "logging"] }
+rustls-pemfile = "2"
+rcgen = { version = "0.13", default-features = false, features = ["ring", "pem"] }
+rpassword = "7"
 
 [profile.release]
 lto = "thin"

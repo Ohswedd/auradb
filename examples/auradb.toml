@@ -1,0 +1,53 @@
+# Example AuraDB server configuration.
+# All fields have sensible defaults; this file shows every option.
+# CLI flags (--data-dir, --bind, --port, --allow-insecure-bind) override these.
+
+# Network bind address and port.
+bind = "127.0.0.1"
+port = 7171
+
+# Directory where segments, manifest, schema catalog, and persisted indexes live.
+data_dir = ".local/auradb"
+
+# Maximum accepted protocol payload size, in bytes (16 MiB).
+max_payload_bytes = 16777216
+
+# Log level / env-filter directive (e.g. "info", "auradb=debug").
+log_level = "info"
+# Emit logs as structured JSON.
+log_json = false
+
+# Idle timeout for server-side cursors, in seconds.
+cursor_timeout_secs = 300
+# Default number of rows returned per query page before a cursor is used.
+page_size = 100
+
+# Fsync the storage log after every commit (durability vs. throughput).
+sync_on_commit = true
+
+# Whether metrics collection is enabled.
+metrics_enabled = true
+
+# Binding a non-loopback address (for example 0.0.0.0) with authentication
+# disabled is rejected at startup. Set this to true (or pass --allow-insecure-bind)
+# only if you accept serving unauthenticated traffic on a public interface.
+# allow_insecure_bind = false
+
+[tls]
+# When enabled, the server terminates TLS itself using the certificate and key
+# below. Missing or invalid material fails startup (it never serves plaintext).
+enabled = false
+# cert_path = "server.crt"
+# key_path = "server.key"
+# Mutual TLS: require clients to present a certificate trusted by this CA bundle.
+# client_ca_path = "ca.crt"
+# require_client_cert = false
+
+[auth]
+# When enabled, clients must authenticate before any schema, query, mutation,
+# cursor, explain, transaction, or admin operation. The token is never stored in
+# plaintext: generate token_hash with `auradb auth hash-token`.
+enabled = false
+mode = "static-token"
+# token_hash = "$argon2id$v=19$m=19456,t=2,p=1$...$..."
+token_hash_algorithm = "argon2id"

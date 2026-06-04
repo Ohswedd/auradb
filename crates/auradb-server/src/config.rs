@@ -1,36 +1,70 @@
 //! Server configuration: TOML file with sensible defaults and CLI overrides.
+//!
+//! Configuration is validated before the server opens. Validation fails closed:
+//! a security setting that is accepted is always enforced, and an invalid or
+//! incomplete security setting aborts startup rather than degrading silently.
 
+use std::net::IpAddr;
 use std::path::{Path, PathBuf};
 
 use auradb_core::{Error, Result};
 use serde::{Deserialize, Serialize};
 
-/// TLS configuration shape. TLS is not implemented in this single-node release;
-/// the shape exists so configuration is forward-compatible and `enabled = true`
-/// fails closed rather than silently serving plaintext.
+/// TLS transport configuration.
+///
+/// When [`TlsConfig::enabled`] is true the server terminates TLS itself using
+/// the supplied certificate and key. Missing or invalid material aborts startup.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
 pub struct TlsConfig {
-    /// Whether TLS is requested.
-    #[serde(default)]
+    /// Whether the listener terminates TLS.
     pub enabled: bool,
-    /// Path to the certificate file.
-    #[serde(default)]
+    /// Path to the PEM-encoded server certificate chain.
     pub cert_path: Option<PathBuf>,
-    /// Path to the private key file.
-    #[serde(default)]
+    /// Path to the PEM-encoded private key (PKCS#8 or RSA/SEC1).
     pub key_path: Option<PathBuf>,
+    /// Path to a PEM-encoded CA bundle used to verify client certificates.
+    pub client_ca_path: Option<PathBuf>,
+    /// Whether clients must present a certificate trusted by `client_ca_path`
+    /// (mutual TLS).
+    pub require_client_cert: bool,
 }
 
-/// Authentication configuration shape. Static-token auth is the only mechanism
-/// shaped here; when `required` is true a token must be supplied.
+/// The supported authentication mechanism.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum AuthMode {
+    /// A single shared static token, verified against a stored hash.
+    #[default]
+    StaticToken,
+}
+
+/// The supported token-hash algorithm.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum TokenHashAlgorithm {
+    /// Argon2id (memory-hard password hashing).
+    #[default]
+    Argon2id,
+}
+
+/// Authentication configuration.
+///
+/// When [`AuthConfig::enabled`] is true, clients must authenticate before any
+/// schema, query, mutation, cursor, explain, transaction, or admin operation.
+/// The token is never stored in plaintext: [`AuthConfig::token_hash`] holds an
+/// Argon2id PHC hash produced by `auradb auth hash-token`.
 #[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(default)]
 pub struct AuthConfig {
     /// Whether authentication is required.
-    #[serde(default)]
-    pub required: bool,
-    /// Accepted static tokens (if any).
-    #[serde(default)]
-    pub static_tokens: Vec<String>,
+    pub enabled: bool,
+    /// The authentication mechanism (only `static-token` is implemented).
+    pub mode: AuthMode,
+    /// The Argon2id PHC hash of the accepted token.
+    pub token_hash: Option<String>,
+    /// The hash algorithm (only `argon2id` is implemented).
+    pub token_hash_algorithm: TokenHashAlgorithm,
 }
 
 /// The complete server configuration.
@@ -57,10 +91,21 @@ pub struct Config {
     pub sync_on_commit: bool,
     /// Whether metrics collection is enabled.
     pub metrics_enabled: bool,
-    /// TLS configuration shape.
+    /// Allow binding to a non-loopback address with authentication disabled.
+    ///
+    /// Off by default: binding a public interface without authentication is
+    /// rejected unless this is explicitly set (or `--allow-insecure-bind` is
+    /// passed), so a server is never unintentionally exposed unauthenticated.
+    #[serde(skip_serializing_if = "is_false")]
+    pub allow_insecure_bind: bool,
+    /// TLS configuration.
     pub tls: TlsConfig,
-    /// Auth configuration shape.
+    /// Authentication configuration.
     pub auth: AuthConfig,
+}
+
+fn is_false(b: &bool) -> bool {
+    !*b
 }
 
 impl Default for Config {
@@ -76,6 +121,7 @@ impl Default for Config {
             page_size: 100,
             sync_on_commit: true,
             metrics_enabled: true,
+            allow_insecure_bind: false,
             tls: TlsConfig::default(),
             auth: AuthConfig::default(),
         }
@@ -104,7 +150,21 @@ impl Config {
         toml::to_string_pretty(self).expect("config serializes")
     }
 
-    /// Validate the configuration, failing closed on unsupported requests.
+    /// Whether the configured bind address is a non-loopback (public) interface.
+    pub fn is_public_bind(&self) -> bool {
+        let host = self.bind.trim();
+        if host.eq_ignore_ascii_case("localhost") {
+            return false;
+        }
+        match host.parse::<IpAddr>() {
+            Ok(ip) => !ip.is_loopback(),
+            // A hostname other than localhost is treated as public.
+            Err(_) => true,
+        }
+    }
+
+    /// Validate the configuration, failing closed on unsupported or unsafe
+    /// requests.
     pub fn validate(&self) -> Result<()> {
         if self.port == 0 {
             return Err(Error::Config("port must be non-zero".into()));
@@ -115,10 +175,73 @@ impl Config {
         if self.page_size == 0 {
             return Err(Error::Config("page_size must be non-zero".into()));
         }
-        if self.tls.enabled {
-            return Err(Error::unsupported(
-                "TLS termination (configure a TLS proxy in front of AuraDB)",
-            ));
+
+        self.validate_auth()?;
+        self.validate_tls()?;
+
+        if self.is_public_bind() && !self.auth.enabled && !self.allow_insecure_bind {
+            return Err(Error::Config(format!(
+                "refusing to bind non-loopback address {} with authentication disabled; \
+                 enable [auth] or pass --allow-insecure-bind to override",
+                self.bind
+            )));
+        }
+        Ok(())
+    }
+
+    fn validate_auth(&self) -> Result<()> {
+        if !self.auth.enabled {
+            return Ok(());
+        }
+        // Only static-token / argon2id are implemented; the enums make any other
+        // value unrepresentable, but we assert here so the intent is explicit.
+        let AuthMode::StaticToken = self.auth.mode;
+        let TokenHashAlgorithm::Argon2id = self.auth.token_hash_algorithm;
+        let hash = self.auth.token_hash.as_deref().ok_or_else(|| {
+            Error::Config(
+                "auth.enabled is true but auth.token_hash is not set; \
+                 generate one with `auradb auth hash-token`"
+                    .into(),
+            )
+        })?;
+        crate::auth::validate_hash(hash)?;
+        Ok(())
+    }
+
+    fn validate_tls(&self) -> Result<()> {
+        if !self.tls.enabled {
+            return Ok(());
+        }
+        let cert = self.tls.cert_path.as_ref().ok_or_else(|| {
+            Error::Config("tls.enabled is true but tls.cert_path is not set".into())
+        })?;
+        let key = self.tls.key_path.as_ref().ok_or_else(|| {
+            Error::Config("tls.enabled is true but tls.key_path is not set".into())
+        })?;
+        if !cert.exists() {
+            return Err(Error::Config(format!(
+                "tls certificate not found: {}",
+                cert.display()
+            )));
+        }
+        if !key.exists() {
+            return Err(Error::Config(format!(
+                "tls private key not found: {}",
+                key.display()
+            )));
+        }
+        if self.tls.require_client_cert {
+            let ca = self.tls.client_ca_path.as_ref().ok_or_else(|| {
+                Error::Config(
+                    "tls.require_client_cert is true but tls.client_ca_path is not set".into(),
+                )
+            })?;
+            if !ca.exists() {
+                return Err(Error::Config(format!(
+                    "tls client CA bundle not found: {}",
+                    ca.display()
+                )));
+            }
         }
         Ok(())
     }
@@ -150,10 +273,54 @@ mod tests {
         let c = Config::from_toml("port = 8000\n").unwrap();
         assert_eq!(c.port, 8000);
         assert_eq!(c.bind, "127.0.0.1");
+        assert!(!c.auth.enabled);
+        assert!(!c.tls.enabled);
     }
 
     #[test]
-    fn tls_enabled_fails_closed() {
+    fn auth_config_parses_new_shape() {
+        let toml = r#"
+[auth]
+enabled = true
+mode = "static-token"
+token_hash = "$argon2id$v=19$m=19456,t=2,p=1$c2FsdHNhbHQ$aGFzaGhhc2hoYXNoaGFzaGhhc2hoYQ"
+token_hash_algorithm = "argon2id"
+"#;
+        let c = Config::from_toml(toml).unwrap();
+        assert!(c.auth.enabled);
+        assert_eq!(c.auth.mode, AuthMode::StaticToken);
+        assert_eq!(c.auth.token_hash_algorithm, TokenHashAlgorithm::Argon2id);
+    }
+
+    #[test]
+    fn auth_enabled_without_hash_fails_closed() {
+        let c = Config {
+            auth: AuthConfig {
+                enabled: true,
+                token_hash: None,
+                ..AuthConfig::default()
+            },
+            ..Config::default()
+        };
+        assert!(c.validate().is_err());
+    }
+
+    #[test]
+    fn auth_enabled_with_valid_hash_validates() {
+        let hash = crate::auth::hash_token("secret").unwrap();
+        let c = Config {
+            auth: AuthConfig {
+                enabled: true,
+                token_hash: Some(hash),
+                ..AuthConfig::default()
+            },
+            ..Config::default()
+        };
+        c.validate().unwrap();
+    }
+
+    #[test]
+    fn tls_enabled_without_files_fails_closed() {
         let c = Config {
             tls: TlsConfig {
                 enabled: true,
@@ -162,5 +329,51 @@ mod tests {
             ..Config::default()
         };
         assert!(c.validate().is_err());
+    }
+
+    #[test]
+    fn public_bind_without_auth_rejected_by_default() {
+        let c = Config {
+            bind: "0.0.0.0".into(),
+            ..Config::default()
+        };
+        assert!(c.validate().is_err());
+    }
+
+    #[test]
+    fn public_bind_allowed_with_explicit_flag() {
+        let c = Config {
+            bind: "0.0.0.0".into(),
+            allow_insecure_bind: true,
+            ..Config::default()
+        };
+        c.validate().unwrap();
+    }
+
+    #[test]
+    fn public_bind_allowed_with_auth() {
+        let hash = crate::auth::hash_token("secret").unwrap();
+        let c = Config {
+            bind: "0.0.0.0".into(),
+            auth: AuthConfig {
+                enabled: true,
+                token_hash: Some(hash),
+                ..AuthConfig::default()
+            },
+            ..Config::default()
+        };
+        c.validate().unwrap();
+    }
+
+    #[test]
+    fn loopback_addresses_are_not_public() {
+        for host in ["127.0.0.1", "::1", "localhost"] {
+            let c = Config {
+                bind: host.into(),
+                ..Config::default()
+            };
+            assert!(!c.is_public_bind(), "{host} should be loopback");
+            c.validate().unwrap();
+        }
     }
 }

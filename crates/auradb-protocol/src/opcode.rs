@@ -18,6 +18,8 @@ pub enum Opcode {
     Ping = 0x02,
     /// Health/readiness request.
     Health = 0x03,
+    /// Authenticate the current connection with a static token.
+    Auth = 0x04,
 
     // --- schema ---
     /// Register (create) a collection schema.
@@ -58,6 +60,8 @@ pub enum Opcode {
     Pong = 0x82,
     /// Health/readiness reply.
     HealthResult = 0x83,
+    /// Authentication result reply.
+    AuthResult = 0x84,
     /// Generic success carrying a JSON result payload.
     Ok = 0x90,
     /// A query result page (may carry a cursor id for continuation).
@@ -73,6 +77,7 @@ impl Opcode {
             0x01 => Opcode::Hello,
             0x02 => Opcode::Ping,
             0x03 => Opcode::Health,
+            0x04 => Opcode::Auth,
             0x10 => Opcode::SchemaCreate,
             0x11 => Opcode::SchemaDrop,
             0x12 => Opcode::SchemaGet,
@@ -89,6 +94,7 @@ impl Opcode {
             0x81 => Opcode::HelloAck,
             0x82 => Opcode::Pong,
             0x83 => Opcode::HealthResult,
+            0x84 => Opcode::AuthResult,
             0x90 => Opcode::Ok,
             0x91 => Opcode::QueryResult,
             0xFF => Opcode::Error,

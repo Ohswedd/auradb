@@ -30,6 +30,8 @@ pub trait DataSource {
 pub enum Strategy {
     /// Exact vector scan over a vector index, then post-filtering.
     VectorExactScan,
+    /// Full-text candidate selection seeded by an inverted index.
+    FullTextScan,
     /// Equality lookup seeded by a secondary/unique/primary index.
     IndexLookup,
     /// Full collection scan with filtering.
@@ -109,6 +111,17 @@ fn indexed_seed(filter: &Filter, indexes: &CollectionIndexes) -> Option<(String,
     }
 }
 
+/// Find a full-text clause that can be seeded by an inverted index.
+fn text_seed<'a>(filter: &'a Filter, indexes: &CollectionIndexes) -> Option<(&'a str, &'a str)> {
+    match filter {
+        Filter::ContainsText { field, query } if indexes.has_text_index(field) => {
+            Some((field.as_str(), query.as_str()))
+        }
+        Filter::And { filters } => filters.iter().find_map(|f| text_seed(f, indexes)),
+        _ => None,
+    }
+}
+
 /// Plan and run a find, returning ordered ids/scores and the EXPLAIN plan.
 pub fn execute_find(ds: &dyn DataSource, query: &FindQuery) -> Result<PlannedFind> {
     let schema = require_schema(ds, &query.collection)?;
@@ -127,24 +140,40 @@ pub fn execute_find(ds: &dyn DataSource, query: &FindQuery) -> Result<PlannedFin
             Some(vs.field.clone()),
         )
     } else if let Some(filter) = &query.filter {
-        match indexed_seed(filter, indexes) {
-            Some((field, ids)) => (ids, None, Strategy::IndexLookup, Some(field)),
-            None => {
-                let ids: Vec<RecordId> = ds.scan(&query.collection).map(|r| r.id).collect();
-                if ids.len() > 10_000 {
-                    warnings.push(format!(
-                        "full scan of {} records; consider an index",
-                        ids.len()
-                    ));
-                }
-                (ids, None, Strategy::FullScan, None)
+        if let Some((field, q)) = text_seed(filter, indexes) {
+            let results = indexes.text_search(field, q)?;
+            let mut ids = Vec::with_capacity(results.len());
+            let mut scores = std::collections::HashMap::new();
+            for (id, score) in results {
+                ids.push(id);
+                scores.insert(id, score);
             }
+            (
+                ids,
+                Some(scores),
+                Strategy::FullTextScan,
+                Some(field.to_string()),
+            )
+        } else if let Some((field, ids)) = indexed_seed(filter, indexes) {
+            (ids, None, Strategy::IndexLookup, Some(field))
+        } else {
+            let ids: Vec<RecordId> = ds.scan(&query.collection).map(|r| r.id).collect();
+            if ids.len() > 10_000 {
+                warnings.push(format!(
+                    "full scan of {} records; consider an index",
+                    ids.len()
+                ));
+            }
+            (ids, None, Strategy::FullScan, None)
         }
     } else {
         let ids: Vec<RecordId> = ds.scan(&query.collection).map(|r| r.id).collect();
         (ids, None, Strategy::FullScan, None)
     };
     let estimated_candidates = candidates.len();
+    // Vector and full-text selections carry per-record scores and are ordered by
+    // descending score; other selections honor `order_by`.
+    let score_ordered = scores.is_some();
 
     // 2. Filter candidates (always re-applied, even after an index seed).
     let mut matched: Vec<(RecordId, Option<f32>)> = Vec::new();
@@ -163,8 +192,8 @@ pub fn execute_find(ds: &dyn DataSource, query: &FindQuery) -> Result<PlannedFin
     }
 
     // 3. Ordering.
-    if query.vector.is_some() {
-        // Already ordered by similarity (descending). Stable.
+    if score_ordered {
+        // Ordered by descending score (vector similarity or text relevance).
         matched.sort_by(|a, b| {
             b.1.partial_cmp(&a.1)
                 .unwrap_or(Ordering::Equal)

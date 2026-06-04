@@ -33,6 +33,10 @@ pub enum ErrorCode {
     NotFound,
     /// The requested feature is recognized but not supported in this release.
     Unsupported,
+    /// A request requires authentication but the session is not authenticated.
+    Unauthenticated,
+    /// Authentication failed because the presented credentials were invalid.
+    InvalidCredentials,
     /// A configuration value was invalid.
     Config,
     /// An I/O operation failed.
@@ -56,6 +60,8 @@ impl ErrorCode {
             ErrorCode::UniqueViolation => "unique_violation",
             ErrorCode::NotFound => "not_found",
             ErrorCode::Unsupported => "unsupported",
+            ErrorCode::Unauthenticated => "unauthenticated",
+            ErrorCode::InvalidCredentials => "invalid_credentials",
             ErrorCode::Config => "config",
             ErrorCode::Io => "io",
             ErrorCode::LimitExceeded => "limit_exceeded",
@@ -112,6 +118,14 @@ pub enum Error {
         feature: String,
     },
 
+    /// Authentication is required but was not provided or not completed.
+    #[error("unauthenticated: {0}")]
+    Unauthenticated(String),
+
+    /// The presented authentication credentials were invalid.
+    #[error("invalid credentials")]
+    InvalidCredentials,
+
     /// A configuration value was invalid.
     #[error("configuration error: {0}")]
     Config(String),
@@ -149,6 +163,8 @@ impl Error {
             Error::UniqueViolation(_) => ErrorCode::UniqueViolation,
             Error::NotFound(_) => ErrorCode::NotFound,
             Error::Unsupported { .. } => ErrorCode::Unsupported,
+            Error::Unauthenticated(_) => ErrorCode::Unauthenticated,
+            Error::InvalidCredentials => ErrorCode::InvalidCredentials,
             Error::Config(_) => ErrorCode::Config,
             Error::Io(_) => ErrorCode::Io,
             Error::LimitExceeded(_) => ErrorCode::LimitExceeded,

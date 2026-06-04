@@ -11,7 +11,7 @@ use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
 use auradb::query::{FindQuery, Row};
-use auradb::Engine;
+use auradb::{Engine, Transaction};
 use auradb_core::{Error, RecordId, Result};
 
 struct CursorEntry {
@@ -72,6 +72,20 @@ impl CursorRegistry {
     /// Fetch up to `limit` rows from a cursor, materializing them via `engine`.
     /// The cursor is automatically closed when exhausted.
     pub fn fetch(&self, id: u64, limit: usize, engine: &Engine) -> Result<CursorPage> {
+        self.fetch_with(id, limit, engine, None)
+    }
+
+    /// Fetch a page, materializing rows against a transaction view when `txn`
+    /// is supplied. A cursor opened inside a transaction must materialize its
+    /// pages through the same transaction so that staged writes remain visible
+    /// and staged deletes stay hidden across paging.
+    pub fn fetch_with(
+        &self,
+        id: u64,
+        limit: usize,
+        engine: &Engine,
+        txn: Option<&Transaction>,
+    ) -> Result<CursorPage> {
         let (query, page_ids, more) = {
             let mut reg = self.inner.lock().expect("cursor registry poisoned");
             let entry = reg
@@ -85,7 +99,10 @@ impl CursorRegistry {
             let more = entry.position < entry.ordered.len();
             (entry.query.clone(), page_ids, more)
         };
-        let rows = engine.materialize(&query, &page_ids)?;
+        let rows = match txn {
+            Some(txn) => engine.txn_materialize(txn, &query, &page_ids)?,
+            None => engine.materialize(&query, &page_ids)?,
+        };
         if !more {
             self.close(id);
         }
