@@ -95,8 +95,7 @@ git push origin v0.2.1
 
 Pushing the tag triggers `release.yml` (binaries and `SHA256SUMS`) and the
 publish step of `docker.yml` (GHCR image). Create the GitHub release from the
-tag and use the matching `CHANGELOG.md` section, or
-[V0_2_RELEASE_NOTES.md](V0_2_RELEASE_NOTES.md), as the release notes.
+tag and use the matching `CHANGELOG.md` section as the release notes.
 
 ## Publishing (optional)
 
