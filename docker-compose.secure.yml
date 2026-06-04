@@ -1,0 +1,77 @@
+# Secure AuraDB deployment example: authentication and TLS enabled, non-root
+# user, no secret committed to version control.
+#
+# Before running:
+#   1. Generate certificates into ./examples/production/certs (development certs
+#      are fine for a local trial; use real certificates in production):
+#        auradb cert generate-dev --out-dir ./examples/production/certs
+#   2. Generate a token hash and export it (never commit the plaintext token):
+#        export AURADB_AUTH_TOKEN_HASH="$(auradb auth hash-token --token 'choose-a-strong-token')"
+#   3. Start it:
+#        docker compose -f docker-compose.secure.yml up
+#
+# Validate the compose file without starting it:
+#   docker compose -f docker-compose.secure.yml config
+#
+# The container reads the committed config (which carries no secret), appends the
+# token hash from AURADB_AUTH_TOKEN_HASH into a writable copy under [auth], and
+# starts the server against that copy. The plaintext token is never stored.
+
+services:
+  auradb:
+    image: ghcr.io/ohswedd/auradb:0.2.1
+    container_name: auradb-secure
+    # Run as the image's non-root user (uid 10001).
+    user: "10001:10001"
+    ports:
+      - "7171:7171"
+    volumes:
+      - auradb-data:/data
+      - ./examples/production/auradb.toml:/config/auradb.toml:ro
+      - ./examples/production/certs:/certs:ro
+    environment:
+      # The Argon2id hash of the accepted token. Provide it from your shell or a
+      # .env file; do not commit it. The plaintext token is never passed here.
+      # Presence is enforced by the entrypoint at start, so `docker compose
+      # config` still validates without it set.
+      AURADB_AUTH_TOKEN_HASH: "${AURADB_AUTH_TOKEN_HASH:-}"
+    # Writable scratch for the assembled config (rootfs can stay read-only).
+    tmpfs:
+      - /tmp
+    read_only: true
+    security_opt:
+      - "no-new-privileges:true"
+    cap_drop:
+      - ALL
+    restart: unless-stopped
+    # Assemble the runtime config from the committed (secret-free) template plus
+    # the injected hash, then run the server against it.
+    entrypoint:
+      - /bin/sh
+      - -c
+      - |
+        set -eu
+        : "$${AURADB_AUTH_TOKEN_HASH:?set AURADB_AUTH_TOKEN_HASH to an argon2id hash from 'auradb auth hash-token'}"
+        cp /config/auradb.toml /tmp/auradb.toml
+        printf 'token_hash = "%s"\n' "$$AURADB_AUTH_TOKEN_HASH" >> /tmp/auradb.toml
+        exec auradb server --config /tmp/auradb.toml
+    # Liveness over TLS. HEALTH is allowed unauthenticated, so no token is needed,
+    # but the probe must trust the server certificate's CA.
+    healthcheck:
+      test:
+        - CMD
+        - auradb
+        - status
+        - --addr
+        - 127.0.0.1:7171
+        - --tls-ca
+        - /certs/ca.crt
+        - --server-name
+        - localhost
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 5s
+
+volumes:
+  auradb-data:

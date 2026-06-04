@@ -7,7 +7,7 @@
 A transaction stages its mutations in memory and records the **version it
 observed** for every record it reads or writes (`None` = observed absent).
 Staged writes are invisible to other transactions and provide read-your-writes
-within the transaction — for point reads (`txn_get`) **and** for every query
+within the transaction, for point reads (`txn_get`) **and** for every query
 read (find, filter, count, exists, explain, vector, document-path, full-text,
 relationship include, and cursor paging).
 

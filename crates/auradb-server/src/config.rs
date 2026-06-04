@@ -164,8 +164,22 @@ impl Config {
     }
 
     /// Validate the configuration, failing closed on unsupported or unsafe
-    /// requests.
+    /// requests. TLS material referenced by the config must exist on disk.
     pub fn validate(&self) -> Result<()> {
+        self.validate_inner(true)
+    }
+
+    /// Validate the configuration's structure without checking that referenced
+    /// TLS files exist on disk. Useful for validating a deployment template (for
+    /// example `examples/auradb.secure.toml`) whose certificate and key live on
+    /// the target host. Every other check (auth hash shape, enabled-without-cert
+    /// path, insecure public bind) still applies, so an invalid secure config
+    /// never passes silently.
+    pub fn validate_structural(&self) -> Result<()> {
+        self.validate_inner(false)
+    }
+
+    fn validate_inner(&self, check_files: bool) -> Result<()> {
         if self.port == 0 {
             return Err(Error::Config("port must be non-zero".into()));
         }
@@ -177,7 +191,7 @@ impl Config {
         }
 
         self.validate_auth()?;
-        self.validate_tls()?;
+        self.validate_tls(check_files)?;
 
         if self.is_public_bind() && !self.auth.enabled && !self.allow_insecure_bind {
             return Err(Error::Config(format!(
@@ -208,7 +222,7 @@ impl Config {
         Ok(())
     }
 
-    fn validate_tls(&self) -> Result<()> {
+    fn validate_tls(&self, check_files: bool) -> Result<()> {
         if !self.tls.enabled {
             return Ok(());
         }
@@ -218,13 +232,13 @@ impl Config {
         let key = self.tls.key_path.as_ref().ok_or_else(|| {
             Error::Config("tls.enabled is true but tls.key_path is not set".into())
         })?;
-        if !cert.exists() {
+        if check_files && !cert.exists() {
             return Err(Error::Config(format!(
                 "tls certificate not found: {}",
                 cert.display()
             )));
         }
-        if !key.exists() {
+        if check_files && !key.exists() {
             return Err(Error::Config(format!(
                 "tls private key not found: {}",
                 key.display()
@@ -236,7 +250,7 @@ impl Config {
                     "tls.require_client_cert is true but tls.client_ca_path is not set".into(),
                 )
             })?;
-            if !ca.exists() {
+            if check_files && !ca.exists() {
                 return Err(Error::Config(format!(
                     "tls client CA bundle not found: {}",
                     ca.display()

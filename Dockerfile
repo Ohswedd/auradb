@@ -3,7 +3,10 @@
 # ---- build stage ----
 # Rust 1.90 (>= the workspace MSRV; some dependencies such as `time` require
 # rustc >= 1.88). CI builds on stable; this pins a concrete builder for the image.
-FROM rust:1.90-slim AS build
+# Pinned to the bookworm base so the build-stage glibc matches the
+# debian:bookworm-slim runtime below; an unpinned `rust:1.90-slim` tracks a newer
+# Debian whose glibc the runtime image does not provide.
+FROM rust:1.90-slim-bookworm AS build
 # The TLS stack (ring) compiles C and assembly, so a C toolchain is required.
 RUN apt-get update \
     && apt-get install -y --no-install-recommends build-essential \
@@ -26,9 +29,9 @@ EXPOSE 7171
 HEALTHCHECK --interval=30s --timeout=5s --start-period=5s --retries=3 \
     CMD ["auradb", "status", "--addr", "127.0.0.1:7171"]
 # Default command runs the server. Override it to run any other auradb command,
-# for example: docker run --rm ghcr.io/ohswedd/auradb:0.2.0 auradb version
+# for example: docker run --rm ghcr.io/ohswedd/auradb:0.2.1 auradb version
 # Bind to all interfaces inside the container; publish the port with -p. AuraDB
-# v0.2.0 refuses a non-loopback bind with auth disabled, so the dev image opts in
-# with --allow-insecure-bind: the operator controls exposure with -p, and should
-# enable [auth]/[tls] (mount a config) before exposing the port publicly.
+# refuses a non-loopback bind with auth disabled, so this development image opts
+# in with --allow-insecure-bind: the operator controls exposure with -p, and
+# should use docker-compose.secure.yml (auth and TLS enabled) for any deployment.
 CMD ["auradb", "server", "--data-dir", "/data", "--bind", "0.0.0.0", "--port", "7171", "--allow-insecure-bind"]

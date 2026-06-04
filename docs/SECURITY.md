@@ -1,6 +1,6 @@
 # Security
 
-This document describes the implemented security posture of AuraDB `0.2.0`. See
+This document describes the implemented security posture of AuraDB `0.2.1`. See
 `SECURITY.md` at the repository root for the vulnerability reporting policy.
 
 AuraDB is a single-node server. It does not claim production-grade guarantees
@@ -52,6 +52,22 @@ frames.
 If `auth.enabled = true` but `token_hash` is missing, the server refuses to
 start. A malformed `token_hash` also fails validation.
 
+### Token rotation
+
+Rotate the static token without hand-editing the config:
+
+```bash
+auradb auth rotate-token --config AuraDB.toml --token "new-secret" --backup
+```
+
+This re-hashes the new token with Argon2id, rewrites the config atomically
+(temp-file plus rename) with unrelated fields preserved, optionally backs up the
+previous config to `<config>.bak`, and re-reads and validates the written file.
+The plaintext token is never stored or printed. A running server keeps the token
+hash it loaded at startup, and connections authenticated with the old token stay
+authenticated until they disconnect; AuraDB does not hot-reload the token, so
+restart the server to enforce the new token.
+
 ## TLS
 
 Server-terminated TLS is implemented with rustls.
@@ -95,7 +111,9 @@ auradb status --addr 127.0.0.1:7171 --tls-ca .local/certs/ca.crt --token secret
 ```
 
 For Docker, mount certificates into the container and reference them in the
-config.
+config. The recommended deployment path is `docker-compose.secure.yml`, which
+enables auth and TLS, runs as a non-root user, and injects the token hash from
+the environment so no secret is committed. See [DEPLOYMENT.md](DEPLOYMENT.md).
 
 ## Secure bind defaults
 
@@ -109,7 +127,9 @@ config.
 
 `auradb doctor` prints a redacted security summary (bind address, whether the
 bind is public, auth status, and TLS status). It never prints the token hash or
-any other secret.
+any other secret. The same applies to `auradb doctor --json` and `auradb status
+--json`, and to `auradb auth rotate-token`, none of which include the token hash
+or certificate or key material in their output.
 
 ## Other implemented controls
 
@@ -135,7 +155,7 @@ any other secret.
 
 ## Not implemented (do not rely on)
 
-AuraDB is single node. The following are not implemented in `0.2.0`:
+AuraDB is single node. The following are not implemented in `0.2.1`:
 role-based access control (RBAC/ABAC), tenant isolation, field-level read/write
 policies, field-level encryption, encryption at rest, and audit logging. There
 is no clustering, replication, sharding, or Raft. The roadmap is in
@@ -145,6 +165,13 @@ is no clustering, replication, sharding, or Raft. The roadmap is in
 
 Enable authentication and TLS for any deployment reachable beyond the local
 host. Keep the server single node, behind your own network controls, and treat
-the development certificates as strictly local. For controls not yet
-implemented (RBAC, encryption at rest, audit logging), front AuraDB with
-infrastructure that provides them until they land.
+the development certificates from `auradb cert generate-dev` as strictly local.
+For a production deployment, use certificates issued by your certificate
+authority and inject the token hash from a managed secret store rather than a
+plaintext file or shell variable. The `docker-compose.secure.yml` example reads
+the token hash from the environment so no secret is committed; it was validated
+at runtime with development certificates and a generated token hash (healthy over
+TLS with auth, with no secret in the container logs). See
+[DEPLOYMENT.md](DEPLOYMENT.md). For controls not yet implemented (RBAC,
+encryption at rest, audit logging), front AuraDB with infrastructure that
+provides them until they land.

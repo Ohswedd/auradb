@@ -5,9 +5,10 @@ use std::path::PathBuf;
 
 use anyhow::Result;
 use auradb_cli::{
-    build_config, cmd_auth_hash_token, cmd_bench, cmd_cert_generate_dev, cmd_check, cmd_compact,
-    cmd_compatibility, cmd_config_validate, cmd_doctor, cmd_dump, cmd_index_check,
-    cmd_index_rebuild, cmd_init, cmd_restore, cmd_server, cmd_status, cmd_version,
+    build_config, cmd_auth_hash_token, cmd_auth_rotate_token, cmd_bench, cmd_bench_json,
+    cmd_cert_generate_dev, cmd_check, cmd_compact, cmd_compatibility, cmd_config_validate,
+    cmd_doctor, cmd_doctor_json, cmd_dump, cmd_index_check, cmd_index_rebuild, cmd_init,
+    cmd_restore, cmd_server, cmd_status, cmd_status_json, cmd_version,
 };
 use clap::{Parser, Subcommand};
 
@@ -63,6 +64,9 @@ enum Command {
         data_dir: PathBuf,
         #[arg(long)]
         config: Option<PathBuf>,
+        /// Emit the report as JSON.
+        #[arg(long)]
+        json: bool,
     },
     /// Ping a running server and report health.
     Status {
@@ -78,6 +82,9 @@ enum Command {
         /// Server name verified against the certificate when using TLS.
         #[arg(long, default_value = "localhost")]
         server_name: String,
+        /// Emit the report as JSON.
+        #[arg(long)]
+        json: bool,
     },
     /// Verify on-disk index consistency.
     Check {
@@ -94,7 +101,7 @@ enum Command {
         #[arg(long, default_value = ".local/auradb")]
         data_dir: PathBuf,
         /// Output file.
-        #[arg(long)]
+        #[arg(long, visible_alias = "output")]
         out: PathBuf,
     },
     /// Restore schemas and records from a JSONL dump.
@@ -102,16 +109,22 @@ enum Command {
         #[arg(long, default_value = ".local/auradb")]
         data_dir: PathBuf,
         /// Input dump file.
-        #[arg(long, name = "in")]
+        #[arg(long, name = "in", visible_alias = "input")]
         input: PathBuf,
     },
-    /// Run a local insert/read/vector benchmark.
+    /// Run the local benchmark suite.
     Bench {
         #[arg(long, default_value = ".local/auradb-bench")]
         data_dir: PathBuf,
         /// Number of records to insert.
         #[arg(long, default_value_t = 10_000)]
         records: usize,
+        /// Emit the full report as JSON instead of a text summary.
+        #[arg(long)]
+        json: bool,
+        /// Write the JSON report to this path (implies --json).
+        #[arg(long)]
+        output: Option<PathBuf>,
     },
     /// Authentication helpers.
     Auth {
@@ -136,6 +149,11 @@ enum ConfigCommand {
     Validate {
         #[arg(long, default_value = "AuraDB.toml")]
         config: PathBuf,
+        /// Validate structure only; do not check that referenced TLS files
+        /// exist on disk. Use this to validate a deployment template whose
+        /// certificates live on the target host.
+        #[arg(long)]
+        no_file_checks: bool,
     },
 }
 
@@ -161,6 +179,19 @@ enum AuthCommand {
         /// echoing.
         #[arg(long)]
         token: Option<String>,
+    },
+    /// Replace the static token in a config file with a new Argon2id hash.
+    RotateToken {
+        /// The config file to rewrite.
+        #[arg(long, default_value = "AuraDB.toml")]
+        config: PathBuf,
+        /// The new token. If omitted, it is read from the terminal without
+        /// echoing.
+        #[arg(long)]
+        token: Option<String>,
+        /// Back up the previous config to `<config>.bak` before rewriting.
+        #[arg(long)]
+        backup: bool,
     },
 }
 
@@ -200,18 +231,39 @@ async fn main() -> Result<()> {
         }
         Command::Compatibility => println!("{}", cmd_compatibility()),
         Command::Config { command } => match command {
-            ConfigCommand::Validate { config } => println!("{}", cmd_config_validate(&config)?),
+            ConfigCommand::Validate {
+                config,
+                no_file_checks,
+            } => println!("{}", cmd_config_validate(&config, no_file_checks)?),
         },
-        Command::Doctor { data_dir, config } => {
+        Command::Doctor {
+            data_dir,
+            config,
+            json,
+        } => {
             let cfg = build_config(config.as_deref(), Some(data_dir.clone()), None, None, false)?;
-            print!("{}", cmd_doctor(&data_dir, &cfg)?);
+            if json {
+                println!("{}", cmd_doctor_json(&data_dir, &cfg)?);
+            } else {
+                print!("{}", cmd_doctor(&data_dir, &cfg)?);
+            }
         }
         Command::Status {
             addr,
             token,
             tls_ca,
             server_name,
-        } => println!("{}", cmd_status(&addr, token, tls_ca, &server_name).await?),
+            json,
+        } => {
+            if json {
+                println!(
+                    "{}",
+                    cmd_status_json(&addr, token, tls_ca, &server_name).await?
+                );
+            } else {
+                println!("{}", cmd_status(&addr, token, tls_ca, &server_name).await?);
+            }
+        }
         Command::Check { data_dir } => println!("{}", cmd_check(&data_dir)?),
         Command::Compact { data_dir } => println!("{}", cmd_compact(&data_dir)?),
         Command::Dump { data_dir, out } => {
@@ -222,9 +274,31 @@ async fn main() -> Result<()> {
             let n = cmd_restore(&data_dir, &input)?;
             println!("restored {n} record(s)");
         }
-        Command::Bench { data_dir, records } => println!("{}", cmd_bench(&data_dir, records)?),
+        Command::Bench {
+            data_dir,
+            records,
+            json,
+            output,
+        } => {
+            if json || output.is_some() {
+                let commit = current_commit();
+                let out = cmd_bench_json(&data_dir, records, commit, output.as_deref())?;
+                if let Some(path) = output.as_deref() {
+                    println!("wrote benchmark report to {}", path.display());
+                } else {
+                    println!("{out}");
+                }
+            } else {
+                println!("{}", cmd_bench(&data_dir, records)?);
+            }
+        }
         Command::Auth { command } => match command {
             AuthCommand::HashToken { token } => println!("{}", cmd_auth_hash_token(token)?),
+            AuthCommand::RotateToken {
+                config,
+                token,
+                backup,
+            } => println!("{}", cmd_auth_rotate_token(&config, token, backup)?),
         },
         Command::Cert { command } => match command {
             CertCommand::GenerateDev { out_dir } => {
@@ -237,4 +311,22 @@ async fn main() -> Result<()> {
         },
     }
     Ok(())
+}
+
+/// Best-effort short commit hash for benchmark provenance. Returns `None` when
+/// git is unavailable or the directory is not a repository.
+fn current_commit() -> Option<String> {
+    let output = std::process::Command::new("git")
+        .args(["rev-parse", "--short", "HEAD"])
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let hash = String::from_utf8(output.stdout).ok()?.trim().to_string();
+    if hash.is_empty() {
+        None
+    } else {
+        Some(hash)
+    }
 }

@@ -1,0 +1,29 @@
+# AuraDB local development configuration.
+#
+# For development on your own machine only. It binds loopback and leaves
+# authentication and TLS disabled. Do not use this on a shared or public host.
+
+# Loopback bind: only reachable from this machine.
+bind = "127.0.0.1"
+port = 7171
+
+data_dir = ".local/auradb"
+
+max_payload_bytes = 16777216
+log_level = "info"
+log_json = false
+cursor_timeout_secs = 300
+page_size = 100
+sync_on_commit = true
+metrics_enabled = true
+
+[tls]
+# Disabled for local development.
+enabled = false
+
+[auth]
+# Disabled for local development. A loopback bind without auth is allowed; a
+# non-loopback bind without auth is rejected at startup.
+enabled = false
+mode = "static-token"
+token_hash_algorithm = "argon2id"

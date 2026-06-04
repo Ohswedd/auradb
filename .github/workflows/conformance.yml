@@ -85,13 +85,32 @@ jobs:
       - name: Build server
         run: cargo build --release -p auradb-cli
 
-      - name: Install Aura Connector (>= 0.3.0)
+      - name: Install Aura Connector (>= 0.3, < 0.4)
         run: |
-          # The native AuraDB backend ships in aura-connector 0.3.0, the matching
-          # client for AuraDB 0.2.0. It is published, so this install is required
+          # The native AuraDB backend ships in aura-connector 0.3.x, the matching
+          # client for AuraDB 0.2.x. It is published, so this install is required
           # and must succeed; a failure fails the job.
-          python -m pip install --upgrade "aura-connector>=0.3.0"
+          python -m pip install --upgrade "aura-connector>=0.3,<0.4"
           python -c "import aura; assert aura.__version__ >= '0.3.0', aura.__version__"
+
+      - name: Connector smoke (auth disabled)
+        run: |
+          ./target/release/auradb server --data-dir .local/smoke --bind 127.0.0.1 --port 7180 &
+          SRV=$!
+          sleep 2
+          python tests/conformance/python/run_connector_smoke.py --addr 127.0.0.1:7180
+          kill $SRV
+
+      - name: Connector smoke (auth + TLS)
+        run: |
+          ./target/release/auradb cert generate-dev --out-dir .local/smoke-certs
+          HASH=$(./target/release/auradb auth hash-token --token ci-secret)
+          printf 'data_dir = ".local/smoke-tls"\nbind = "127.0.0.1"\nport = 7182\n\n[tls]\nenabled = true\ncert_path = ".local/smoke-certs/server.crt"\nkey_path = ".local/smoke-certs/server.key"\n\n[auth]\nenabled = true\nmode = "static-token"\ntoken_hash = "%s"\ntoken_hash_algorithm = "argon2id"\n' "$HASH" > .local/smoke-tls.toml
+          ./target/release/auradb server --config .local/smoke-tls.toml &
+          SRV=$!
+          sleep 2
+          python tests/conformance/python/run_connector_smoke.py --addr 127.0.0.1:7182 --tls-ca .local/smoke-certs/ca.crt --tls-server-name localhost --auth-token ci-secret
+          kill $SRV
 
       - name: Connector conformance (auth disabled)
         run: |

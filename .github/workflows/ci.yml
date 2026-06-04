@@ -37,7 +37,12 @@ jobs:
         run: cargo clippy --workspace --all-targets --all-features -- -D warnings
 
       - name: Test
+        # Includes the backup/restore, v0.1.0 upgrade, and chaos restart
+        # integration tests.
         run: cargo test --workspace --all-features
 
       - name: Build
         run: cargo build --workspace --all-features
+
+      - name: Compile benchmarks
+        run: cargo bench --workspace --benches --no-run

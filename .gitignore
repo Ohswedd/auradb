@@ -52,3 +52,7 @@ __pycache__/
 # Release artifacts
 dist/
 release/
+
+# Committed test fixtures (override the data-file patterns above).
+!tests/fixtures/
+!tests/fixtures/**
