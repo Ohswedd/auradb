@@ -40,7 +40,7 @@ Client ports are `7171`, `7181`, `7191`; cluster (Raft) ports are `7172`, `7182`
 # Wait for an election, then see who won.
 auradb cluster wait-leader --addr 127.0.0.1:7171 --timeout-secs 30
 auradb cluster leader      --addr 127.0.0.1:7171
-auradb cluster status      --addr 127.0.0.1:7171 --json   # includes per-peer state
+auradb status --addr 127.0.0.1:7171 --json   # includes per-peer state
 ```
 
 ### Write through the leader, observe a follower
@@ -59,7 +59,7 @@ auradb cluster status      --addr 127.0.0.1:7171 --json   # includes per-peer st
 # 3. Restart the follower with the same config:
 auradb server --config examples/cluster/node2.toml
 # 4. It replays its durable log and the leader brings it current. Confirm:
-auradb cluster status --addr 127.0.0.1:7181 --json
+auradb status --addr 127.0.0.1:7181 --json
 ```
 
 ### Shut down
@@ -94,7 +94,7 @@ Because containers communicate over a non-loopback Docker network, this path is 
 
    ```bash
    auradb cluster wait-leader --addr 127.0.0.1:7171 --timeout-secs 30
-   auradb cluster status      --addr 127.0.0.1:7171 --json
+   auradb status --addr 127.0.0.1:7171 --json
    ```
 
 5. **Stop / restart a follower** to watch catch-up:
