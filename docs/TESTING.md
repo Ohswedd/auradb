@@ -22,6 +22,20 @@ cargo build --workspace --all-features
 - **Transactions** (`auradb-txn` + `auradb`): commit persists, rollback discards,
   read-your-writes, multi-record atomicity, restart after commit, restart after
   rollback, write-write conflict.
+- **MVCC and GC** (`crates/auradb/tests/mvcc.rs`): snapshot isolation (a
+  transaction does not see a later commit), read-your-writes over the snapshot
+  (staged insert/update visible, staged delete hidden), non-transactional reads
+  see the latest committed state, write-write / update-delete / delete-update
+  conflict rejection, monotonic commit timestamps, cursors and relationship /
+  vector / document-path / full-text reads holding their snapshot, and version GC
+  reclaiming old versions while preserving any version a live snapshot can see.
+  Storage-level MVCC and GC unit tests live in `auradb-storage`.
+- **Planner and statistics** (`crates/auradb/tests/planner.rs`): cost-based
+  access-path selection (the planner uses an index for a selective equality),
+  `EXPLAIN ANALYZE` shape (plan tree plus execution metrics), and planner
+  statistics persistence (`planner_stats.json` written, reloaded on open, and
+  tolerant of a missing or corrupt file). Planner and stats unit tests live in
+  `auradb-query`.
 - **Index** (`auradb-index`): primary lookup, unique violation, secondary filter,
   rebuild after restart, delete removes entry, update moves entry, vector exact
   nearest.
@@ -45,6 +59,12 @@ cargo build --workspace --all-features
   the catalog and records load, indexes rebuild from storage, rebuilt indexes
   serve lookups, `auradb check` passes, a post-upgrade backup round-trips, and an
   unknown future storage format is rejected rather than silently opened.
+- **MVCC upgrade** (`crates/auradb/tests/upgrade_v0_2_x.rs`): open committed
+  v0.2.0 and v0.2.1 data directories (storage format v1, written by the respective
+  release binaries) with the v0.3.0 engine; verify the v1-to-v2 migration runs on
+  first open, existing records become the first committed version on their chains,
+  planner statistics initialize, lookups work against the migrated store, and
+  `auradb check` passes.
 - **Chaos restart** (`crates/auradb/tests/chaos_restart.rs`): a deterministic,
   seeded stream of writes, updates, deletes, and transactions with the engine
   dropped and reopened from disk at fixed intervals, comparing the recovered

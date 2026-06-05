@@ -46,9 +46,9 @@ pub mod query {
     pub use auradb_query::*;
 }
 
-/// Re-export of storage types (options, compaction reports).
+/// Re-export of storage types (options, compaction and GC reports).
 pub mod storage {
-    pub use auradb_storage::{CompactionReport, StorageOptions};
+    pub use auradb_storage::{CompactionReport, GcReport, StorageOptions};
 }
 
 pub use auradb_txn::Transaction;

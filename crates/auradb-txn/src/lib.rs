@@ -3,17 +3,20 @@
 //! Single-node transactions implemented as in-memory **staged write sets** with
 //! **optimistic conflict detection**.
 //!
-//! A transaction records the version it observed for every record it reads or
-//! writes. Mutations are staged (not visible to other transactions) and provide
-//! read-your-writes within the transaction. At commit time the engine, under a
-//! single write lock, verifies that every observed key still has its observed
-//! version; if any changed, the transaction conflicts and is aborted. Otherwise
-//! the staged operations are turned into an atomic storage [`Batch`] and
-//! applied.
+//! A transaction pins a **read timestamp** (`read_ts`) at begin: the MVCC commit
+//! watermark at that moment. Every read inside the transaction sees the database
+//! as of `read_ts` (the engine resolves it against storage version chains),
+//! overlaid with the transaction's own staged writes (read-your-writes).
+//! Mutations are staged (not visible to other transactions). At commit time the
+//! engine, under a single write lock, rejects the transaction if any record it
+//! wrote has a committed version newer than `read_ts` (first-committer-wins
+//! write-conflict detection); otherwise the staged operations are turned into an
+//! atomic storage [`Batch`] and applied at a fresh commit timestamp.
 //!
-//! Isolation level: snapshot reads with optimistic write/read conflict
-//! detection on commit. This is **not** serializable MVCC and is documented as
-//! such (`docs/TRANSACTIONS.md`). Distributed transactions are not implemented.
+//! Isolation level: **single-node snapshot isolation** with optimistic write
+//! conflict detection. This is **not** serializable isolation and is documented
+//! as such (`docs/TRANSACTIONS.md`). Distributed transactions are not
+//! implemented.
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]
 
@@ -51,6 +54,9 @@ pub enum StagedOp {
 #[derive(Debug)]
 pub struct Transaction {
     id: TxnId,
+    /// The MVCC read timestamp pinned at begin: all reads see committed state as
+    /// of this point in time.
+    read_ts: u64,
     /// Versions observed when each key was first read or written.
     /// `None` means the key was observed absent.
     observed: BTreeMap<Key, Option<u64>>,
@@ -60,19 +66,33 @@ pub struct Transaction {
 }
 
 impl Transaction {
-    /// Begin a new transaction with the given id.
-    pub fn begin(id: TxnId) -> Self {
+    /// Begin a new transaction with the given id, pinning `read_ts` as its
+    /// snapshot timestamp (the commit watermark observed at begin).
+    pub fn begin_at(id: TxnId, read_ts: u64) -> Self {
         Transaction {
             id,
+            read_ts,
             observed: BTreeMap::new(),
             staged: BTreeMap::new(),
             finished: false,
         }
     }
 
+    /// Begin a new transaction with the given id and a zero read timestamp.
+    /// Prefer [`Transaction::begin_at`]; this exists for tests and tooling that
+    /// do not pin a snapshot.
+    pub fn begin(id: TxnId) -> Self {
+        Transaction::begin_at(id, 0)
+    }
+
     /// The transaction id.
     pub fn id(&self) -> TxnId {
         self.id
+    }
+
+    /// The pinned MVCC read timestamp (snapshot) for this transaction.
+    pub fn read_ts(&self) -> u64 {
+        self.read_ts
     }
 
     /// Whether the transaction has been committed or rolled back.
@@ -137,9 +157,14 @@ impl Transaction {
                 StagedOp::Put(mut record) => {
                     record.version = version_for(&key);
                     record.created_txn = txn_id;
-                    LogOp::Put { record }
+                    // Storage stamps the MVCC commit timestamp on the whole batch.
+                    LogOp::Put {
+                        commit_ts: 0,
+                        record,
+                    }
                 }
                 StagedOp::Delete => LogOp::Delete {
+                    commit_ts: 0,
                     collection: key.collection,
                     id: key.id,
                 },
@@ -202,7 +227,7 @@ mod tests {
         // Ordered by key (record id 1, then 2, then delete of 3).
         assert_eq!(batch.ops.len(), 3);
         match &batch.ops[0] {
-            LogOp::Put { record } => {
+            LogOp::Put { record, .. } => {
                 assert_eq!(record.id, RecordId::from_u128(1));
                 assert_eq!(record.version, 5);
                 assert_eq!(record.created_txn, TxnId(7));

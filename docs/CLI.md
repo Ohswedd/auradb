@@ -37,9 +37,24 @@ protocol version, collection count, and whether TLS was used).
 Opens the engine and verifies on-disk index consistency, validating and
 preserving persisted index snapshots.
 
+### `auradb gc [--data-dir <dir>]`
+Runs version garbage collection over the MVCC version chains. It reclaims versions
+no active transaction can observe and drops fully-deleted records, always
+retaining the latest version and at least `min_retained_versions`, and reports the
+versions and records reclaimed. See [STORAGE_ENGINE.md](STORAGE_ENGINE.md).
+
+### `auradb stats analyze [--data-dir <dir>]`
+Recomputes planner statistics (row counts, per-field cardinality, vector counts,
+full-text document counts, average record size) by scanning the collections and
+persists them to `planner_stats.json`. See [QUERY_ENGINE.md](QUERY_ENGINE.md).
+
+### `auradb stats show [--data-dir <dir>] [--json]`
+Prints the persisted planner statistics. `--json` emits the report as JSON.
+Statistics are advisory: a missing file is reported, not an error.
+
 ### `auradb compact --data-dir <dir>`
 Compacts the storage log, reporting segment counts and live records retained,
-and writes fresh index snapshots as a checkpoint.
+writes fresh index snapshots as a checkpoint, and refreshes planner statistics.
 
 ### `auradb dump --data-dir <dir> --output <file>`
 Exports all schemas and records to JSONL (one schema/record per line).
@@ -108,18 +123,21 @@ auradb config validate --config examples/auradb.secure.toml --no-file-checks
 auradb server --data-dir .local/auradb --port 7171 &
 auradb status --addr 127.0.0.1:7171 --token "your-secret" --tls-ca .local/certs/ca.crt --json
 auradb index check --data-dir .local/auradb
+auradb gc --data-dir .local/auradb
+auradb stats analyze --data-dir .local/auradb
+auradb stats show --data-dir .local/auradb --json
 auradb dump --data-dir .local/auradb --output backup.jsonl
 auradb restore --data-dir .local/restored --input backup.jsonl
 auradb check --data-dir .local/restored
-auradb bench --json --output benches/baseline/v0.2.1.json
+auradb bench --json --output benches/baseline/v0.3.0.json
 ```
 
 ## Tests
 
 `cmd_init`/`doctor` (text and JSON), `dump`→`restore` roundtrip, `check`,
 `compact`, `bench` (text and JSON), `auth hash-token`, `auth rotate-token`, `cert
-generate-dev`, `config validate` (full and structural), and `index
-check`/`rebuild` are unit-tested. A dedicated backup/restore integration test
+generate-dev`, `config validate` (full and structural), `index
+check`/`rebuild`, `gc`, and `stats analyze`/`show` are unit-tested. A dedicated backup/restore integration test
 (`crates/auradb-cli/tests/backup_restore.rs`) exercises `dump`/`restore`/`check`
 across every field and index kind. `server`/`status` are exercised by the smoke
 test and conformance suite.

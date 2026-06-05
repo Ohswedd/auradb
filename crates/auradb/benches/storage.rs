@@ -14,6 +14,7 @@ fn engine() -> (tempfile::TempDir, Engine) {
         storage: StorageOptions {
             sync_on_commit: false,
         },
+        ..EngineOptions::default()
     };
     let engine = Engine::open_with(dir.path(), opts).unwrap();
     engine

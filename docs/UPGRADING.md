@@ -1,5 +1,50 @@
 # Upgrading
 
+## From v0.1.0, v0.2.0, or v0.2.1 to v0.3.0
+
+AuraDB 0.3.0 introduces MVCC, which moves the on-disk storage format from **v1 to
+v2** (commit-timestamped version chains; the `auradb-storage` manifest
+`FORMAT_VERSION` is `2`). A v1 data directory is **migrated to v2 transparently**
+the first time v0.3.0 opens it. Stop the old server, **back up the data
+directory**, install v0.3.0, and start it against the same data directory.
+
+When v0.3.0 opens a v1 directory it:
+
+1. Detects `format_version: 1` and migrates the store to v2 in place: each
+   existing record becomes the first committed version on its chain (with an
+   initial commit timestamp), and the manifest gains `last_commit_ts`. Tombstones
+   and version chains are now tracked for all subsequent writes.
+2. Initializes planner statistics (`planner_stats.json`) from the migrated data;
+   run `auradb stats analyze` afterward to refresh cardinality. Missing or corrupt
+   statistics are advisory and fall back to live estimates.
+3. Loads persisted index snapshots when present and valid, and otherwise rebuilds
+   indexes from storage.
+4. Rejects an **unknown future** `format_version` rather than opening it (no
+   silent downgrade).
+
+This is validated by `crates/auradb/tests/upgrade_v0_2_x.rs` against committed
+v0.2.0 and v0.2.1 fixtures written by the respective release binaries (see
+[`tests/fixtures/README.md`](../tests/fixtures/README.md)). The test confirms the
+directory migrates and opens, the catalog and records load, version chains and
+statistics are initialized, lookups work, and `auradb check` passes.
+
+```bash
+# 1. Back up the existing data directory.
+auradb dump --data-dir /var/lib/auradb --output backup-before-0.3.0.jsonl
+
+# 2. Install v0.3.0 (replace the binary or pull the new image).
+
+# 3. Open the directory (the v1-to-v2 migration runs on first open) and validate.
+auradb check --data-dir /var/lib/auradb
+auradb stats analyze --data-dir /var/lib/auradb
+
+# 4. Start the server.
+auradb server --config /etc/auradb/auradb.toml
+```
+
+> Because 0.3.0 rewrites the storage format to v2, an older binary cannot open a
+> directory after it has been migrated. Keep the backup taken before upgrading.
+
 ## From v0.1.0 or v0.2.0 to v0.2.1
 
 The on-disk storage format is unchanged across v0.1.0, v0.2.0, and v0.2.1 (the

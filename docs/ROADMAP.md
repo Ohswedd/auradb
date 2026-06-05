@@ -4,21 +4,41 @@ This roadmap describes where AuraDB is headed beyond the first single-node
 release. It is a statement of direction, not a delivery commitment. Items are
 grouped by theme and listed roughly in the order we expect to approach them.
 
-## Current release: 0.2.1
+## Current release: 0.3.0
 
-AuraDB 0.2.1 is an operational-polish release on top of 0.2.0: a secure Docker
-Compose example, production configuration templates, token-rotation support
-(`auradb auth rotate-token`), backup/restore, v0.1.0 upgrade, and chaos-restart
-test coverage, a connector compatibility smoke, and a benchmark baseline. It
-preserves all 0.2.0 behavior and adds no new wire or storage features.
+AuraDB 0.3.0 adds MVCC and query planner foundations on top of the 0.2.x
+single-node release: each record keeps a chain of committed versions, transactions
+read from a snapshot pinned at `begin` (single-node snapshot isolation with
+optimistic write conflict detection), version garbage collection reclaims old
+versions, and read queries route through a cost-based planner with persisted
+statistics and `EXPLAIN ANALYZE`. The on-disk storage format moves to v2 and an
+older directory is migrated transparently on first open. It preserves all v0.2.1
+behavior for non-transactional reads and remains compatible with Aura Connector
+0.3.x (no connector release required).
 
-The 0.2.0 feature surface, carried forward unchanged, is a single-node database
-focused on security, durability hardening, and public usability: persistent
-storage, transactions, a typed schema catalog, the Query IR executor, primary,
-unique, secondary, document-path, full-text, and exact vector indexes, document
-fields, relationship includes, server-side cursors, observability, a CLI, and
-Docker support. See the [CHANGELOG](../CHANGELOG.md) for the full feature list and
+The carried-forward 0.2.x feature surface is a single-node database focused on
+security, durability hardening, and public usability: persistent storage,
+transactions, a typed schema catalog, the Query IR executor, primary, unique,
+secondary, document-path, full-text, and exact vector indexes, document fields,
+relationship includes, server-side cursors, observability, a CLI, and Docker
+support. See the [CHANGELOG](../CHANGELOG.md) for the full feature list and
 [README](../README.md) for what is and is not claimed.
+
+## Delivered in 0.3.0
+
+- MVCC storage with commit-timestamped version chains and tombstones (storage
+  format v2, with transparent v1-to-v2 migration on first open).
+- Single-node snapshot isolation: transactions pin a read timestamp at `begin` and
+  read from that snapshot, with optimistic first-committer-wins write-conflict
+  detection. This is not serializable isolation.
+- Version garbage collection (`auradb gc` and optional background GC) that
+  reclaims versions no active transaction can observe.
+- A cost-based query planner with a plan tree and costed index selection driven by
+  collection row counts and per-field cardinality.
+- Persisted planner statistics (`planner_stats.json`), refreshed by `auradb stats
+  analyze` and on compaction, with row counts kept current on each mutation.
+- `EXPLAIN ANALYZE` with execution metrics, reachable through the raw Query IR
+  with no protocol break.
 
 ## Delivered in 0.2.0
 
@@ -57,8 +77,11 @@ These single-node hardening items are now delivered:
 
 ## Transactions and consistency
 
-- Promotion from snapshot reads with optimistic conflict detection toward
-  serializable MVCC with version chains.
+MVCC version chains and single-node snapshot isolation with optimistic write
+conflict detection ship in 0.3.0 (see *Delivered in 0.3.0*). Future direction:
+
+- Serializable isolation (the current release is snapshot isolation, which does
+  not prevent write-skew).
 - Configurable isolation levels.
 
 ## Security
@@ -75,8 +98,8 @@ Enforced TLS and enforced static-token authentication ship in 0.2.0.
 - Clustering and sharding with a consensus protocol such as Raft.
 - Multi-region deployment.
 
-These distributed capabilities are explicitly not present in any 0.2.x release,
-have not been started, and are not implied by any current documentation.
+These distributed capabilities are explicitly not present in any 0.2.x or 0.3.x
+release, have not been started, and are not implied by any current documentation.
 
 ## Data services
 

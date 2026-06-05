@@ -7,13 +7,28 @@ record store.
 
 ```
 <data_dir>/
-  MANIFEST           JSON: format version, segment list, next ids
+  MANIFEST           JSON: format version, last_commit_ts, segment list, next ids
   catalog.json       JSON: collection schemas + schema version
+  planner_stats.json JSON: persisted planner statistics (advisory)
   0000000001.seg     append-only segment files (zero-padded id)
   indexes/           persisted index snapshots
     INDEX_MANIFEST.json
     <collection>.idx framed, CRC32-checked index snapshot files
 ```
+
+## Storage format and version chains
+
+The on-disk format is **v2** (`FORMAT_VERSION = 2`). Each record id maps to an
+ordered **version chain** — a list of `Version { commit_ts, value }` where
+`value` is the record and `value = None` is a **tombstone** (a committed delete).
+Versions are ordered by their commit timestamp. Every operation in the log
+carries a `commit_ts`, and the manifest tracks `last_commit_ts` so the commit
+clock never regresses across restarts.
+
+A v1 directory (AuraDB ≤ 0.2.x) is migrated to v2 transparently the first time
+v0.3.0 opens it: each existing record becomes the first committed version on its
+chain. An unknown future format is still rejected rather than opened. See
+[UPGRADING.md](UPGRADING.md).
 
 ## Segment format
 
@@ -23,11 +38,13 @@ A segment is a sequence of **batch frames**. Each frame is:
 [payload length: u64 BE][payload CRC32: u32 BE][payload bytes]
 ```
 
-The payload is the JSON encoding of a `Batch { txn_id, ops }`, where each op is
-`Put { record }` or `Delete { collection, id }`.
+The payload is the JSON encoding of a `Batch { txn_id, commit_ts, ops }`, where
+each op is `Put { record }` or `Delete { collection, id }`. The batch's
+`commit_ts` stamps every version it appends.
 
 Because a batch is a single length-prefixed, checksummed unit, it is **atomic**:
-either the whole batch is durably present or it is not.
+either the whole batch is durably present or it is not. All operations in a batch
+share one commit timestamp, so a transaction's writes become visible together.
 
 ## Writes and durability
 
@@ -35,6 +52,20 @@ either the whole batch is durably present or it is not.
 active segment before returning. `sync_on_commit` can be disabled for bulk
 import or benchmarks, trading durability for throughput - this is documented and
 opt-in, never silent.
+
+## Reads: latest vs as-of
+
+The storage layer serves two kinds of read over the version chains:
+
+- **Latest committed** — `get` and `scan` return the newest non-tombstone version
+  on each chain. This is what non-transactional reads use, unchanged from v0.2.1.
+- **Snapshot (as-of)** — `get_as_of(read_ts)` and `scan_as_of(read_ts)` return the
+  newest version whose `commit_ts <= read_ts`, skipping records whose visible
+  version is a tombstone. Transactions read this way, pinning `read_ts` at `begin`.
+
+`commit_watermark()` reports the timestamp a new transaction would pin at `begin`,
+and `latest_commit_ts()` reports the most recent commit. See
+[TRANSACTIONS.md](TRANSACTIONS.md).
 
 ## Recovery
 
@@ -53,11 +84,29 @@ never regress across restarts.
 
 ## Compaction
 
-`compact` rewrites all live records into a single fresh segment, atomically
-swaps the manifest to point only at it, and removes the old segments. Live data
-is preserved; dead versions and tombstones are discarded. The operation is
-crash-safe: the new segment and manifest are written and fsynced before old
-segments are removed.
+`compact` rewrites the store into a single fresh segment, atomically swaps the
+manifest to point only at it, and removes the old segments. Compaction
+**preserves all versions** on each chain (it does not reclaim history); use
+version GC to reclaim old versions. The operation is crash-safe: the new segment
+and manifest are written and fsynced before old segments are removed. Compaction
+also refreshes persisted planner statistics.
+
+## Version garbage collection
+
+Because each record keeps a version chain, old versions are reclaimed by
+`Storage::gc(cutoff, min_retained)`:
+
+- It removes versions older than `cutoff` that no reader at or after `cutoff` can
+  observe, always keeping the latest version and at least `min_retained` versions
+  per chain.
+- A record whose latest version is a tombstone older than `cutoff` is dropped
+  entirely.
+
+The engine drives GC with a horizon derived from the oldest active transaction
+snapshot (or the commit watermark when no transaction is active), so a version a
+live transaction can still see is never reclaimed. GC runs via `auradb gc` or
+optional background GC configured under `[mvcc]`. See
+[CONFIGURATION.md](CONFIGURATION.md) and [TRANSACTIONS.md](TRANSACTIONS.md).
 
 ## Persisted index snapshots
 
@@ -92,7 +141,12 @@ Physical-offset link optimization is future work; see [ROADMAP](ROADMAP.md).
 `write_and_read`, `delete_removes`, `restart_persistence`, `scan_and_count`,
 `schema_catalog_persists`, `checksum_corruption_detected`,
 `compaction_preserves_live_data`, `drop_schema_removes_records`, plus
-format-level torn-tail and corruption tests. Deterministic seeded recovery tests
+format-level torn-tail and corruption tests. MVCC storage unit tests cover
+version-chain reads (`get`/`scan` latest versus `get_as_of`/`scan_as_of`
+snapshot), tombstone visibility, the commit watermark, `gc` reclaiming old
+versions while keeping the latest and at least `min_retained`, compaction
+preserving all versions, and the v1-to-v2 migration on open. Deterministic seeded
+recovery tests
 (`crates/auradb-storage/tests/recovery.rs`, `crates/auradb/tests/recovery.rs`)
 cover randomized operation sequences against a reference model with and without a
 checkpoint, trailing-segment truncation, mid-batch byte-flip detection, catalog

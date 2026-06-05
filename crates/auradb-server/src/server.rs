@@ -42,6 +42,7 @@ impl Server {
                 storage: StorageOptions {
                     sync_on_commit: config.sync_on_commit,
                 },
+                gc_min_retained_versions: config.mvcc.min_retained_versions,
             },
         )?;
         let cursors = Arc::new(CursorRegistry::new(Duration::from_secs(
@@ -87,14 +88,17 @@ impl Server {
         shutdown: F,
     ) -> Result<()> {
         let reaper = spawn_reaper(self.ctx.clone());
+        let gc = spawn_gc(self.ctx.clone());
         let result = tokio::select! {
             result = self.accept_loop(&listener) => {
                 reaper.abort();
+                if let Some(gc) = &gc { gc.abort(); }
                 result
             }
             _ = shutdown => {
                 tracing::info!("shutdown signal received; stopping accept loop");
                 reaper.abort();
+                if let Some(gc) = &gc { gc.abort(); }
                 Ok(())
             }
         };
@@ -148,6 +152,34 @@ fn spawn_reaper(ctx: ServerContext) -> tokio::task::JoinHandle<()> {
             Metrics::gauge_set(&ctx.metrics.active_cursors, ctx.cursors.len() as u64);
         }
     })
+}
+
+/// Spawn the background version garbage-collector when enabled in `[mvcc]`. It
+/// reclaims MVCC versions no active transaction can observe on a fixed interval.
+fn spawn_gc(ctx: ServerContext) -> Option<tokio::task::JoinHandle<()>> {
+    if !ctx.config.mvcc.gc_enabled {
+        return None;
+    }
+    let interval_secs = ctx.config.mvcc.gc_interval_secs.max(1);
+    Some(tokio::spawn(async move {
+        let mut tick = tokio::time::interval(Duration::from_secs(interval_secs));
+        // Skip the immediate first tick so startup isn't followed by a GC pass.
+        tick.tick().await;
+        loop {
+            tick.tick().await;
+            match ctx.engine.gc() {
+                Ok(report) if report.versions_reclaimed > 0 || report.records_removed > 0 => {
+                    tracing::debug!(
+                        versions = report.versions_reclaimed,
+                        records = report.records_removed,
+                        "background GC reclaimed old versions"
+                    );
+                }
+                Ok(_) => {}
+                Err(e) => tracing::warn!(error = %e, "background GC failed"),
+            }
+        }
+    }))
 }
 
 async fn handle_connection<S>(ctx: ServerContext, socket: S) -> Result<()>

@@ -17,3 +17,8 @@ require_client_cert = false
 enabled = false
 mode = "static-token"
 token_hash_algorithm = "argon2id"
+
+[mvcc]
+gc_enabled = true
+gc_interval_secs = 300
+min_retained_versions = 1

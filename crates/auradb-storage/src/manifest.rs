@@ -7,7 +7,17 @@ use auradb_core::{Error, Result};
 use serde::{Deserialize, Serialize};
 
 /// The on-disk storage format version. Bumped on incompatible layout changes.
-pub const FORMAT_VERSION: u32 = 1;
+///
+/// - **v1** (AuraDB ≤ 0.2.x): single live record per id; no commit timestamps.
+/// - **v2** (AuraDB ≥ 0.3.0): MVCC version chains with per-op commit timestamps.
+///
+/// A v1 database is migrated to v2 transparently on first open (see
+/// [`crate::Storage::open_with`]); a format version newer than this build's
+/// `FORMAT_VERSION` is rejected.
+pub const FORMAT_VERSION: u32 = 2;
+
+/// The oldest on-disk format this build can read (and migrate forward).
+pub const MIN_READABLE_FORMAT_VERSION: u32 = 1;
 
 /// A reference to one segment file.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -34,6 +44,10 @@ pub struct Manifest {
     pub next_segment_id: u64,
     /// The highest transaction id durably recorded.
     pub last_txn_id: u64,
+    /// The highest MVCC commit timestamp durably recorded. Defaults to `0` when
+    /// reading a v1 manifest; the engine reseeds it during migration.
+    #[serde(default)]
+    pub last_commit_ts: u64,
 }
 
 impl Default for Manifest {
@@ -43,6 +57,7 @@ impl Default for Manifest {
             segments: vec![SegmentRef { id: 1 }],
             next_segment_id: 2,
             last_txn_id: 0,
+            last_commit_ts: 0,
         }
     }
 }
@@ -60,9 +75,14 @@ impl Manifest {
         let bytes = fs::read(path)?;
         let manifest: Manifest = serde_json::from_slice(&bytes)
             .map_err(|e| Error::Corruption(format!("manifest is malformed: {e}")))?;
-        if manifest.format_version != FORMAT_VERSION {
+        // Accept any format in [MIN_READABLE_FORMAT_VERSION, FORMAT_VERSION]: an
+        // older format is migrated forward on open; a newer one (a future build's
+        // data) is rejected rather than silently misread.
+        if manifest.format_version > FORMAT_VERSION
+            || manifest.format_version < MIN_READABLE_FORMAT_VERSION
+        {
             return Err(Error::unsupported(format!(
-                "storage format version {} (this build supports {FORMAT_VERSION})",
+                "storage format version {} (this build supports {MIN_READABLE_FORMAT_VERSION}..={FORMAT_VERSION})",
                 manifest.format_version
             )));
         }

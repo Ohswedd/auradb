@@ -7,8 +7,9 @@ use anyhow::Result;
 use auradb_cli::{
     build_config, cmd_auth_hash_token, cmd_auth_rotate_token, cmd_bench, cmd_bench_json,
     cmd_cert_generate_dev, cmd_check, cmd_compact, cmd_compatibility, cmd_config_validate,
-    cmd_doctor, cmd_doctor_json, cmd_dump, cmd_index_check, cmd_index_rebuild, cmd_init,
-    cmd_restore, cmd_server, cmd_status, cmd_status_json, cmd_version,
+    cmd_doctor, cmd_doctor_json, cmd_dump, cmd_gc, cmd_index_check, cmd_index_rebuild, cmd_init,
+    cmd_restore, cmd_server, cmd_stats_analyze, cmd_stats_show, cmd_status, cmd_status_json,
+    cmd_version,
 };
 use clap::{Parser, Subcommand};
 
@@ -96,6 +97,16 @@ enum Command {
         #[arg(long, default_value = ".local/auradb")]
         data_dir: PathBuf,
     },
+    /// Reclaim old MVCC versions no active transaction can observe.
+    Gc {
+        #[arg(long, default_value = ".local/auradb")]
+        data_dir: PathBuf,
+    },
+    /// Planner statistics (analyze / show).
+    Stats {
+        #[command(subcommand)]
+        command: StatsCommand,
+    },
     /// Export all schemas and records to a JSONL file.
     Dump {
         #[arg(long, default_value = ".local/auradb")]
@@ -140,6 +151,23 @@ enum Command {
     Index {
         #[command(subcommand)]
         command: IndexCommand,
+    },
+}
+
+#[derive(Subcommand)]
+enum StatsCommand {
+    /// Recompute and persist planner statistics.
+    Analyze {
+        #[arg(long, default_value = ".local/auradb")]
+        data_dir: PathBuf,
+    },
+    /// Show current planner statistics.
+    Show {
+        #[arg(long, default_value = ".local/auradb")]
+        data_dir: PathBuf,
+        /// Emit statistics as JSON.
+        #[arg(long)]
+        json: bool,
     },
 }
 
@@ -266,6 +294,13 @@ async fn main() -> Result<()> {
         }
         Command::Check { data_dir } => println!("{}", cmd_check(&data_dir)?),
         Command::Compact { data_dir } => println!("{}", cmd_compact(&data_dir)?),
+        Command::Gc { data_dir } => println!("{}", cmd_gc(&data_dir)?),
+        Command::Stats { command } => match command {
+            StatsCommand::Analyze { data_dir } => println!("{}", cmd_stats_analyze(&data_dir)?),
+            StatsCommand::Show { data_dir, json } => {
+                println!("{}", cmd_stats_show(&data_dir, json)?)
+            }
+        },
         Command::Dump { data_dir, out } => {
             let lines = cmd_dump(&data_dir, &out)?;
             println!("wrote {lines} line(s) to {}", out.display());

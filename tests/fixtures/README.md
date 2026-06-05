@@ -29,3 +29,18 @@ between v0.1.0 and v0.2.1, so the upgrade is a compatibility-validation and
 index-rebuild path rather than a data migration. The test also asserts that a
 manifest carrying an unknown future `format_version` is rejected rather than
 silently opened.
+
+## `v0_2_0_data/` and `v0_2_1_data/`
+
+Small AuraDB **v0.2.0** and **v0.2.1** data directories used by the MVCC upgrade
+test (`crates/auradb/tests/upgrade_v0_2_x.rs`). Each was written by the
+corresponding release binary, so it carries the real v0.2.x on-disk layout:
+storage **format v1** (manifest `format_version: 1`), a schema catalog, storage
+segments with records, and persisted index snapshots under `indexes/`.
+
+These fixtures validate the **v1-to-v2 MVCC migration**: opening either directory
+with the v0.3.0 engine migrates the store to format v2 transparently (existing
+records become the first committed version on their chains and planner statistics
+are initialized), after which the catalog and records load, lookups work, and
+`auradb check` passes. As with the v0.1.0 fixture, a manifest carrying an unknown
+future `format_version` is rejected rather than silently opened.

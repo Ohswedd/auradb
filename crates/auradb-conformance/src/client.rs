@@ -398,6 +398,19 @@ impl Client {
         frame.decode_json()
     }
 
+    /// Produce an `EXPLAIN ANALYZE` plan: the analyze flag is carried as an
+    /// optional sibling key in the raw Query IR, so this needs no protocol
+    /// addition (older clients simply omit it).
+    pub async fn explain_analyze(&mut self, query: &FindQuery) -> Result<ExplainPlan> {
+        let mut value =
+            serde_json::to_value(query).map_err(|e| auradb_core::Error::Internal(e.to_string()))?;
+        if let serde_json::Value::Object(map) = &mut value {
+            map.insert("analyze".into(), serde_json::Value::Bool(true));
+        }
+        let frame = self.call_json(Opcode::Explain, 0, &value).await?;
+        frame.decode_json()
+    }
+
     /// Estimate the impact of a schema migration.
     pub async fn migration_estimate(
         &mut self,

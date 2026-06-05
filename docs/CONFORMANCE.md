@@ -27,6 +27,21 @@ transaction-scoped reads (a staged write is visible to the transaction's own
 read but not to a non-transactional read until commit). The Rust test also
 forces cursor streaming via a small page size.
 
+### MVCC and planner scenarios (0.3.0)
+
+- **`snapshot_isolation_later_commit_invisible`** - a transaction that pins its
+  snapshot at `begin` does not observe a write another transaction commits
+  afterward.
+- **`write_conflict_rejected`** - committing a transaction whose write set was
+  modified concurrently is rejected with a conflict (first-committer-wins).
+- **`explain_analyze_shape`** - `EXPLAIN ANALYZE` (requested via the raw Query IR
+  `"analyze": true` flag) returns the plan plus execution metrics
+  (scanned/matched/returned rows, execution and planning time, snapshot ts).
+- **`planner_uses_index`** - the cost-based planner selects an index access path
+  for a selective equality rather than a full scan.
+
+These run as part of the conformance suite alongside the scenarios above.
+
 ## Running
 
 Rust (no server needed - the test spawns one):

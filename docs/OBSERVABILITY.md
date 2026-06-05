@@ -28,6 +28,15 @@ A `snapshot()` is serializable and can be exported:
 The server updates counters and gauges as it handles requests, opens/closes
 cursors and transactions, and reads/writes bytes.
 
+## MVCC and GC
+
+Engine statistics also report the **total stored versions** across all record
+chains and the **active transaction count** (the number of live snapshots), which
+together indicate how much version history GC may be holding for in-flight
+readers. Background version GC logs each pass with the number of versions and
+records it reclaimed. See [STORAGE_ENGINE.md](STORAGE_ENGINE.md) and the `[mvcc]`
+section of [CONFIGURATION.md](CONFIGURATION.md).
+
 ## Health and readiness
 
 The `Health` opcode returns a `HealthReport { status, ready, version,

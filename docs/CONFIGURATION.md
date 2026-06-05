@@ -31,6 +31,7 @@ See [DEPLOYMENT.md](DEPLOYMENT.md) for the secure Docker Compose example.
 | `allow_insecure_bind` | `false` | Permit a non-loopback bind while auth is disabled |
 | `[tls]` | disabled | Server-terminated TLS (see below) |
 | `[auth]` | disabled | Static-token authentication (see below) |
+| `[mvcc]` | enabled | MVCC version garbage collection (see below) |
 
 ### Secure bind
 
@@ -79,6 +80,26 @@ enabled = false              # true terminates TLS; missing/invalid material fai
   certificate or key material aborts startup.
 - `require_client_cert = true` without `client_ca_path` fails startup.
 - Generate development-only certificates with `auradb cert generate-dev`.
+
+## `[mvcc]`
+
+MVCC version garbage collection. AuraDB stores a chain of committed versions per
+record; this section controls how old versions are reclaimed in the background.
+See [STORAGE_ENGINE.md](STORAGE_ENGINE.md) and [TRANSACTIONS.md](TRANSACTIONS.md).
+
+```toml
+[mvcc]
+gc_enabled = true             # run version GC in the background
+gc_interval_secs = 300        # seconds between background GC passes
+min_retained_versions = 1     # minimum versions kept per record chain
+```
+
+- When `gc_enabled = true`, the server runs version GC every `gc_interval_secs`,
+  using the oldest active transaction snapshot (or the commit watermark) as the
+  horizon so a version a live transaction can still observe is never reclaimed.
+- `min_retained_versions` is the floor of versions kept per chain; the latest
+  version is always retained regardless.
+- GC can also be run on demand with `auradb gc`. See [CLI.md](CLI.md).
 
 ## Loading and overrides
 

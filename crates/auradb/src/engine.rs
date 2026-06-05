@@ -12,8 +12,8 @@ use auradb_core::{
 use auradb_index::CollectionIndexes;
 use auradb_query::exec::DataSource;
 use auradb_query::{
-    self as query, CountQuery, ExistsQuery, ExplainPlan, FindQuery, MigrationEstimate, Mutation,
-    MutationResult, Row,
+    self as query, CollectionStats, CountQuery, ExistsQuery, ExplainPlan, FindQuery,
+    MigrationEstimate, Mutation, MutationResult, PlannerStats, Row,
 };
 use auradb_storage::{Batch, LogOp, Storage, StorageOptions};
 use auradb_txn::{Key, StagedOp, Transaction};
@@ -21,10 +21,21 @@ use auradb_txn::{Key, StagedOp, Transaction};
 use crate::idgen::record_id_for;
 
 /// Engine configuration.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone)]
 pub struct EngineOptions {
     /// Storage durability options.
     pub storage: StorageOptions,
+    /// Minimum number of most-recent versions of each live record GC retains.
+    pub gc_min_retained_versions: usize,
+}
+
+impl Default for EngineOptions {
+    fn default() -> Self {
+        EngineOptions {
+            storage: StorageOptions::default(),
+            gc_min_retained_versions: 1,
+        }
+    }
 }
 
 /// Aggregate engine statistics (for observability and health).
@@ -34,6 +45,10 @@ pub struct EngineStats {
     pub collections: usize,
     /// Total live records across all collections.
     pub records: usize,
+    /// Total stored MVCC versions (including superseded versions and tombstones).
+    pub versions: usize,
+    /// Number of transactions currently holding a pinned snapshot.
+    pub active_transactions: usize,
     /// Schema catalog version.
     pub schema_version: u64,
 }
@@ -54,6 +69,17 @@ struct Inner {
     clock: LogicalClock,
     index_dir: PathBuf,
     load_report: IndexLoadReport,
+    /// Read timestamps pinned by currently-active transactions (a multiset, since
+    /// concurrent transactions may begin at the same watermark). The smallest key
+    /// is the oldest snapshot GC must preserve.
+    active_read_ts: BTreeMap<u64, usize>,
+    /// Minimum versions per live record GC retains (from [`EngineOptions`]).
+    gc_min_retained_versions: usize,
+    /// Persisted planner statistics (advisory; refreshed by `analyze` and
+    /// compaction, with row counts kept current on each mutation).
+    planner_stats: PlannerStats,
+    /// Path to the persisted planner statistics file.
+    stats_path: PathBuf,
 }
 
 /// The embeddable AuraDB engine. Cheap to clone (shares one locked core).
@@ -83,12 +109,16 @@ impl DataSource for Inner {
         let id = crate::idgen::derive_id(target, key);
         self.storage.get(&CollectionId::new(target.to_string()), id)
     }
+    fn stats(&self, collection: &str) -> Option<&CollectionStats> {
+        self.planner_stats.get(collection)
+    }
 }
 
-/// Iterate a collection's records *as seen within a transaction*: committed
-/// records overlaid with the transaction's staged puts, with staged deletes and
-/// put-shadowed committed records removed. This is the primitive that gives
-/// transactional reads read-your-writes semantics.
+/// Iterate a collection's records *as seen within a transaction*: the records
+/// visible at the transaction's pinned snapshot (`read_ts`) overlaid with the
+/// transaction's staged puts, with staged deletes and put-shadowed snapshot
+/// records removed. This is the primitive that gives transactional reads both
+/// snapshot isolation and read-your-writes semantics.
 fn overlay_scan<'a>(
     inner: &'a Inner,
     txn: &'a Transaction,
@@ -96,11 +126,11 @@ fn overlay_scan<'a>(
 ) -> impl Iterator<Item = &'a Record> + 'a {
     let cid = CollectionId::new(collection.to_string());
     let scan_cid = cid.clone();
-    // Committed records, minus any the transaction has staged (a staged put
-    // shadows the committed version; a staged delete removes it).
+    // Records visible at the snapshot, minus any the transaction has staged (a
+    // staged put shadows the snapshot version; a staged delete removes it).
     let committed = inner
         .storage
-        .scan(&scan_cid)
+        .scan_as_of(&scan_cid, txn.read_ts())
         .filter(move |r| txn.staged(&Key::new(scan_cid.clone(), r.id)).is_none());
     // The transaction's staged puts for this collection.
     let staged = txn.staged_ops().filter_map(move |(_key, op)| match op {
@@ -148,16 +178,21 @@ impl DataSource for TxnView<'_> {
         match self.txn.staged(&key) {
             Some(StagedOp::Put(record)) => Some(record),
             Some(StagedOp::Delete) => None,
-            None => self
-                .inner
-                .storage
-                .get(&CollectionId::new(collection.to_string()), id),
+            None => self.inner.storage.get_as_of(
+                &CollectionId::new(collection.to_string()),
+                id,
+                self.txn.read_ts(),
+            ),
         }
     }
 
     fn resolve_link(&self, target: &str, key: &Value) -> Option<&Record> {
         let id = crate::idgen::derive_id(target, key);
         self.get(target, id)
+    }
+
+    fn stats(&self, collection: &str) -> Option<&CollectionStats> {
+        self.inner.planner_stats.get(collection)
     }
 }
 
@@ -173,6 +208,8 @@ impl Engine {
         let storage = Storage::open_with(&dir, options.storage)?;
         let clock = LogicalClock::new(storage.max_txn_id() + 1);
         let index_dir = dir.join("indexes");
+        let stats_path = dir.join("planner_stats.json");
+        let planner_stats = PlannerStats::load(&stats_path);
 
         // For each collection, load a valid persisted index snapshot if one
         // exists and matches the current storage state; otherwise rebuild from
@@ -213,6 +250,10 @@ impl Engine {
                 clock,
                 index_dir,
                 load_report,
+                active_read_ts: BTreeMap::new(),
+                gc_min_retained_versions: options.gc_min_retained_versions.max(1),
+                planner_stats,
+                stats_path,
             })),
         })
     }
@@ -231,7 +272,14 @@ impl Engine {
         inner.storage.put_schema(schema.clone())?;
         let mut idx = CollectionIndexes::from_schema(&schema);
         idx.rebuild(inner.storage.scan(&CollectionId::new(name.clone())))?;
-        inner.indexes.insert(name, idx);
+        inner.indexes.insert(name.clone(), idx);
+        // Initialize/refresh planner statistics for the (possibly repopulated)
+        // collection so the planner has a row count immediately.
+        let stats = CollectionStats::compute(
+            &schema,
+            inner.storage.scan(&CollectionId::new(name.clone())),
+        );
+        inner.planner_stats.collections.insert(name, stats);
         Ok(())
     }
 
@@ -309,7 +357,8 @@ impl Engine {
     pub fn apply_mutation(&self, mutation: Mutation) -> Result<MutationResult> {
         let mut inner = self.lock();
         let txn_id = TxnId::AUTO;
-        match mutation {
+        let collection = mutation.collection().to_string();
+        let result = match mutation {
             Mutation::Insert { collection, fields } => {
                 inner.write_records(&collection, vec![fields], WriteMode::Insert, txn_id)
             }
@@ -328,7 +377,9 @@ impl Engine {
             Mutation::Delete { collection, filter } => {
                 inner.delete_records(&collection, filter.as_ref(), txn_id)
             }
-        }
+        }?;
+        inner.refresh_stats_row_count(&collection);
+        Ok(result)
     }
 
     /// Convenience: insert one record, returning its id.
@@ -346,10 +397,15 @@ impl Engine {
 
     // ----- transactions -----
 
-    /// Begin a transaction, returning its id.
+    /// Begin a transaction, pinning its snapshot read timestamp at the current
+    /// commit watermark. All reads within the transaction see committed state as
+    /// of this point in MVCC time (overlaid with the transaction's own writes).
     pub fn begin(&self) -> Transaction {
-        let inner = self.lock();
-        Transaction::begin(TxnId(inner.clock.tick()))
+        let mut inner = self.lock();
+        let read_ts = inner.storage.commit_watermark();
+        let id = TxnId(inner.clock.tick());
+        *inner.active_read_ts.entry(read_ts).or_default() += 1;
+        Transaction::begin_at(id, read_ts)
     }
 
     /// Stage a mutation within a transaction (no durable write yet).
@@ -365,7 +421,15 @@ impl Engine {
         match txn.staged(&key) {
             Some(StagedOp::Put(r)) => Some(r.clone()),
             Some(StagedOp::Delete) => None,
-            None => self.lock().get(collection, id).cloned(),
+            None => self
+                .lock()
+                .storage
+                .get_as_of(
+                    &CollectionId::new(collection.to_string()),
+                    id,
+                    txn.read_ts(),
+                )
+                .cloned(),
         }
     }
 
@@ -429,16 +493,65 @@ impl Engine {
         query::explain(&view, q)
     }
 
-    /// Commit a transaction atomically, with optimistic conflict detection.
+    /// Commit a transaction atomically, with snapshot-isolation write-conflict
+    /// detection. On conflict the transaction is aborted and its snapshot
+    /// released.
     pub fn commit(&self, txn: Transaction) -> Result<()> {
+        let read_ts = txn.read_ts();
         let mut inner = self.lock();
-        inner.commit_transaction(txn)
+        let result = inner.commit_transaction(txn);
+        inner.release_read_ts(read_ts);
+        result
     }
 
-    /// Roll back a transaction, discarding all staged writes.
+    /// Roll back a transaction, discarding all staged writes and releasing its
+    /// snapshot.
     pub fn rollback(&self, mut txn: Transaction) {
+        let read_ts = txn.read_ts();
         txn.finish();
         drop(txn);
+        self.lock().release_read_ts(read_ts);
+    }
+
+    /// Reclaim MVCC versions no active transaction can observe.
+    ///
+    /// The reclamation horizon is the oldest read timestamp pinned by an active
+    /// transaction, or the commit watermark when none are active. Old versions
+    /// older than the horizon are removed (always keeping the latest, and at
+    /// least the configured minimum), and fully-deleted records are dropped. The
+    /// latest version of every live record is preserved, so indexes — which
+    /// reflect only latest live state — need no rebuild.
+    pub fn gc(&self) -> Result<auradb_storage::GcReport> {
+        let mut inner = self.lock();
+        let cutoff = inner.gc_cutoff();
+        let min_retained = inner.gc_min_retained_versions;
+        inner.storage.gc(cutoff, min_retained)
+    }
+
+    /// Recompute and persist planner statistics (`analyze`). Statistics are
+    /// advisory: they change which plan the planner chooses, never query results.
+    pub fn analyze(&self) -> Result<()> {
+        self.lock().analyze_all()
+    }
+
+    /// A snapshot of the current planner statistics (for `stats show`).
+    pub fn planner_stats(&self) -> PlannerStats {
+        self.lock().planner_stats.clone()
+    }
+
+    /// Produce an `EXPLAIN ANALYZE` plan: run the find and attach measured
+    /// execution metrics.
+    pub fn explain_analyze(&self, q: &FindQuery) -> Result<ExplainPlan> {
+        let inner = self.lock();
+        query::explain_analyze(&*inner, q, None)
+    }
+
+    /// Produce an `EXPLAIN ANALYZE` plan within a transaction; reports the
+    /// snapshot read timestamp.
+    pub fn txn_explain_analyze(&self, txn: &Transaction, q: &FindQuery) -> Result<ExplainPlan> {
+        let inner = self.lock();
+        let view = inner.txn_view(txn, &q.collection)?;
+        query::explain_analyze(&view, q, Some(txn.read_ts()))
     }
 
     // ----- maintenance -----
@@ -449,6 +562,8 @@ impl Engine {
         let mut inner = self.lock();
         let report = inner.storage.compact()?;
         inner.persist_indexes()?;
+        // Compaction is a natural point to refresh and persist planner stats.
+        inner.analyze_all()?;
         Ok(report)
     }
 
@@ -462,7 +577,8 @@ impl Engine {
     pub fn checkpoint(&self) -> Result<()> {
         let mut inner = self.lock();
         inner.storage.flush()?;
-        inner.persist_indexes()
+        inner.persist_indexes()?;
+        inner.persist_stats()
     }
 
     /// Persist index snapshots without flushing storage.
@@ -512,6 +628,8 @@ impl Engine {
         EngineStats {
             collections: inner.storage.collection_count(),
             records: inner.storage.total_records(),
+            versions: inner.storage.total_versions(),
+            active_transactions: inner.active_read_ts.values().sum(),
             schema_version: inner.storage.schema_version(),
         }
     }
@@ -562,6 +680,60 @@ impl Inner {
             },
         )?;
         Ok(())
+    }
+
+    /// Release a transaction's pinned read timestamp from the active set.
+    fn release_read_ts(&mut self, read_ts: u64) {
+        if let Some(count) = self.active_read_ts.get_mut(&read_ts) {
+            *count -= 1;
+            if *count == 0 {
+                self.active_read_ts.remove(&read_ts);
+            }
+        }
+    }
+
+    /// The GC reclamation horizon: the oldest active snapshot, or the commit
+    /// watermark when no transactions are active.
+    fn gc_cutoff(&self) -> u64 {
+        self.active_read_ts
+            .keys()
+            .next()
+            .copied()
+            .unwrap_or_else(|| self.storage.commit_watermark())
+    }
+
+    /// Keep a collection's planner row count current after a mutation. Cheap:
+    /// reads the live count for one collection. Cardinality is refreshed only by
+    /// [`Inner::analyze_all`].
+    fn refresh_stats_row_count(&mut self, collection: &str) {
+        let count = self
+            .storage
+            .count(&CollectionId::new(collection.to_string()));
+        self.planner_stats
+            .collections
+            .entry(collection.to_string())
+            .or_default()
+            .row_count = count;
+    }
+
+    /// Recompute full planner statistics for every collection from the latest
+    /// committed state and persist them.
+    fn analyze_all(&mut self) -> Result<()> {
+        let schemas: Vec<CollectionSchema> =
+            self.storage.list_schemas().into_iter().cloned().collect();
+        let mut stats = PlannerStats::default();
+        for schema in &schemas {
+            let cid = CollectionId::new(schema.name.clone());
+            let computed = CollectionStats::compute(schema, self.storage.scan(&cid));
+            stats.collections.insert(schema.name.clone(), computed);
+        }
+        self.planner_stats = stats;
+        self.persist_stats()
+    }
+
+    /// Persist planner statistics to disk (advisory; best-effort durability).
+    fn persist_stats(&self) -> Result<()> {
+        self.planner_stats.save(&self.stats_path)
     }
 
     fn schema_for(&self, collection: &str) -> Result<CollectionSchema> {
@@ -683,7 +855,10 @@ impl Inner {
 
         let ops = prepared
             .iter()
-            .map(|(_, r)| LogOp::Put { record: r.clone() })
+            .map(|(_, r)| LogOp::Put {
+                commit_ts: 0,
+                record: r.clone(),
+            })
             .collect();
         self.storage.commit_batch(Batch { txn_id, ops })?;
 
@@ -784,7 +959,10 @@ impl Inner {
         }
         let ops = prepared
             .iter()
-            .map(|(_, r)| LogOp::Put { record: r.clone() })
+            .map(|(_, r)| LogOp::Put {
+                commit_ts: 0,
+                record: r.clone(),
+            })
             .collect();
         self.storage.commit_batch(Batch { txn_id, ops })?;
 
@@ -824,6 +1002,7 @@ impl Inner {
         let ops = targets
             .iter()
             .map(|r| LogOp::Delete {
+                commit_ts: 0,
                 collection: cid.clone(),
                 id: r.id,
             })
@@ -868,6 +1047,28 @@ impl Inner {
 
     // ----- transactional staging -----
 
+    /// A single record as the transaction sees it: its own staged write if any,
+    /// otherwise the version visible at its pinned snapshot. Cloned so the caller
+    /// may then mutate the transaction.
+    fn txn_get_visible(
+        &self,
+        txn: &Transaction,
+        cid: &CollectionId,
+        id: RecordId,
+    ) -> Option<Record> {
+        match txn.staged(&Key::new(cid.clone(), id)) {
+            Some(StagedOp::Put(r)) => Some(r.clone()),
+            Some(StagedOp::Delete) => None,
+            None => self.storage.get_as_of(cid, id, txn.read_ts()).cloned(),
+        }
+    }
+
+    /// All records in a collection as the transaction sees them (snapshot +
+    /// staged overlay), cloned.
+    fn txn_scan_visible(&self, txn: &Transaction, collection: &str) -> Vec<Record> {
+        overlay_scan(self, txn, collection).cloned().collect()
+    }
+
     fn stage_mutation(&self, txn: &mut Transaction, mutation: Mutation) -> Result<MutationResult> {
         let collection = mutation.collection().to_string();
         let schema = self.schema_for(&collection)?;
@@ -878,7 +1079,7 @@ impl Inner {
             Mutation::Insert { fields, .. } | Mutation::Upsert { fields, .. } => {
                 schema.validate_record(&fields)?;
                 let id = record_id_for(&schema, &fields, self.clock.tick())?;
-                let existing = self.storage.get(&cid, id).cloned();
+                let existing = self.txn_get_visible(txn, &cid, id);
                 self.referential_check(&schema, &fields)?;
                 let record = Record {
                     id,
@@ -899,7 +1100,7 @@ impl Inner {
                 for fields in records {
                     schema.validate_record(&fields)?;
                     let id = record_id_for(&schema, &fields, self.clock.tick())?;
-                    let existing = self.storage.get(&cid, id).cloned();
+                    let existing = self.txn_get_visible(txn, &cid, id);
                     self.referential_check(&schema, &fields)?;
                     let record = Record {
                         id,
@@ -915,15 +1116,14 @@ impl Inner {
             }
             Mutation::Update { filter, set, .. } => {
                 let targets: Vec<Record> = self
-                    .storage
-                    .scan(&cid)
+                    .txn_scan_visible(txn, &collection)
+                    .into_iter()
                     .filter(|r| {
                         filter
                             .as_ref()
                             .map(|f| query::eval::matches(r, f))
                             .unwrap_or(true)
                     })
-                    .cloned()
                     .collect();
                 for old in targets {
                     let mut fields = old.fields.clone();
@@ -946,15 +1146,14 @@ impl Inner {
             }
             Mutation::Delete { filter, .. } => {
                 let targets: Vec<Record> = self
-                    .storage
-                    .scan(&cid)
+                    .txn_scan_visible(txn, &collection)
+                    .into_iter()
                     .filter(|r| {
                         filter
                             .as_ref()
                             .map(|f| query::eval::matches(r, f))
                             .unwrap_or(true)
                     })
-                    .cloned()
                     .collect();
                 for old in targets {
                     txn.stage_delete(cid.clone(), old.id, Some(old.version));
@@ -968,16 +1167,22 @@ impl Inner {
 
     fn commit_transaction(&mut self, txn: Transaction) -> Result<()> {
         let txn_id = txn.id();
-        let (observed, staged) = txn.into_parts();
+        let read_ts = txn.read_ts();
+        let (_observed, staged) = txn.into_parts();
 
-        // 1. Optimistic conflict detection against committed versions.
-        for (key, observed_version) in &observed {
-            let current = self.storage.get(&key.collection, key.id).map(|r| r.version);
-            if current != *observed_version {
-                return Err(Error::Conflict(format!(
-                    "record {} in {} changed concurrently",
-                    key.id, key.collection
-                )));
+        // 1. Snapshot-isolation write-conflict detection (first-committer-wins).
+        // The transaction aborts if any record it wrote has a committed version
+        // (live or tombstone) newer than its snapshot — i.e. another transaction
+        // committed a conflicting write to the same key after this one began.
+        // This covers write-write, update-delete, and delete-update conflicts.
+        for key in staged.keys() {
+            if let Some(latest) = self.storage.latest_commit_ts(&key.collection, key.id) {
+                if latest > read_ts {
+                    return Err(Error::Conflict(format!(
+                        "record {} in {} was modified by a concurrent transaction",
+                        key.id, key.collection
+                    )));
+                }
             }
         }
 
@@ -997,6 +1202,7 @@ impl Inner {
                     record.version = existing.as_ref().map(|r| r.version + 1).unwrap_or(1);
                     record.created_txn = txn_id;
                     batch_ops.push(LogOp::Put {
+                        commit_ts: 0,
                         record: record.clone(),
                     });
                     index_updates.push((existing, Some(record)));
@@ -1007,6 +1213,7 @@ impl Inner {
                         self.inbound_link_check(key.collection.as_str(), existing)?;
                     }
                     batch_ops.push(LogOp::Delete {
+                        commit_ts: 0,
                         collection: key.collection.clone(),
                         id: key.id,
                     });
@@ -1026,6 +1233,7 @@ impl Inner {
         })?;
 
         // 4. Update indexes.
+        let mut affected: HashSet<String> = HashSet::new();
         for (old, new) in index_updates {
             let collection = old
                 .as_ref()
@@ -1040,6 +1248,12 @@ impl Inner {
                     idx.insert(new);
                 }
             }
+            affected.insert(collection);
+        }
+
+        // 5. Keep planner row counts current for the collections written.
+        for collection in affected {
+            self.refresh_stats_row_count(&collection);
         }
         Ok(())
     }

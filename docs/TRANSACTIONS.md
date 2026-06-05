@@ -1,15 +1,24 @@
 # Transactions
 
-`auradb-txn` plus the engine implement single-node transactions.
+`auradb-txn` plus the engine implement single-node transactions with
+**snapshot isolation**.
+
+> AuraDB v0.3.0 implements single-node snapshot isolation with optimistic write
+> conflict detection. It is not serializable isolation.
 
 ## Model
 
-A transaction stages its mutations in memory and records the **version it
-observed** for every record it reads or writes (`None` = observed absent).
-Staged writes are invisible to other transactions and provide read-your-writes
-within the transaction, for point reads (`txn_get`) **and** for every query
-read (find, filter, count, exists, explain, vector, document-path, full-text,
-relationship include, and cursor paging).
+A transaction pins a **read timestamp** (`read_ts`) at `begin`: the MVCC commit
+watermark at that instant. Every read inside the transaction sees committed
+state **as of `read_ts`** (resolved against storage version chains), overlaid
+with the transaction's own staged writes (read-your-writes). The transaction
+does not observe writes committed by other transactions after it began.
+
+A transaction stages its mutations in memory; staged writes are invisible to
+other transactions and provide read-your-writes within the transaction, for
+point reads (`txn_get`) **and** for every query read (find, filter, count,
+exists, explain, vector, document-path, full-text, relationship include, and
+cursor paging — all evaluated against the snapshot).
 
 ## Transaction-scoped reads
 
@@ -39,26 +48,52 @@ bounded by the queried collection's size; non-transactional reads pay nothing.
 
 Commit runs under the engine's single write lock:
 
-1. **Conflict detection** - for every observed `(key, version)`, the current
-   committed version must still match. Any mismatch aborts with
-   `Error::Conflict`.
+1. **Write-conflict detection** (first-committer-wins) - for every record the
+   transaction wrote, the latest committed version's commit timestamp must not be
+   newer than the transaction's `read_ts`. If another transaction committed a
+   write to the same record after this one's snapshot was pinned, commit aborts
+   with `Error::Conflict`. This covers write-write, update-delete, and
+   delete-update conflicts.
 2. **Validation** - uniqueness and referential integrity are checked for the
    final staged records.
-3. **Versioning** - each put gets `previous_version + 1` (or 1 for new records).
-4. **Durable commit** - all operations are written as one atomic storage batch.
-5. **Index update** - secondary/unique/vector indexes are updated to match.
+3. **Versioning** - the batch is stamped with a fresh commit timestamp; each put
+   appends a new version to its chain (and gets `previous_version + 1`), each
+   delete appends a tombstone version.
+4. **Durable commit** - all operations are written as one atomic storage batch
+   at a single commit timestamp.
+5. **Index update** - secondary/unique/vector indexes are updated to the latest
+   committed state.
 
-Rollback simply discards the staged set; nothing was written.
+Rollback simply discards the staged set and releases the snapshot; nothing was
+written.
 
 ## Isolation level
 
-**Read-your-writes over the committed state, with optimistic write/read conflict
-detection on commit.** A transaction's reads see committed data overlaid with
-its own staged changes; commit detects concurrent modification of any record the
-transaction observed. This is honest about what it is: it is **not** serializable
-MVCC, and reads observe other transactions' commits (the view is not pinned to a
-begin-time snapshot). AuraDB does not claim more. Distributed transactions are
-not implemented.
+**Single-node snapshot isolation with optimistic write-conflict detection.** A
+transaction reads a consistent snapshot pinned at `begin` (overlaid with its own
+writes) and never observes another transaction's later commit. At commit,
+first-committer-wins write-conflict detection aborts a transaction whose write
+set was modified concurrently. This is **not** serializable isolation (it does
+not prevent write-skew anomalies), and AuraDB does not claim more. Distributed
+transactions are not implemented.
+
+## Garbage collection
+
+Because each record keeps a version chain, old versions are reclaimed by version
+GC (`auradb gc`, or background GC when enabled). GC removes only versions no
+active transaction can observe — it preserves every version visible to the
+oldest pinned snapshot, always keeps the latest version, and drops records whose
+latest version is a tombstone older than that horizon. See
+`docs/STORAGE_ENGINE.md`.
+
+An open transaction holds its snapshot — and therefore the versions visible to
+it — until it commits or rolls back. The server releases a transaction's
+snapshot when the transaction ends **or when its connection closes**: a
+disconnect rolls back any open transaction through the engine, so an abandoned
+connection never pins a snapshot indefinitely. A long-running transaction that
+stays open does hold old versions until it finishes; the number of transactions
+currently holding a snapshot is reported by `EngineStats::active_transactions`
+and the server's `active_transactions` metric.
 
 ## Auto-commit
 
@@ -89,3 +124,13 @@ atomicity, plus the transaction-scoped read suite (`crates/auradb/tests/transact
 
 plus `transactional_read_sees_staged_write_over_the_wire` (server dispatch) and
 the over-the-wire transaction scenarios in the conformance suite.
+
+The snapshot-isolation suite (`crates/auradb/tests/mvcc.rs`) covers
+`snapshot_does_not_see_later_commit`, `transaction_sees_own_insert_update_and_hides_delete`,
+`non_transactional_read_sees_latest`, `write_write_conflict_rejected`,
+`update_delete_conflict_rejected`, `delete_update_conflict_rejected`,
+`rollback_discards_versions`, `commit_assigns_monotonic_commit_ts`,
+`concurrent_readers_keep_snapshot`, `cursor_keeps_snapshot_after_later_commit`,
+`relationship_include_uses_snapshot`, `vector_nearest_uses_snapshot`,
+`document_path_index_uses_snapshot`, `full_text_uses_snapshot`, and
+`gc_reclaims_old_versions_but_keeps_active_snapshot`.
