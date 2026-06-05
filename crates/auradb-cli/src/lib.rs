@@ -449,6 +449,57 @@ pub fn cmd_compact(data_dir: &Path) -> Result<String> {
     ))
 }
 
+/// `auradb gc` - reclaim old MVCC versions no active transaction can observe.
+pub fn cmd_gc(data_dir: &Path) -> Result<String> {
+    let engine = Engine::open(data_dir)?;
+    let report = engine.gc()?;
+    Ok(format!(
+        "garbage collection reclaimed {} version(s) and removed {} deleted record(s); {} version(s) retained",
+        report.versions_reclaimed, report.records_removed, report.versions_after
+    ))
+}
+
+/// `auradb stats analyze` - recompute and persist planner statistics.
+pub fn cmd_stats_analyze(data_dir: &Path) -> Result<String> {
+    let engine = Engine::open(data_dir)?;
+    engine.analyze()?;
+    let stats = engine.planner_stats();
+    Ok(format!(
+        "analyzed {} collection(s); planner statistics persisted",
+        stats.collections.len()
+    ))
+}
+
+/// `auradb stats show` - print current planner statistics.
+pub fn cmd_stats_show(data_dir: &Path, json: bool) -> Result<String> {
+    let engine = Engine::open(data_dir)?;
+    let stats = engine.planner_stats();
+    if json {
+        return Ok(serde_json::to_string_pretty(&stats)?);
+    }
+    let mut out = String::new();
+    if stats.collections.is_empty() {
+        out.push_str("no planner statistics yet; run `auradb stats analyze`");
+        return Ok(out);
+    }
+    for (name, c) in &stats.collections {
+        out.push_str(&format!(
+            "{name}: {} rows, avg {} bytes/record\n",
+            c.row_count, c.avg_record_size
+        ));
+        for (field, distinct) in &c.field_cardinality {
+            out.push_str(&format!("  {field}: {distinct} distinct value(s)\n"));
+        }
+        for (field, n) in &c.vector_count {
+            out.push_str(&format!("  {field}: {n} vector(s)\n"));
+        }
+        for (field, n) in &c.text_field_docs {
+            out.push_str(&format!("  {field}: {n} full-text document(s)\n"));
+        }
+    }
+    Ok(out.trim_end().to_string())
+}
+
 /// A line in a dump file: either a schema or a record.
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
@@ -786,6 +837,7 @@ pub fn run_bench(data_dir: &Path, records: usize, commit: Option<String>) -> Res
             storage: StorageOptions {
                 sync_on_commit: false,
             },
+            ..EngineOptions::default()
         },
     )?;
     let schema = CollectionSchema::new("Bench")
@@ -1159,6 +1211,44 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let out = cmd_bench(dir.path(), 50).unwrap();
         assert!(out.contains("ops/s"));
+    }
+
+    #[test]
+    fn gc_and_stats_commands() {
+        use auradb::core::{CollectionSchema, FieldDef, FieldType};
+        let dir = tempfile::tempdir().unwrap();
+        let data = dir.path().join("data");
+        {
+            let engine = Engine::open(&data).unwrap();
+            engine
+                .create_schema(
+                    CollectionSchema::new("C")
+                        .with_field(FieldDef {
+                            name: "id".into(),
+                            field_type: FieldType::Uuid,
+                            primary_key: true,
+                            unique: true,
+                            nullable: false,
+                            indexed: false,
+                        })
+                        .with_field(FieldDef::new("v", FieldType::Int)),
+                )
+                .unwrap();
+            for i in 0..5 {
+                let mut f = Document::new();
+                f.insert("id".into(), Value::Text(format!("r{i}")));
+                f.insert("v".into(), Value::Int(i));
+                engine.insert("C", f).unwrap();
+            }
+        }
+        // stats analyze then show reflect the data.
+        assert!(cmd_stats_analyze(&data).unwrap().contains("analyzed 1"));
+        let show = cmd_stats_show(&data, false).unwrap();
+        assert!(show.contains("C: 5 rows"), "{show}");
+        let json = cmd_stats_show(&data, true).unwrap();
+        assert!(json.contains("\"row_count\": 5"), "{json}");
+        // gc runs cleanly.
+        assert!(cmd_gc(&data).unwrap().contains("garbage collection"));
     }
 
     #[test]

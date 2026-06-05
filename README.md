@@ -7,7 +7,7 @@
 [![CI](https://github.com/Ohswedd/auradb/actions/workflows/ci.yml/badge.svg)](https://github.com/Ohswedd/auradb/actions/workflows/ci.yml)
 [![Security](https://github.com/Ohswedd/auradb/actions/workflows/security.yml/badge.svg)](https://github.com/Ohswedd/auradb/actions/workflows/security.yml)
 [![Docker](https://github.com/Ohswedd/auradb/actions/workflows/docker.yml/badge.svg)](https://github.com/Ohswedd/auradb/actions/workflows/docker.yml)
-[![Release](https://img.shields.io/badge/release-v0.2.1-green.svg)](CHANGELOG.md)
+[![Release](https://img.shields.io/badge/release-v0.3.0-green.svg)](CHANGELOG.md)
 [![Rust](https://img.shields.io/badge/rust-1.85%2B-orange.svg)](https://www.rust-lang.org)
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
 
@@ -20,7 +20,9 @@ speaks the Aura Wire Protocol, persists data locally, and provides typed schema,
 document fields, relationship includes, exact vector search, transactions,
 cursors, observability, and CLI tooling. As of 0.2.0 it also provides enforced
 token authentication, server-terminated TLS, persisted index snapshots,
-document-path indexes, and basic full-text search.
+document-path indexes, and basic full-text search. As of 0.3.0 it adds MVCC
+storage with single-node snapshot isolation and a cost-based query planner with
+`EXPLAIN ANALYZE`.
 
 This repository is the database engine side of the Aura ecosystem. It implements
 a real, persistent, recoverable, single-node server, not a mock or an in-memory
@@ -28,15 +30,17 @@ demo.
 
 ## Scope and honesty
 
-AuraDB 0.2.1 is an operational-polish release on top of the 0.2.0 single-node
-release: it adds a secure Docker Compose example, production configuration
-templates, token rotation, backup/restore, v0.1.0 upgrade and chaos-restart test
-coverage, a connector compatibility smoke, and a benchmark baseline, while
-preserving all 0.2.0 behavior. It is a complete single-node server, and it is
-honest about its boundaries. The following are not implemented and not claimed:
-distributed clustering, replication, sharding, failover, multi-region, and Raft;
-approximate (ANN/HNSW) vector indexes; BM25 full-text and hybrid fusion ranking;
-and serializable MVCC. Authentication and TLS are now implemented and enforced
+AuraDB 0.3.0 builds on the 0.2.x single-node release with MVCC storage and query
+planner foundations: each record keeps a chain of committed versions, transactions
+read from a snapshot pinned at `begin`, and read queries route through a cost-based
+planner with `EXPLAIN ANALYZE`. It preserves all v0.2.1 behavior for
+non-transactional reads. AuraDB v0.3.0 implements single-node snapshot isolation
+with optimistic write conflict detection. It is not serializable isolation. It is
+a complete single-node server, and it is honest about its boundaries. The
+following are not implemented and not claimed: distributed clustering, replication,
+sharding, failover, multi-region, and Raft; approximate (ANN/HNSW) vector indexes;
+BM25 full-text and hybrid fusion ranking; and serializable isolation.
+Authentication and TLS are now implemented and enforced
 when enabled, but RBAC, field-level encryption, encryption at rest, and audit
 logging are not. Unsupported operations return a structured error. See
 [Limitations](#security-model-and-current-limits) and the
@@ -65,10 +69,23 @@ Connector 0.3.x ships a native AuraDB-over-TCP backend that speaks AWP 1
 [`docs/AURA_CONNECTOR_COMPATIBILITY.md`](docs/AURA_CONNECTOR_COMPATIBILITY.md)
 and [`docs/COMPATIBILITY.md`](docs/COMPATIBILITY.md).
 
-## What works in 0.2.1
+## What works in 0.3.0
 
-- **Persistent storage.** Append-only checksummed segment log, manifest, crash
-  recovery, corruption detection, and compaction.
+- **Persistent storage.** Append-only checksummed segment log (storage format v2
+  with commit-timestamped version chains), manifest, crash recovery, corruption
+  detection, and compaction.
+- **MVCC and snapshot isolation.** Each record keeps an ordered chain of committed
+  versions (a delete is a tombstone version). Transactions pin a read timestamp at
+  `begin` and read from that snapshot; non-transactional reads see the latest
+  committed state. Commit uses optimistic, first-committer-wins write-conflict
+  detection. Version garbage collection (`auradb gc` and optional background GC)
+  reclaims versions no active transaction can observe. See
+  [`docs/TRANSACTIONS.md`](docs/TRANSACTIONS.md) and
+  [`docs/STORAGE_ENGINE.md`](docs/STORAGE_ENGINE.md).
+- **Query planner and `EXPLAIN ANALYZE`.** Read queries route through a cost-based
+  planner that uses persisted statistics (`planner_stats.json`) to choose the most
+  selective applicable index or a full scan. `EXPLAIN ANALYZE` reports measured
+  execution metrics. See [`docs/QUERY_ENGINE.md`](docs/QUERY_ENGINE.md).
 - **Persisted indexes.** Indexes are snapshotted to disk at checkpoints and
   loaded on open when a content fingerprint and schema shape match; otherwise the
   engine safely rebuilds from storage. See [`docs/INDEXING.md`](docs/INDEXING.md).
@@ -104,7 +121,7 @@ and [`docs/COMPATIBILITY.md`](docs/COMPATIBILITY.md).
 
 Distributed clustering, replication, sharding, failover, multi-region, and Raft;
 ANN/HNSW vector indexes; BM25 full-text and hybrid fusion ranking; serializable
-MVCC; RBAC, field-level encryption, encryption at rest, and audit logging;
+isolation; RBAC, field-level encryption, encryption at rest, and audit logging;
 time-travel queries; and change streams. These are tracked in the
 [roadmap](docs/ROADMAP.md).
 
@@ -214,7 +231,10 @@ auradb version
 auradb init --data-dir .local/auradb
 auradb doctor --data-dir .local/auradb --json
 auradb check --data-dir .local/auradb
-auradb bench --json --output benches/baseline/v0.2.1.json
+auradb gc --data-dir .local/auradb
+auradb stats analyze --data-dir .local/auradb
+auradb stats show --data-dir .local/auradb --json
+auradb bench --json --output benches/baseline/v0.3.0.json
 auradb status --addr 127.0.0.1:7171 --json
 auradb auth hash-token --token "your-secret"
 auradb auth rotate-token --config AuraDB.toml --token "new-secret" --backup
@@ -233,6 +253,9 @@ auradb index check --data-dir .local/auradb
 | `auradb doctor` | Validate config and data directory; print a redacted security summary (`--json`) |
 | `auradb status` | Ping a running server and report health (`--token`, `--tls-ca`, `--tls-server-name`, `--json`) |
 | `auradb check` | Verify on-disk index consistency |
+| `auradb gc` | Reclaim record versions no active transaction can observe |
+| `auradb stats analyze` | Recompute and persist planner statistics |
+| `auradb stats show` | Print persisted planner statistics (`--json`) |
 | `auradb compact` | Compact the storage log and write fresh index snapshots |
 | `auradb dump` | Export schemas and records to JSONL (`--output`) |
 | `auradb restore` | Restore from a JSONL dump (`--input`) |
@@ -261,26 +284,28 @@ physical storage offsets are never exposed as durable identity. See
 The Query IR supports point reads, filters (comparisons, `in`, `contains`,
 `AND`/`OR`/`NOT`, document path access), ordering, limit and offset, projection,
 count, exists, insert, bulk insert, update, delete, upsert, relationship
-includes, exact vector nearest-neighbour search, `EXPLAIN`, and a migration
-impact estimate. Unsupported operations return a structured capability error. See
+includes, exact vector nearest-neighbour search, `EXPLAIN` (and `EXPLAIN
+ANALYZE`), and a migration impact estimate. Reads route through a cost-based
+planner. Unsupported operations return a structured capability error. See
 [`docs/QUERY_ENGINE.md`](docs/QUERY_ENGINE.md).
 
 ## Storage and transaction model
 
-Storage is an append-only, CRC32C-checksummed segment log with a manifest. On
-open, the engine replays segments to rebuild the live record map and indexes; a
-torn tail record is detected by checksum and truncated. Transactions buffer a
-write set, then commit by acquiring the engine write lock, performing optimistic
-write-write conflict detection against the versions read at transaction start,
-and appending a commit batch atomically with the commit marker written last.
-Rollback discards the write set. Reads issued with a transaction execute against
-the transaction view (committed state overlaid with that transaction's own
-staged writes and deletes), so a transaction sees its uncommitted inserts and
-updates and not its deletes (read-your-writes), uniformly across find, filter,
-count, exists, explain, vector, document-path, full-text, relationship include,
-and cursor paging. The isolation model is read-your-writes over committed state
-with optimistic conflict detection on commit; serializable MVCC is not claimed.
-See [`docs/STORAGE_ENGINE.md`](docs/STORAGE_ENGINE.md) and
+Storage is an append-only, CRC32C-checksummed segment log with a manifest, using
+MVCC version chains (storage format v2): each record id maps to an ordered chain
+of committed versions stamped with a commit timestamp, and a delete is a
+tombstone version. On open, the engine replays segments to rebuild the version
+chains and indexes; a torn tail record is detected by checksum and truncated.
+Transactions pin a read timestamp at `begin` and read from that snapshot
+(committed state as of the snapshot, overlaid with the transaction's own staged
+writes and deletes), uniformly across find, filter, count, exists, explain,
+vector, document-path, full-text, relationship include, and cursor paging.
+Non-transactional reads see the latest committed state. Commit acquires the
+engine write lock, performs optimistic first-committer-wins write-conflict
+detection, and appends a commit batch atomically. Rollback discards the staged
+set. AuraDB v0.3.0 implements single-node snapshot isolation with optimistic
+write conflict detection. It is not serializable isolation. See
+[`docs/STORAGE_ENGINE.md`](docs/STORAGE_ENGINE.md) and
 [`docs/TRANSACTIONS.md`](docs/TRANSACTIONS.md).
 
 ## Vector, document, and relationship support
@@ -308,7 +333,7 @@ are exposed. No external collector is required to run the server. See
 A published image is available on the GitHub Container Registry:
 
 ```bash
-docker run --rm -p 7171:7171 -v auradb-data:/data ghcr.io/ohswedd/auradb:0.2.1
+docker run --rm -p 7171:7171 -v auradb-data:/data ghcr.io/ohswedd/auradb:0.3.0
 ```
 
 The image runs as a non-root user, exposes `7171`, stores data in the `/data`
@@ -332,13 +357,13 @@ docker compose -f docker-compose.secure.yml config
 
 ## Upgrading
 
-The on-disk storage format is unchanged across v0.1.0, v0.2.0, and v0.2.1, so
-upgrading is a drop-in binary replacement. When v0.2.1 opens an older data
-directory it validates the manifest (rejecting an unknown future format rather
-than opening it), loads the catalog and records, and rebuilds indexes from
-storage when no valid snapshot is present. This is covered by a test against a
-committed v0.1.0 fixture. Take a backup with `auradb dump` first. See
-[`docs/UPGRADING.md`](docs/UPGRADING.md).
+The on-disk storage format moves to v2 (commit-timestamped version chains) in
+0.3.0. A v0.1.0, v0.2.0, or v0.2.1 data directory (storage format v1) is migrated
+to v2 transparently the first time v0.3.0 opens it: existing records become the
+first committed version on each chain, and planner statistics are initialized. An
+unknown future format is still rejected rather than opened. This is covered by
+tests against committed v0.2.0 and v0.2.1 fixtures. Take a backup with `auradb
+dump` first. See [`docs/UPGRADING.md`](docs/UPGRADING.md).
 
 ## Testing
 
@@ -347,22 +372,24 @@ cargo test --workspace --all-features
 ```
 
 Tests span unit, integration (a real server over TCP), backup/restore, upgrade
-from a v0.1.0 data directory, deterministic chaos restart under write load,
-deterministic seeded recovery and corruption tests (restart, torn-tail
-truncation, byte-flip detection, catalog and index repair), and conformance. See
-[`docs/TESTING.md`](docs/TESTING.md).
+from v0.2.0 and v0.2.1 data directories (the v1-to-v2 MVCC migration), snapshot
+isolation and version GC, query planner and `EXPLAIN ANALYZE`, deterministic
+chaos restart under write load, deterministic seeded recovery and corruption
+tests (restart, torn-tail truncation, byte-flip detection, catalog and index
+repair), and conformance. See [`docs/TESTING.md`](docs/TESTING.md).
 
 ## Benchmarks
 
 Benchmarks measure real code with no fabricated numbers. Criterion
 microbenchmarks run with `cargo bench --workspace` and cover frame encode and
 decode, storage writes and reads, indexed versus full-scan queries, exact vector
-search, and cursor paging.
+search, cursor paging, MVCC version reads and GC, planner access-path selection,
+and `EXPLAIN ANALYZE`.
 
 The CLI also runs a baseline suite and writes a JSON snapshot:
 
 ```bash
-auradb bench --json --output benches/baseline/v0.2.1.json
+auradb bench --json --output benches/baseline/v0.3.0.json
 ```
 
 Benchmarks are hardware-dependent and exist to catch regressions on the same
@@ -384,9 +411,9 @@ encryption, encryption at rest, and audit logging. AuraDB is single node. See
 ## Roadmap
 
 Planned directions, including ANN vector indexes, BM25 full-text and hybrid
-ranking, RBAC, field-level encryption, audit logging, change streams, time
-travel, and distribution (replication, clustering, sharding, Raft), are described
-in [`docs/ROADMAP.md`](docs/ROADMAP.md).
+ranking, serializable isolation, RBAC, field-level encryption, audit logging,
+change streams, time travel, and distribution (replication, clustering, sharding,
+Raft), are described in [`docs/ROADMAP.md`](docs/ROADMAP.md).
 
 ## Contributing
 

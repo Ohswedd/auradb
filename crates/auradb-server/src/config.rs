@@ -102,6 +102,43 @@ pub struct Config {
     pub tls: TlsConfig,
     /// Authentication configuration.
     pub auth: AuthConfig,
+    /// MVCC / version garbage-collection configuration.
+    #[serde(default)]
+    pub mvcc: MvccConfig,
+}
+
+/// MVCC version garbage-collection configuration (`[mvcc]`).
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct MvccConfig {
+    /// Run background garbage collection periodically.
+    #[serde(default = "default_gc_enabled")]
+    pub gc_enabled: bool,
+    /// Interval between background GC runs, in seconds.
+    #[serde(default = "default_gc_interval_secs")]
+    pub gc_interval_secs: u64,
+    /// Minimum number of most-recent versions of each live record GC retains.
+    #[serde(default = "default_min_retained_versions")]
+    pub min_retained_versions: usize,
+}
+
+fn default_gc_enabled() -> bool {
+    true
+}
+fn default_gc_interval_secs() -> u64 {
+    300
+}
+fn default_min_retained_versions() -> usize {
+    1
+}
+
+impl Default for MvccConfig {
+    fn default() -> Self {
+        MvccConfig {
+            gc_enabled: default_gc_enabled(),
+            gc_interval_secs: default_gc_interval_secs(),
+            min_retained_versions: default_min_retained_versions(),
+        }
+    }
 }
 
 fn is_false(b: &bool) -> bool {
@@ -124,6 +161,7 @@ impl Default for Config {
             allow_insecure_bind: false,
             tls: TlsConfig::default(),
             auth: AuthConfig::default(),
+            mvcc: MvccConfig::default(),
         }
     }
 }
@@ -188,6 +226,11 @@ impl Config {
         }
         if self.page_size == 0 {
             return Err(Error::Config("page_size must be non-zero".into()));
+        }
+        if self.mvcc.gc_enabled && self.mvcc.gc_interval_secs == 0 {
+            return Err(Error::Config(
+                "mvcc.gc_interval_secs must be non-zero when gc_enabled".into(),
+            ));
         }
 
         self.validate_auth()?;

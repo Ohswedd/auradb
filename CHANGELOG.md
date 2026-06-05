@@ -4,6 +4,72 @@ All notable changes to AuraDB are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and the project uses
 [Semantic Versioning](https://semver.org/).
 
+## [0.3.0] - 2026-06-05
+
+MVCC and query planner foundations. AuraDB now stores multiple committed
+versions of each record and serves transactional reads from a snapshot pinned at
+`begin`, giving **single-node snapshot isolation** with optimistic write-conflict
+detection. Query reads route through a cost-based planner that uses persisted
+statistics to choose an access path, and `EXPLAIN ANALYZE` reports measured
+execution metrics. The on-disk storage format moves to v2; a v0.1.0/v0.2.x
+directory is migrated transparently on first open. This release preserves all
+v0.2.1 behavior for non-transactional reads and remains compatible with Aura
+Connector 0.3.x (no connector release is required).
+
+This release implements snapshot isolation, **not** serializable isolation.
+
+### Added
+
+- MVCC record versions: each record id maps to an ordered version chain, and a
+  delete is a committed tombstone version. Versions, timestamps, and tombstones
+  survive restart.
+- Snapshot isolation with transaction read timestamps pinned at `begin`: a
+  transaction sees committed state as of its begin-time snapshot (plus its own
+  staged writes) and does not observe writes committed by other transactions
+  after it began.
+- Optimistic write-conflict detection (first-committer-wins): commit aborts with
+  `Error::Conflict` when a record the transaction wrote was modified by a
+  transaction that committed after the snapshot was pinned (covers write-write,
+  update-delete, and delete-update conflicts).
+- Version garbage collection (`auradb gc`, plus optional background GC): reclaims
+  versions no active transaction can observe and drops fully-deleted records,
+  always retaining the latest version and at least `min_retained_versions`.
+- Query planner with costed index selection: a plan tree (point lookup, index
+  lookup, document-path / full-text index lookup, vector search, scan, and the
+  filter/sort/limit/offset/projection/relationship-include operators) chosen by
+  estimated cost from row counts and per-field cardinality.
+- Persisted planner statistics (`planner_stats.json`): row counts, field
+  cardinality, vector counts, full-text document counts, and average record size,
+  recomputed by `auradb stats analyze` and kept current on each mutation.
+- `EXPLAIN ANALYZE` with execution metrics: scanned/matched/returned rows,
+  execution and planning time, the index used, and the snapshot timestamp when
+  run inside a transaction. Carried over the wire as an optional flag in the raw
+  Query IR, so no protocol break.
+- New CLI commands: `auradb gc`, `auradb stats analyze`, `auradb stats show`.
+- New `[mvcc]` server configuration: `gc_enabled`, `gc_interval_secs`,
+  `min_retained_versions`.
+- MVCC, planner, and `EXPLAIN ANALYZE` benchmarks (`benches/mvcc.rs`,
+  `benches/planner.rs`, `benches/explain_analyze.rs`) and a v0.3.0 baseline.
+- Transaction isolation, planner, and `EXPLAIN ANALYZE` conformance scenarios.
+- Upgrade tests from real v0.2.0 and v0.2.1 release fixtures to v0.3.0.
+
+### Changed
+
+- Transaction reads now use a stable begin-time snapshot instead of reading the
+  latest committed state.
+- Query execution now routes through the planner before execution.
+- Index selection now considers statistics and estimated cost, choosing the most
+  selective index among candidates and a full scan when no index applies.
+- The on-disk storage format is now v2 (commit-timestamped version chains). A
+  v1 (≤ 0.2.x) directory is migrated to v2 on first open; an unknown future
+  format is still rejected.
+
+### Fixed
+
+- Transactional reads no longer observe writes committed by other transactions
+  after the reading transaction began (previously they saw the latest committed
+  state).
+
 ## [0.2.1] - 2026-06-05
 
 Operational polish, safer defaults, release confidence, and deployment

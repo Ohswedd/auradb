@@ -37,7 +37,19 @@ for a dotted-path equality (EXPLAIN reports `strategy: index_lookup` and the
 `used_index`). A `contains_text` filter uses a full-text index when present
 (EXPLAIN reports `strategy: full_text_scan`). Otherwise the planner falls back to
 a full scan (and EXPLAIN warns on large scans). Ranges, ordering, and `contains`
-are evaluated over candidates rather than via the index.
+are evaluated over candidates rather than via the index. The planner chooses the
+most selective applicable index by estimated cost; see
+[QUERY_ENGINE.md](QUERY_ENGINE.md).
+
+## MVCC visibility
+
+Indexes map values to record **ids**, not to specific versions. The executor
+resolves those ids through MVCC visibility (Option A): the DataSource or
+transaction view applies snapshot (as-of) or latest-committed visibility, so an
+index never surfaces an invisible version. Because indexes reflect the latest live
+state and version GC always keeps the latest version of every live record,
+**indexes need no rebuild after GC**. See [STORAGE_ENGINE.md](STORAGE_ENGINE.md)
+and [TRANSACTIONS.md](TRANSACTIONS.md).
 
 ## Persistence model
 

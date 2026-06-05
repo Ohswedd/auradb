@@ -1,11 +1,13 @@
 # AuraDB Compatibility Matrix
 
-This document records what AuraDB v0.2.1 implements and how it interoperates with
-the Aura Connector client library and the Aura Wire Protocol (AWP). v0.2.1 is an
-operational-polish release that preserves all v0.2.0 wire and feature behavior.
+This document records what AuraDB v0.3.0 implements and how it interoperates with
+the Aura Connector client library and the Aura Wire Protocol (AWP). v0.3.0 adds
+MVCC and a cost-based query planner; it preserves all v0.2.1 wire behavior for
+non-transactional reads and requires no connector release.
 
 | AuraDB | Aura Connector | Protocol | Status |
 | ------ | -------------- | -------- | ------ |
+| 0.3.0  | 0.3.x          | AWP 1    | Supported (native AuraDB backend) |
 | 0.2.1  | 0.3.x          | AWP 1    | Supported (native AuraDB backend) |
 | 0.2.0  | 0.3.x          | AWP 1    | Supported (native AuraDB backend) |
 | 0.2.x  | 0.2.x          | n/a      | Not wire compatible (see note below) |
@@ -20,7 +22,10 @@ and TLS). Use Aura Connector 0.3.x to connect to an AuraDB 0.2.x server. See
 
 ## Versions
 
-- **AuraDB:** 0.2.1
+- **AuraDB:** 0.3.0
+- **Storage format:** v2 (commit-timestamped MVCC version chains). A v1 (≤ 0.2.x)
+  data directory is migrated to v2 transparently on first open; an unknown future
+  format is rejected. See [UPGRADING.md](UPGRADING.md).
 - **Aura Wire Protocol:** AWP 1 (44-byte framed header, CRC32-checked, JSON
   payloads). See [PROTOCOL.md](PROTOCOL.md).
 - **Aura Connector (tested):** 0.3.x
@@ -48,7 +53,8 @@ and TLS). Use Aura Connector 0.3.x to connect to an AuraDB 0.2.x server. See
 | relationship `include` | Yes | to-one and to-many |
 | vector nearest | Yes | exact search (`cosine`, `euclidean`, `dot_product`) |
 | cursor streaming | Yes | server-side cursors with idle reaping |
-| explain | Yes | reports strategy and the index used |
+| explain | Yes | reports strategy, the index used, and estimated rows/cost |
+| explain analyze | Yes | execution metrics via the raw IR `"analyze": true` flag (no new opcode) |
 | migration estimate | Yes | |
 
 ## Supported schema features
@@ -91,8 +97,9 @@ and TLS). Use Aura Connector 0.3.x to connect to an AuraDB 0.2.x server. See
 ## Known limitations
 
 - Single node only. No clustering, replication, sharding, or Raft.
-- Transactions are single-node optimistic (read-version conflict detection), not
-  serializable MVCC.
+- AuraDB v0.3.0 implements single-node snapshot isolation with optimistic write
+  conflict detection. It is not serializable isolation (it does not prevent
+  write-skew).
 - Vector search is exact; there is no ANN/HNSW index.
 - Full-text search is tokenized boolean-AND matching with term-frequency
   ranking; it is not BM25.

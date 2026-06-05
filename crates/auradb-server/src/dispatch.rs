@@ -45,11 +45,18 @@ pub struct Session {
 
 impl Session {
     /// Clean up resources owned by this session (called on disconnect).
+    ///
+    /// Open transactions are rolled back through the engine rather than merely
+    /// dropped, so each one's pinned MVCC snapshot is released; otherwise an
+    /// abandoned transaction would hold its read timestamp forever and stall
+    /// version garbage collection.
     pub fn cleanup(&mut self, ctx: &ServerContext) {
         for id in self.cursor_ids.drain() {
             ctx.cursors.close(id);
         }
-        self.transactions.clear();
+        for (_id, txn) in self.transactions.drain() {
+            ctx.engine.rollback(txn);
+        }
         Metrics::gauge_set(&ctx.metrics.active_cursors, ctx.cursors.len() as u64);
         Metrics::gauge_set(
             &ctx.metrics.active_transactions,
@@ -248,15 +255,32 @@ fn handle(ctx: &ServerContext, session: &mut Session, frame: &Frame) -> Result<F
             ok_ok(frame)
         }
         Opcode::Explain => {
-            let query: FindQuery = frame.decode_json()?;
-            let plan = if frame.txn_id != 0 {
-                let txn = session
-                    .transactions
-                    .get(&frame.txn_id)
-                    .ok_or_else(|| Error::NotFound(format!("transaction {}", frame.txn_id)))?;
-                ctx.engine.txn_explain(txn, &query)?
-            } else {
-                ctx.engine.explain(&query)?
+            // The Explain payload is the raw Query IR. An optional sibling
+            // `"analyze": true` key requests EXPLAIN ANALYZE (execute and report
+            // metrics). Carrying the flag inside the IR object keeps older
+            // connectors — which send a bare FindQuery — compatible: they simply
+            // omit the key and get a plan without execution metrics.
+            let value: serde_json::Value = frame.decode_json()?;
+            let analyze = value
+                .get("analyze")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false);
+            let query: FindQuery = serde_json::from_value(value)
+                .map_err(|e| Error::InvalidRequest(format!("invalid explain query: {e}")))?;
+            let plan = match (frame.txn_id != 0, analyze) {
+                (true, _) => {
+                    let txn = session
+                        .transactions
+                        .get(&frame.txn_id)
+                        .ok_or_else(|| Error::NotFound(format!("transaction {}", frame.txn_id)))?;
+                    if analyze {
+                        ctx.engine.txn_explain_analyze(txn, &query)?
+                    } else {
+                        ctx.engine.txn_explain(txn, &query)?
+                    }
+                }
+                (false, true) => ctx.engine.explain_analyze(&query)?,
+                (false, false) => ctx.engine.explain(&query)?,
             };
             Frame::json(Opcode::Ok, frame.request_id, 0, &plan)
         }

@@ -33,5 +33,17 @@ harness = false
 name = "vector"
 harness = false
 
+[[bench]]
+name = "mvcc"
+harness = false
+
+[[bench]]
+name = "planner"
+harness = false
+
+[[bench]]
+name = "explain_analyze"
+harness = false
+
 [lib]
 bench = false

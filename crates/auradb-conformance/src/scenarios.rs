@@ -520,5 +520,136 @@ pub async fn run_all(addr: &str) -> Result<ConformanceReport> {
         .await,
     );
 
+    let id_eq = |id: &str| Filter::Compare {
+        field: "id".into(),
+        op: CompareOp::Eq,
+        value: Value::Text(id.into()),
+    };
+    let set_status = |status: &str| {
+        let mut s = Document::new();
+        s.insert("status".into(), Value::Text(status.into()));
+        s
+    };
+
+    report.record(
+        "snapshot_isolation_later_commit_invisible",
+        async {
+            client
+                .mutate(
+                    0,
+                    &Mutation::Insert {
+                        collection: "Doc".into(),
+                        fields: doc("snap", "v1", 1, vec![0.0, 0.0, 1.0]),
+                    },
+                )
+                .await?;
+            let txn = client.begin().await?;
+            // A concurrent auto-commit updates the record after the snapshot pins.
+            client
+                .mutate(
+                    0,
+                    &Mutation::Update {
+                        collection: "Doc".into(),
+                        filter: Some(id_eq("snap")),
+                        set: set_status("v2"),
+                    },
+                )
+                .await?;
+            let mut q = FindQuery::new("Doc");
+            q.filter = Some(id_eq("snap"));
+            let snap_rows = client.find_all_in_txn(txn, &q).await?;
+            let latest_rows = client.find_all(&q).await?;
+            client.rollback(txn).await?;
+            check(
+                snap_rows[0].fields.get("status") == Some(&Value::Text("v1".into())),
+                "transaction sees its begin-time snapshot",
+            )?;
+            check(
+                latest_rows[0].fields.get("status") == Some(&Value::Text("v2".into())),
+                "non-transactional read sees the latest commit",
+            )
+        }
+        .await,
+    );
+
+    report.record(
+        "write_conflict_rejected",
+        async {
+            client
+                .mutate(
+                    0,
+                    &Mutation::Insert {
+                        collection: "Doc".into(),
+                        fields: doc("conf", "a", 1, vec![0.0, 1.0, 0.0]),
+                    },
+                )
+                .await?;
+            let a = client.begin().await?;
+            let b = client.begin().await?;
+            client
+                .mutate(
+                    a,
+                    &Mutation::Update {
+                        collection: "Doc".into(),
+                        filter: Some(id_eq("conf")),
+                        set: set_status("from-a"),
+                    },
+                )
+                .await?;
+            client
+                .mutate(
+                    b,
+                    &Mutation::Update {
+                        collection: "Doc".into(),
+                        filter: Some(id_eq("conf")),
+                        set: set_status("from-b"),
+                    },
+                )
+                .await?;
+            client.commit(a).await?;
+            // The second committer conflicts (first-committer-wins).
+            let b_result = client.commit(b).await;
+            check(
+                b_result.is_err(),
+                "second concurrent writer is rejected on commit",
+            )
+        }
+        .await,
+    );
+
+    report.record(
+        "explain_analyze_shape",
+        async {
+            let mut q = FindQuery::new("Doc");
+            q.filter = Some(Filter::Compare {
+                field: "status".into(),
+                op: CompareOp::Eq,
+                value: Value::Text("published".into()),
+            });
+            let plan = client.explain_analyze(&q).await?;
+            let analysis = plan
+                .analysis
+                .ok_or_else(|| auradb_core::Error::Internal("missing analysis".into()))?;
+            check(plan.plan_tree.is_some(), "plan tree present")?;
+            check(
+                analysis.returned_rows == analysis.matched_rows,
+                "analyze reports matched/returned rows",
+            )
+        }
+        .await,
+    );
+
+    report.record(
+        "planner_uses_index",
+        async {
+            let mut q = FindQuery::new("Doc");
+            q.filter = Some(id_eq("d1"));
+            let plan = client.explain(&q).await?;
+            check(plan.used_index.as_deref() == Some("id"), "id index used")?;
+            check(plan.plan_tree.is_some(), "plan tree present")
+        }
+        .await,
+    );
+
     Ok(report)
 }

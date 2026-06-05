@@ -42,13 +42,45 @@ AND), ranked by summed term frequency (not BM25). See [FULL_TEXT.md](FULL_TEXT.m
 `metric` is `cosine`, `euclidean`, or `dot_product`. Results are ordered by
 similarity (highest first) and each row carries a `score`.
 
+## Planner
+
+Read queries route through a **cost-based planner** (`auradb-query`: `plan.rs`,
+`planner.rs`, `stats.rs`) that builds a **plan tree** and chooses an access path
+by estimated cost before execution. Plan node types are `PointLookup`,
+`IndexLookup`, `DocumentPathIndexLookup`, `FullTextIndexLookup`, `VectorSearch`,
+`Scan`, `Filter`, `Sort`, `Offset`, `Limit`, `Projection`, `RelationshipInclude`,
+`Cursor`, `Count`, `Exists`, and `Mutation`.
+
+### Cost and selectivity
+
+Cost is a candidate-row estimate derived from the collection's row count and
+per-field cardinality, both read from persisted statistics. The selectivity of an
+equality on a field is `rows / distinct` (its cardinality). The planner picks the
+**most selective applicable index** among the candidates — a primary-key point
+lookup, a secondary or document-path equality index, a full-text index for a
+`contains_text` filter, or the exact vector index for a vector clause — and falls
+back to a **full scan** when no index applies.
+
+Indexes map values to record ids; the executor resolves those ids through MVCC
+visibility, so an index never returns an invisible version (the DataSource /
+transaction view applies snapshot or latest visibility). See
+[INDEXING.md](INDEXING.md).
+
+### Statistics
+
+Planner statistics are persisted in `planner_stats.json`. A `CollectionStats`
+holds `row_count`, `field_cardinality`, `vector_count`, `text_field_docs`, and
+`avg_record_size`. Row counts are kept current on every mutation; cardinality and
+the rest are recomputed by `auradb stats analyze` and on compaction. Statistics
+are **advisory**: a missing or corrupt file simply falls back to live estimates —
+it is never an error and never affects correctness. `auradb stats show` prints the
+persisted statistics. See [CLI.md](CLI.md).
+
 ## Execution
 
-1. **Candidate selection** - if a vector clause is present, candidates come from
-   the exact vector index; else if the filter contains a top-level indexed
-   equality (including a document-path index on a dotted path), the index seeds
-   candidates; else if a `contains_text` filter targets a field with a full-text
-   index, that index seeds candidates; otherwise a full scan.
+1. **Candidate selection** - the chosen access-path node seeds candidates: a
+   point/index lookup, a full-text or document-path index lookup, the exact vector
+   index, or a full scan when no index applies.
 2. **Filtering** - the full filter is always re-applied to candidates.
 3. **Ordering** - by similarity (vector) or by `order_by` keys (stable, nulls
    last).
@@ -61,13 +93,27 @@ similarity (highest first) and each row carries a `score`.
 `explain` returns the plan: collection, strategy (`vector_exact_scan`,
 `index_lookup`, `full_text_scan`, `full_scan`), index used, estimated candidates,
 filter presence, vector summary, ordering, includes, and warnings (e.g. large
-full scans).
+full scans). `ExplainPlan` also carries `estimated_rows`, `estimated_cost`, and
+the `plan_tree` (the chosen `PlanNode`).
 
 - `index_lookup` with a `used_index` is reported when a secondary or
   document-path equality index seeds candidates.
 - `full_text_scan` with a `used_index` is reported when a `contains_text` filter
   uses a full-text index. Without a matching index, `contains_text` honestly
   falls back to a tokenized `full_scan` with `used_index: null`.
+
+## EXPLAIN ANALYZE
+
+`EXPLAIN ANALYZE` executes the query and reports measured metrics alongside the
+plan. The plan's `analysis` field carries an `ExplainAnalysis` with
+`scanned_rows`, `matched_rows`, `returned_rows`, `execution_micros`,
+`planning_micros`, and `snapshot_ts` (the snapshot timestamp when run inside a
+transaction).
+
+It is requested as an optional `"analyze": true` sibling key in the raw Query IR
+sent to the existing `Explain` opcode — there is **no new opcode and no protocol
+break**, so existing connectors reach it through the raw IR. See
+[AURA_CONNECTOR_COMPATIBILITY.md](AURA_CONNECTOR_COMPATIBILITY.md).
 
 ## Migration estimate
 

@@ -5,10 +5,77 @@ use std::sync::Arc;
 
 use auradb_core::Error;
 use auradb_protocol::{Frame, Opcode, RequestId, DEFAULT_MAX_PAYLOAD, MAGIC};
-use auradb_server::{read_frame, write_frame, Config, Server};
+use auradb_server::{read_frame, write_frame, Config, Server, Session};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::Notify;
+
+/// A disconnect must roll back any open transaction through the engine so its
+/// pinned MVCC snapshot is released; otherwise an abandoned transaction would
+/// stall version garbage collection forever.
+#[test]
+fn connection_cleanup_releases_transaction_snapshot() {
+    use auradb::core::{CollectionSchema, Document, FieldDef, FieldType, Value};
+
+    let dir = tempfile::tempdir().unwrap();
+    let server = Server::open(Config {
+        data_dir: dir.path().to_path_buf(),
+        ..Config::default()
+    })
+    .unwrap();
+    let ctx = server.context();
+
+    // Seed one record (commit c1).
+    ctx.engine
+        .create_schema(
+            CollectionSchema::new("C")
+                .with_field(FieldDef {
+                    name: "id".into(),
+                    field_type: FieldType::Uuid,
+                    primary_key: true,
+                    unique: true,
+                    nullable: false,
+                    indexed: false,
+                })
+                .with_field(FieldDef::new("v", FieldType::Int)),
+        )
+        .unwrap();
+    let mut r = Document::new();
+    r.insert("id".into(), Value::Text("r0".into()));
+    r.insert("v".into(), Value::Int(1));
+    ctx.engine.insert("C", r).unwrap();
+
+    // A connection opens a transaction (snapshot pinned at c1) and is then held
+    // by a session, exactly as the dispatcher does.
+    let mut session = Session::default();
+    let txn = ctx.engine.begin();
+    session.transactions.insert(txn.id().get(), txn);
+    assert_eq!(ctx.engine.stats().active_transactions, 1);
+
+    // A later auto-commit supersedes the record (commit c2 > c1).
+    ctx.engine
+        .apply_mutation(auradb::query::Mutation::Update {
+            collection: "C".into(),
+            filter: None,
+            set: {
+                let mut s = Document::new();
+                s.insert("v".into(), Value::Int(2));
+                s
+            },
+        })
+        .unwrap();
+
+    // While the snapshot is held, GC cannot reclaim the old version.
+    assert_eq!(ctx.engine.gc().unwrap().versions_reclaimed, 0);
+
+    // Simulate the connection dropping without commit/rollback.
+    session.cleanup(ctx);
+    assert_eq!(ctx.engine.stats().active_transactions, 0);
+
+    // The snapshot is released, so GC now reclaims the superseded version.
+    assert_eq!(ctx.engine.gc().unwrap().versions_reclaimed, 1);
+    assert_eq!(ctx.engine.stats().records, 1);
+}
 
 async fn start(dir: &std::path::Path) -> (String, Arc<Notify>) {
     let config = Config {

@@ -7,7 +7,10 @@ use auradb_core::{Cardinality, CollectionSchema, Error, Record, RecordId, Result
 use auradb_index::{CollectionIndexes, Metric};
 
 use crate::eval;
-use crate::ir::{CountQuery, ExistsQuery, Filter, FindQuery, OrderKey, Row, VectorSearch};
+use crate::ir::{CountQuery, ExistsQuery, FindQuery, OrderKey, Row, VectorSearch};
+use crate::plan::{Access, PlanNode};
+use crate::planner;
+use crate::stats::CollectionStats;
 
 /// Read-only access to the engine's data and indexes, implemented by `auradb`.
 pub trait DataSource {
@@ -22,6 +25,12 @@ pub trait DataSource {
     /// Resolve a relationship link: find the record in `target` whose primary
     /// key equals `key`. Engines derive the internal id from the key.
     fn resolve_link(&self, target: &str, key: &Value) -> Option<&Record>;
+    /// Persisted planner statistics for a collection, if available. Statistics
+    /// are advisory; the default returns `None` and the planner falls back to
+    /// live row counts and default selectivity.
+    fn stats(&self, _collection: &str) -> Option<&CollectionStats> {
+        None
+    }
 }
 
 /// The selection strategy chosen by the planner.
@@ -59,6 +68,36 @@ pub struct ExplainPlan {
     pub includes: Vec<String>,
     /// Non-fatal planner warnings.
     pub warnings: Vec<String>,
+    /// Planner row estimate for the chosen access path.
+    #[serde(default)]
+    pub estimated_rows: usize,
+    /// Planner cost estimate for the chosen plan (lower is better).
+    #[serde(default)]
+    pub estimated_cost: f64,
+    /// The full plan tree chosen by the planner.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub plan_tree: Option<PlanNode>,
+    /// Execution metrics, present only for `EXPLAIN ANALYZE`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub analysis: Option<ExplainAnalysis>,
+}
+
+/// Measured execution metrics attached by `EXPLAIN ANALYZE`.
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct ExplainAnalysis {
+    /// Candidate rows produced by the access path before the residual filter.
+    pub scanned_rows: usize,
+    /// Rows that passed the filter (matched).
+    pub matched_rows: usize,
+    /// Rows returned after offset/limit.
+    pub returned_rows: usize,
+    /// Total wall-clock execution time in microseconds.
+    pub execution_micros: u128,
+    /// Planning time in microseconds.
+    pub planning_micros: u128,
+    /// The snapshot read timestamp, when executed within a transaction.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub snapshot_ts: Option<u64>,
 }
 
 /// Vector clause summary in an EXPLAIN plan.
@@ -82,65 +121,48 @@ pub struct PlannedFind {
     pub plan: ExplainPlan,
 }
 
-/// Candidate-selection output: ids, optional vector scores, strategy, and the
-/// index used (if any).
-type Selection = (
-    Vec<RecordId>,
-    Option<std::collections::HashMap<RecordId, f32>>,
-    Strategy,
-    Option<String>,
-);
-
 fn require_schema<'a>(ds: &'a dyn DataSource, collection: &str) -> Result<&'a CollectionSchema> {
     ds.schema(collection)
         .ok_or_else(|| Error::NotFound(format!("collection {collection}")))
 }
 
-/// Find an indexed equality clause to seed candidate selection.
-fn indexed_seed(filter: &Filter, indexes: &CollectionIndexes) -> Option<(String, Vec<RecordId>)> {
-    match filter {
-        Filter::Compare {
-            field,
-            op: crate::ir::CompareOp::Eq,
-            value,
-        } if indexes.has_equality_index(field) => indexes
-            .lookup_eq(field, value)
-            .map(|ids| (field.clone(), ids)),
-        Filter::And { filters } => filters.iter().find_map(|f| indexed_seed(f, indexes)),
-        _ => None,
-    }
+/// Counts gathered while executing a find, surfaced by `EXPLAIN ANALYZE`.
+struct ExecCounts {
+    /// Candidate rows produced by the access path.
+    scanned: usize,
+    /// Rows that survived the residual filter.
+    matched: usize,
+    /// Rows returned after offset/limit.
+    returned: usize,
+    /// Time spent in the planner.
+    planning: std::time::Duration,
 }
 
-/// Find a full-text clause that can be seeded by an inverted index.
-fn text_seed<'a>(filter: &'a Filter, indexes: &CollectionIndexes) -> Option<(&'a str, &'a str)> {
-    match filter {
-        Filter::ContainsText { field, query } if indexes.has_text_index(field) => {
-            Some((field.as_str(), query.as_str()))
+/// Candidate ids plus optional per-record scores (vector similarity / text
+/// relevance) from an access path.
+type Candidates = (
+    Vec<RecordId>,
+    Option<std::collections::HashMap<RecordId, f32>>,
+);
+
+/// Resolve candidate ids (and optional scores) for the planner's chosen access
+/// path, executed against `ds`/`indexes`.
+fn select_candidates(
+    ds: &dyn DataSource,
+    indexes: &CollectionIndexes,
+    query: &FindQuery,
+    access: &Access,
+) -> Result<Candidates> {
+    match access {
+        Access::Vector { .. } => {
+            let vs = query
+                .vector
+                .as_ref()
+                .expect("vector access only chosen for a vector query");
+            let (ids, scores) = vector_candidates(indexes, vs)?;
+            Ok((ids, Some(scores)))
         }
-        Filter::And { filters } => filters.iter().find_map(|f| text_seed(f, indexes)),
-        _ => None,
-    }
-}
-
-/// Plan and run a find, returning ordered ids/scores and the EXPLAIN plan.
-pub fn execute_find(ds: &dyn DataSource, query: &FindQuery) -> Result<PlannedFind> {
-    let schema = require_schema(ds, &query.collection)?;
-    let indexes = ds
-        .indexes(&query.collection)
-        .ok_or_else(|| Error::Internal(format!("missing indexes for {}", query.collection)))?;
-    let mut warnings = Vec::new();
-
-    // 1. Candidate selection.
-    let (candidates, scores, strategy, used_index): Selection = if let Some(vs) = &query.vector {
-        let (ids, scores) = vector_candidates(indexes, vs)?;
-        (
-            ids,
-            Some(scores),
-            Strategy::VectorExactScan,
-            Some(vs.field.clone()),
-        )
-    } else if let Some(filter) = &query.filter {
-        if let Some((field, q)) = text_seed(filter, indexes) {
+        Access::FullText { field, query: q } => {
             let results = indexes.text_search(field, q)?;
             let mut ids = Vec::with_capacity(results.len());
             let mut scores = std::collections::HashMap::new();
@@ -148,34 +170,60 @@ pub fn execute_find(ds: &dyn DataSource, query: &FindQuery) -> Result<PlannedFin
                 ids.push(id);
                 scores.insert(id, score);
             }
-            (
-                ids,
-                Some(scores),
-                Strategy::FullTextScan,
-                Some(field.to_string()),
-            )
-        } else if let Some((field, ids)) = indexed_seed(filter, indexes) {
-            (ids, None, Strategy::IndexLookup, Some(field))
-        } else {
-            let ids: Vec<RecordId> = ds.scan(&query.collection).map(|r| r.id).collect();
-            if ids.len() > 10_000 {
-                warnings.push(format!(
-                    "full scan of {} records; consider an index",
-                    ids.len()
-                ));
-            }
-            (ids, None, Strategy::FullScan, None)
+            Ok((ids, Some(scores)))
         }
-    } else {
-        let ids: Vec<RecordId> = ds.scan(&query.collection).map(|r| r.id).collect();
-        (ids, None, Strategy::FullScan, None)
+        Access::PointLookup { field, value }
+        | Access::IndexLookup { field, value }
+        | Access::DocumentPath { path: field, value } => {
+            Ok((indexes.lookup_eq(field, value).unwrap_or_default(), None))
+        }
+        Access::Scan => Ok((ds.scan(&query.collection).map(|r| r.id).collect(), None)),
+    }
+}
+
+/// Map an [`Access`] to the public [`Strategy`] taxonomy.
+fn strategy_for(access: &Access) -> Strategy {
+    match access {
+        Access::Vector { .. } => Strategy::VectorExactScan,
+        Access::FullText { .. } => Strategy::FullTextScan,
+        Access::PointLookup { .. } | Access::IndexLookup { .. } | Access::DocumentPath { .. } => {
+            Strategy::IndexLookup
+        }
+        Access::Scan => Strategy::FullScan,
+    }
+}
+
+/// Core find execution shared by [`execute_find`] and `EXPLAIN ANALYZE`: plans,
+/// selects candidates, filters, orders, and applies offset/limit. Returns the
+/// ordered ids, the plan, and execution counts.
+fn run_find(ds: &dyn DataSource, query: &FindQuery) -> Result<(PlannedFind, ExecCounts)> {
+    let schema = require_schema(ds, &query.collection)?;
+    let indexes = ds
+        .indexes(&query.collection)
+        .ok_or_else(|| Error::Internal(format!("missing indexes for {}", query.collection)))?;
+    let mut warnings = Vec::new();
+
+    // 1. Plan: choose the access path by estimated cost.
+    let plan_start = std::time::Instant::now();
+    let stats = ds.stats(&query.collection);
+    let live_row_count = match stats {
+        Some(_) => 0, // unused when stats present
+        None => ds.scan(&query.collection).count(),
     };
-    let estimated_candidates = candidates.len();
+    let plan = planner::plan_find(query, schema, indexes, stats, live_row_count);
+    let planning = plan_start.elapsed();
+
+    // 2. Candidate selection per the chosen access path.
+    let (candidates, scores) = select_candidates(ds, indexes, query, &plan.access)?;
+    let scanned = candidates.len();
+    if matches!(plan.access, Access::Scan) && scanned > 10_000 {
+        warnings.push(format!("full scan of {scanned} records; consider an index"));
+    }
     // Vector and full-text selections carry per-record scores and are ordered by
     // descending score; other selections honor `order_by`.
     let score_ordered = scores.is_some();
 
-    // 2. Filter candidates (always re-applied, even after an index seed).
+    // 3. Filter candidates (always re-applied, even after an index seed).
     let mut matched: Vec<(RecordId, Option<f32>)> = Vec::new();
     for id in candidates {
         let record = match ds.get(&query.collection, id) {
@@ -190,10 +238,10 @@ pub fn execute_find(ds: &dyn DataSource, query: &FindQuery) -> Result<PlannedFin
         let score = scores.as_ref().and_then(|m| m.get(&id).copied());
         matched.push((id, score));
     }
+    let matched_count = matched.len();
 
-    // 3. Ordering.
+    // 4. Ordering.
     if score_ordered {
-        // Ordered by descending score (vector similarity or text relevance).
         matched.sort_by(|a, b| {
             b.1.partial_cmp(&a.1)
                 .unwrap_or(Ordering::Equal)
@@ -203,18 +251,19 @@ pub fn execute_find(ds: &dyn DataSource, query: &FindQuery) -> Result<PlannedFin
         order_records(ds, &query.collection, &mut matched, &query.order_by);
     }
 
-    // 4. Offset / limit.
+    // 5. Offset / limit.
     let offset = query.offset.unwrap_or(0);
     let mut ordered: Vec<(RecordId, Option<f32>)> = matched.into_iter().skip(offset).collect();
     if let Some(limit) = query.limit {
         ordered.truncate(limit);
     }
+    let returned = ordered.len();
 
-    let plan = ExplainPlan {
+    let explain = ExplainPlan {
         collection: query.collection.clone(),
-        strategy,
-        used_index,
-        estimated_candidates,
+        strategy: strategy_for(&plan.access),
+        used_index: plan.used_index.clone(),
+        estimated_candidates: scanned,
         filter_present: query.filter.is_some(),
         vector: query.vector.as_ref().map(|v| VectorPlan {
             field: v.field.clone(),
@@ -224,9 +273,28 @@ pub fn execute_find(ds: &dyn DataSource, query: &FindQuery) -> Result<PlannedFin
         order_by: query.order_by.clone(),
         includes: query.includes.clone(),
         warnings,
+        estimated_rows: plan.estimated_rows,
+        estimated_cost: plan.estimated_cost,
+        plan_tree: Some(plan.node),
+        analysis: None,
     };
-    let _ = schema; // schema validated; used for includes during materialize
-    Ok(PlannedFind { ordered, plan })
+    Ok((
+        PlannedFind {
+            ordered,
+            plan: explain,
+        },
+        ExecCounts {
+            scanned,
+            matched: matched_count,
+            returned,
+            planning,
+        },
+    ))
+}
+
+/// Plan and run a find, returning ordered ids/scores and the EXPLAIN plan.
+pub fn execute_find(ds: &dyn DataSource, query: &FindQuery) -> Result<PlannedFind> {
+    Ok(run_find(ds, query)?.0)
 }
 
 fn vector_candidates(
@@ -374,4 +442,27 @@ pub fn execute_exists(ds: &dyn DataSource, query: &ExistsQuery) -> Result<bool> 
 /// Produce an EXPLAIN plan without materializing rows.
 pub fn explain(ds: &dyn DataSource, query: &FindQuery) -> Result<ExplainPlan> {
     Ok(execute_find(ds, query)?.plan)
+}
+
+/// Produce an `EXPLAIN ANALYZE` plan: run the query and attach measured
+/// execution metrics (scanned/matched/returned rows and timings). `snapshot_ts`
+/// is the transaction read timestamp when run within a transaction.
+pub fn explain_analyze(
+    ds: &dyn DataSource,
+    query: &FindQuery,
+    snapshot_ts: Option<u64>,
+) -> Result<ExplainPlan> {
+    let started = std::time::Instant::now();
+    let (planned, counts) = run_find(ds, query)?;
+    let execution_micros = started.elapsed().as_micros();
+    let mut plan = planned.plan;
+    plan.analysis = Some(ExplainAnalysis {
+        scanned_rows: counts.scanned,
+        matched_rows: counts.matched,
+        returned_rows: counts.returned,
+        execution_micros,
+        planning_micros: counts.planning.as_micros(),
+        snapshot_ts,
+    });
+    Ok(plan)
 }

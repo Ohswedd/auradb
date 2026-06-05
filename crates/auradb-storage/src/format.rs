@@ -15,21 +15,50 @@ use auradb_core::{CollectionId, Error, Record, RecordId, Result, TxnId};
 use serde::{Deserialize, Serialize};
 
 /// A single mutation recorded in the log.
+///
+/// Every op carries the **commit timestamp** of the version it produces. Live
+/// writes stamp all ops in a batch with one freshly allocated commit timestamp
+/// (a transaction commits atomically at a single point in MVCC time); compaction
+/// preserves each version's original commit timestamp. The field defaults to `0`
+/// when reading a pre-0.3.0 (format v1) log, which the engine reassigns
+/// monotonically during migration (see [`crate::Storage::open_with`]).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "op", rename_all = "snake_case")]
 pub enum LogOp {
-    /// Insert or replace a record.
+    /// Insert or replace a record, producing a new committed version.
     Put {
+        /// The commit timestamp of this version.
+        #[serde(default)]
+        commit_ts: u64,
         /// The record being written.
         record: Record,
     },
-    /// Delete a record (tombstone).
+    /// Delete a record, producing a committed tombstone version.
     Delete {
+        /// The commit timestamp of this tombstone version.
+        #[serde(default)]
+        commit_ts: u64,
         /// The collection the record lives in.
         collection: CollectionId,
         /// The record id to remove.
         id: RecordId,
     },
+}
+
+impl LogOp {
+    /// The commit timestamp this op stamps onto its version.
+    pub fn commit_ts(&self) -> u64 {
+        match self {
+            LogOp::Put { commit_ts, .. } | LogOp::Delete { commit_ts, .. } => *commit_ts,
+        }
+    }
+
+    /// Overwrite the commit timestamp (used when stamping a live commit).
+    pub fn set_commit_ts(&mut self, ts: u64) {
+        match self {
+            LogOp::Put { commit_ts, .. } | LogOp::Delete { commit_ts, .. } => *commit_ts = ts,
+        }
+    }
 }
 
 /// An atomic group of mutations produced by one committed transaction.
@@ -132,8 +161,28 @@ mod tests {
     fn batch(id: u128) -> Batch {
         Batch {
             txn_id: TxnId(id as u64),
-            ops: vec![LogOp::Put { record: rec(id) }],
+            ops: vec![LogOp::Put {
+                commit_ts: id as u64,
+                record: rec(id),
+            }],
         }
+    }
+
+    #[test]
+    fn commit_ts_defaults_to_zero_for_legacy_ops() {
+        // A pre-0.3.0 Put frame had no commit_ts; it must deserialize to 0.
+        let legacy = serde_json::json!({
+            "op": "put",
+            "record": {
+                "id": "00000000000000000000000000000001",
+                "collection": "C",
+                "fields": {"v": 1},
+                "version": 1,
+                "created_txn": 0
+            }
+        });
+        let op: LogOp = serde_json::from_value(legacy).unwrap();
+        assert_eq!(op.commit_ts(), 0);
     }
 
     #[test]

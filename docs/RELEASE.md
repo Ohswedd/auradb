@@ -1,7 +1,7 @@
 # Release guide
 
 This guide describes how a maintainer cuts an AuraDB release. The current release
-is `0.2.1`.
+is `0.3.0`.
 
 ## Pre-release checklist
 
@@ -9,7 +9,8 @@ is `0.2.1`.
 - [ ] Workspace version in `Cargo.toml` is bumped.
 - [ ] Documentation reflects any new or changed behavior.
 - [ ] All limitations are stated honestly; nothing unimplemented is claimed.
-- [ ] The backup/restore, v0.1.0 upgrade, and chaos restart tests pass.
+- [ ] The backup/restore, v0.1.0 and v0.2.x upgrade, MVCC/snapshot-isolation,
+      planner, and chaos restart tests pass.
 - [ ] The benchmark baseline under `benches/baseline/` is refreshed on the
       release machine with
       `auradb bench --json --output benches/baseline/<version>.json`.
@@ -42,10 +43,12 @@ docker compose -f docker-compose.secure.yml up -d   # expect a healthy container
 docker compose -f docker-compose.secure.yml down -v
 ```
 
-For the v0.2.1 release these were validated locally with `aura-connector` 0.3.0:
+For the v0.3.0 release these were validated locally with `aura-connector` 0.3.0:
 the connector smoke passed in plaintext, auth, and TLS-plus-auth modes, the full
 connector conformance passed over TLS plus auth, and the secure Compose container
 reached a healthy state over TLS with authentication with no secret in its logs.
+Aura Connector 0.3.x remains compatible with AuraDB 0.3.0; no connector release is
+required.
 
 CI must be green on the target branch: `ci.yml` (fmt, clippy, test including the
 backup/restore, upgrade, and chaos tests, build, and benchmark compilation),
@@ -89,8 +92,8 @@ GitHub release.
 ## Tag and GitHub release
 
 ```bash
-git tag v0.2.1
-git push origin v0.2.1
+git tag v0.3.0
+git push origin v0.3.0
 ```
 
 Pushing the tag triggers `release.yml` (binaries and `SHA256SUMS`) and the

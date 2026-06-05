@@ -1,0 +1,105 @@
+{
+  "schemas": {
+    "Org": {
+      "name": "Org",
+      "fields": [
+        {
+          "name": "id",
+          "field_type": {
+            "kind": "uuid"
+          },
+          "primary_key": true,
+          "unique": true,
+          "nullable": false,
+          "indexed": false
+        },
+        {
+          "name": "name",
+          "field_type": {
+            "kind": "string"
+          },
+          "primary_key": false,
+          "unique": false,
+          "nullable": true,
+          "indexed": false
+        }
+      ],
+      "relationships": [],
+      "indexes": []
+    },
+    "User": {
+      "name": "User",
+      "fields": [
+        {
+          "name": "id",
+          "field_type": {
+            "kind": "uuid"
+          },
+          "primary_key": true,
+          "unique": true,
+          "nullable": false,
+          "indexed": false
+        },
+        {
+          "name": "name",
+          "field_type": {
+            "kind": "string"
+          },
+          "primary_key": false,
+          "unique": false,
+          "nullable": true,
+          "indexed": true
+        },
+        {
+          "name": "profile",
+          "field_type": {
+            "kind": "document"
+          },
+          "primary_key": false,
+          "unique": false,
+          "nullable": true,
+          "indexed": false
+        },
+        {
+          "name": "embedding",
+          "field_type": {
+            "kind": "vector",
+            "dim": 4
+          },
+          "primary_key": false,
+          "unique": false,
+          "nullable": true,
+          "indexed": false
+        },
+        {
+          "name": "org",
+          "field_type": {
+            "kind": "string"
+          },
+          "primary_key": false,
+          "unique": false,
+          "nullable": true,
+          "indexed": false
+        },
+        {
+          "name": "bio",
+          "field_type": {
+            "kind": "string"
+          },
+          "primary_key": false,
+          "unique": false,
+          "nullable": true,
+          "indexed": false
+        }
+      ],
+      "relationships": [],
+      "indexes": [
+        {
+          "path": "bio",
+          "kind": "full_text"
+        }
+      ]
+    }
+  },
+  "schema_version": 2
+}
