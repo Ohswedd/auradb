@@ -197,11 +197,16 @@ not timing-flaky.
   and all nodes converge on an identical record set. This is preview
   leader-restart behavior, not production failover.
 - **Follower catch-up under larger logs** (same file): a follower that misses a
-  long run of committed entries (1,000+ entries, batched commits, and across the
+  long run of committed entries (batched commits and across the
   commit-base/snapshot boundary) replays its durable log and is brought current,
   with matching applied indices and record counts. A snapshot install that the
   preview does not implement is answered with a structured *unsupported*
-  response, never silent corruption or a hang.
+  response, never silent corruption or a hang. The heaviest 1,000-entry variant
+  (`follower_catches_up_after_1000_entries`) commits a thousand synchronous,
+  majority-acknowledged writes; it is `#[ignore]`d so the default suite stays
+  stable under CI parallelism and is run on demand with `cargo test
+  -p auradb-replication --test multi_node -- --ignored --test-threads=1` (and by
+  the cluster CI workflow's manual run).
 - **`not_leader` ergonomics** (`crates/auradb-server/tests/not_leader.rs`,
   `cluster_preview.rs`): the error carries the leader hint and the leader's client
   address (when a peer declared one), is marked `retryable`, and the same client

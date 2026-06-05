@@ -45,6 +45,13 @@ jobs:
       - name: Cross-process Raft + replication (real TCP sockets)
         run: cargo test -p auradb-replication --test multi_node
 
+      - name: Long-running cluster tests (manual)
+        # The heaviest variants (e.g. 1,000-entry follower catch-up) are
+        # `#[ignore]`d so the default suite stays stable under CI parallelism.
+        # Run them serially on demand via "Run workflow".
+        if: github.event_name == 'workflow_dispatch'
+        run: cargo test -p auradb-replication --test multi_node -- --ignored --test-threads=1
+
       - name: Server-level multi-node preview (AWP routing)
         run: cargo test -p auradb-server --test cluster_preview
 
