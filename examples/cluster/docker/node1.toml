@@ -55,6 +55,6 @@ peers = [
 
 [cluster.tls]
 enabled = true
-cert_path = "/certs/peer.crt"
-key_path = "/certs/peer.key"
+cert_path = "/certs/node1.crt"
+key_path = "/certs/node1.key"
 ca_path = "/certs/ca.crt"

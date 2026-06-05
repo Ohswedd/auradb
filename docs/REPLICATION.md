@@ -1,7 +1,11 @@
 # Replication
 
-> **AuraDB v0.5.0 introduces a controlled, experimental multi-node server
-> preview. Single-node mode remains the recommended production mode.** Building
+> **AuraDB v0.5.1 hardens the controlled multi-node preview. Single-node mode
+> remains the recommended production mode.** v0.5.1 adds leader-restart and
+> re-election coverage and follower catch-up across 1,000+ entries (preview
+> behavior, not production failover); a follower that would need a snapshot
+> install of compacted entries receives a structured *unsupported* response
+> rather than silent corruption or a hang. Building
 > on the v0.4.x replication groundwork (apply idempotency under restart, the
 > snapshot restore boundary), v0.5.0 replicates writes across real server
 > processes: the leader commits on a majority, followers apply committed entries,

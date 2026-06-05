@@ -66,8 +66,13 @@ pub struct PeerStatus {
     pub node_id: String,
     /// The peer's configured cluster address.
     pub addr: String,
+    /// The peer's declared client-facing address, if configured.
+    pub client_addr: Option<String>,
     /// Whether this node currently holds an outbound connection to the peer.
     pub connected: bool,
+    /// Total outbound connection attempts to this peer (a rising count while a
+    /// peer is unreachable is a sign of a connectivity problem).
+    pub connect_attempts: u64,
     /// The leader's record of the peer's highest matching log index, if known.
     pub match_index: Option<u64>,
     /// The leader's next index to send to the peer, if known.
@@ -325,19 +330,33 @@ impl PeerCluster {
         let mut out = Vec::new();
         for p in &self.shared.config.peers {
             let id: Option<NodeId> = p.node_id.parse().ok();
-            let connected = id
-                .and_then(|id| self.shared.links.get(&id))
+            let link = id.and_then(|id| self.shared.links.get(&id));
+            let connected = link
                 .map(|l| l.connected.load(Ordering::Relaxed))
                 .unwrap_or(false);
+            let connect_attempts = link
+                .map(|l| l.attempts.load(Ordering::Relaxed))
+                .unwrap_or(0);
             out.push(PeerStatus {
                 node_id: p.node_id.clone(),
                 addr: p.addr.clone(),
+                client_addr: p.client_addr.clone(),
                 connected,
+                connect_attempts,
                 match_index: id.and_then(|id| node.match_index(id)).map(|i| i.get()),
                 next_index: id.and_then(|id| node.next_index(id)).map(|i| i.get()),
             });
         }
         out
+    }
+
+    /// The client-facing address of the leader this node currently recognizes,
+    /// if that leader is a configured peer that declared a `client_addr`. `None`
+    /// when no leader is known, this node is the leader, or the leader did not
+    /// declare a client address (honest "unknown" rather than a guess).
+    pub fn leader_client_addr(&self) -> Option<String> {
+        let leader = self.shared.raft.lock().expect("raft mutex").leader_id()?;
+        self.shared.leader_client_addr(leader)
     }
 
     /// Whether a majority of the cluster (including this node) is currently
@@ -442,6 +461,55 @@ pub struct PeerMetrics {
 }
 
 impl Shared {
+    /// The client-facing address of `leader`, if a configured peer with that id
+    /// declared one.
+    fn leader_client_addr(&self, leader: NodeId) -> Option<String> {
+        self.config
+            .peers
+            .iter()
+            .find(|p| p.node_id.parse::<NodeId>().ok() == Some(leader))
+            .and_then(|p| p.client_addr.clone())
+    }
+
+    /// A rich, honest `not_leader` message: this node's id, the recognized leader
+    /// (and its client address when an operator declared one), and retry/redirect
+    /// guidance. The leader's client address is reported as unknown rather than
+    /// guessed when it was not configured.
+    fn not_leader_message(&self, leader: Option<NodeId>) -> String {
+        let me = self.identity.node_id();
+        match leader {
+            Some(id) => match self.leader_client_addr(id) {
+                Some(addr) => format!(
+                    "this node ({me}) is not the leader; current leader is node {id} \
+                     (client address {addr}); retry the write against the leader"
+                ),
+                None => format!(
+                    "this node ({me}) is not the leader; current leader is node {id} \
+                     (leader client address unknown — query `auradb cluster leader`); \
+                     retry the write against the leader"
+                ),
+            },
+            None => format!(
+                "this node ({me}) is not the leader and no leader is currently known; \
+                 retry after a short backoff"
+            ),
+        }
+    }
+
+    /// The structured `not_leader` engine error for this node's vantage point.
+    fn not_leader_error(&self, leader: Option<NodeId>) -> auradb_core::Error {
+        auradb_core::Error::NotLeader(self.not_leader_message(leader))
+    }
+
+    /// Translate a Raft error into an engine error, enriching `NotLeader` with the
+    /// rich leader hint.
+    fn raft_err_to_core(&self, e: RaftError) -> auradb_core::Error {
+        match e {
+            RaftError::NotLeader(hint) => self.not_leader_error(hint),
+            other => auradb_core::Error::Internal(format!("raft: {other}")),
+        }
+    }
+
     /// Replay committed-but-unapplied entries into the engine (restart catch-up).
     fn recover(&self) -> Result<()> {
         let node = self.raft.lock().expect("raft mutex");
@@ -812,14 +880,14 @@ impl ReplicatedLog for PeerWriteLog {
         let (index, proposal_term) = {
             let mut node = self.shared.raft.lock().expect("raft mutex");
             if node.role() != NodeRole::Leader {
-                return Err(auradb_core::Error::NotLeader(not_leader_hint(
-                    node.leader_id(),
-                )));
+                return Err(self.shared.not_leader_error(node.leader_id()));
             }
             let command: Command = ReplicatedCommand::Write(batch.clone())
                 .encode()
                 .map_err(repl_err_to_core)?;
-            let index = node.propose(command).map_err(raft_err_to_core)?;
+            let index = node
+                .propose(command)
+                .map_err(|e| self.shared.raft_err_to_core(e))?;
             (index, node.term().get())
         };
 
@@ -863,20 +931,6 @@ impl ReplicatedLog for PeerWriteLog {
                 ));
             }
         }
-    }
-}
-
-fn not_leader_hint(leader: Option<NodeId>) -> String {
-    match leader {
-        Some(id) => format!("this node is not the leader; current leader is node {id}"),
-        None => "this node is not the leader and no leader is currently known".to_string(),
-    }
-}
-
-fn raft_err_to_core(e: RaftError) -> auradb_core::Error {
-    match e {
-        RaftError::NotLeader(hint) => auradb_core::Error::NotLeader(not_leader_hint(hint)),
-        other => auradb_core::Error::Internal(format!("raft: {other}")),
     }
 }
 

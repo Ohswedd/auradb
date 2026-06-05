@@ -9,13 +9,16 @@
 # encoded in examples/cluster/docker/node{1,2,3}.toml.
 #
 # Before running:
-#   1. Generate peer certificates whose SANs cover the service names
-#      (node1, node2, node3) into ./examples/cluster/certs as peer.crt / peer.key
-#      / ca.crt. See examples/cluster/README.md for a one-liner.
+#   1. Generate per-node development certificates (a shared CA plus node1/node2/
+#      node3 certs whose SANs cover each service name) into
+#      ./examples/cluster/certs:
+#        bash examples/cluster/generate-dev-certs.sh
+#      The generated certificates are DEVELOPMENT ONLY and git-ignored.
 #   2. Choose a shared peer token and set it identically in each node config
 #      (peer_auth_token), replacing "change-me-preview-cluster-token".
 #   3. Start it:
 #        docker compose -f docker-compose.cluster.yml up -d
+#   Or run the whole flow end to end with scripts/smoke_cluster_compose.sh.
 #
 # Validate the compose file without starting it:
 #   docker compose -f docker-compose.cluster.yml config
@@ -29,7 +32,7 @@
 #   docker compose -f docker-compose.cluster.yml down -v
 
 x-node-common: &node-common
-  image: ghcr.io/ohswedd/auradb:0.5.0
+  image: ghcr.io/ohswedd/auradb:0.5.1
   user: "10001:10001"
   networks:
     - aura-cluster

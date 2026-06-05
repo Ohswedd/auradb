@@ -216,6 +216,29 @@ pub fn cmd_cluster_doctor(data_dir: &Path, config: &Config, json: bool) -> Resul
                 config.cluster.listen_addr
             ));
         }
+        if config.cluster.experimental_multi_node {
+            warnings.push(
+                "multi-node mode is an experimental, opt-in preview; single-node mode remains the \
+                 recommended production mode. Runtime leader, quorum, and per-peer state are \
+                 reported by `auradb cluster status --addr <server>`"
+                    .to_string(),
+            );
+        }
+        if config.cluster.is_public() && !config.cluster.tls.enabled {
+            warnings.push(
+                "public cluster transport without peer TLS is rejected at startup; configure \
+                 [cluster.tls] (cert_path, key_path, ca_path) and a peer_auth_token before \
+                 exposing the cluster beyond loopback"
+                    .to_string(),
+            );
+        }
+        if config.cluster.is_public() && config.cluster.peer_auth_token.is_empty() {
+            warnings.push(
+                "public cluster transport without a peer authentication token is rejected at \
+                 startup; set [cluster] peer_auth_token"
+                    .to_string(),
+            );
+        }
     }
 
     let healthy = config.cluster.enabled && metadata.initialized && warnings.is_empty();
@@ -411,6 +434,7 @@ mod tests {
         cluster.peers = vec![auradb_cluster::PeerConfig {
             node_id: "00000000000000a2".into(),
             addr: "127.0.0.1:7272".into(),
+            client_addr: None,
         }];
         let cfg = Config {
             data_dir: dir.path().to_path_buf(),

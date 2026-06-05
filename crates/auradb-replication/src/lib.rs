@@ -31,7 +31,12 @@ mod error;
 mod multi;
 mod node;
 mod snapshot;
-mod transport;
+/// Low-level peer transport (framing, handshake, and message types).
+///
+/// Hidden from the public API surface and intended only for the crate's own
+/// cross-process tests; it is not a stable interface.
+#[doc(hidden)]
+pub mod transport;
 
 pub use apply::apply_command;
 pub use command::{ReplicatedCommand, SchemaCommand, ENVELOPE_VERSION};

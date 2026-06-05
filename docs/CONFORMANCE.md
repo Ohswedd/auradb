@@ -94,6 +94,18 @@ against the elected leader of a loopback three-node cluster (12/12 checks passed
 the auth/TLS connector matrix and full conformance suite run in `conformance.yml`.
 See [CLUSTERING.md](CLUSTERING.md) and [TESTING.md](TESTING.md).
 
+### v0.5.1 hardening
+
+v0.5.1 keeps the above scenarios and adds coverage exercised by the cluster CI
+workflow: **leader restart and re-election** (a stopped leader's term is taken
+over by the surviving majority; the old leader rejoins as a follower and catches
+up), **follower catch-up across 1,000+ entries**, **`not_leader` ergonomics**
+(the leader hint carries the leader's client address and the wire error is marked
+`retryable`, and the connection stays usable), and **peer TLS validation**
+(wrong CA / wrong SAN rejected, rotated certificate accepted). The published
+`aura-connector` smoke against the elected leader continues to run in CI; local
+runs require PyPI access and are documented rather than faked when offline.
+
 ## Running
 
 Rust (no server needed - the test spawns one):

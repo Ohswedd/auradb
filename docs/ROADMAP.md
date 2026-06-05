@@ -4,9 +4,25 @@ This roadmap describes where AuraDB is headed beyond the first single-node
 release. It is a statement of direction, not a delivery commitment. Items are
 grouped by theme and listed roughly in the order we expect to approach them.
 
-## Current release: 0.5.0
+## Current release: 0.5.1
 
-AuraDB 0.5.0 introduces a **controlled, experimental multi-node server preview**.
+AuraDB 0.5.1 is a patch release that **hardens the controlled multi-node
+preview** shipped in 0.5.0: local Docker cluster automation with generated
+development certificates (`examples/cluster/generate-dev-certs.sh`,
+`scripts/smoke_cluster_compose.sh`), a live `auradb cluster status --addr`
+diagnostics view, sharper `not_leader` ergonomics (a leader hint carrying the
+leader's client address plus an additive `retryable` flag), peer TLS rotation
+guidance and validation, and additional leader-restart and follower-catch-up
+test coverage. Leader restart is **preview behavior, not production automatic
+failover**. There is **no format or wire change** (storage unchanged; AWP 1 with
+additive fields), so Aura Connector 0.3.x remains compatible and no connector
+release is required. **Single-node mode remains the recommended production
+mode.** The "not part of the preview" list below is unchanged — v0.5.1 makes no
+new production-clustering claims.
+
+### Delivered in 0.5.0
+
+AuraDB 0.5.0 introduced a **controlled, experimental multi-node server preview**.
 Real AuraDB server processes can now form a cross-process cluster, elect a leader,
 and replicate writes through Raft over a dedicated, frame-checked, authenticated
 peer transport. **Single-node mode remains the recommended production mode**, and

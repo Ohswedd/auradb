@@ -2,27 +2,31 @@
 
 This document is the connector-focused companion to the
 [Compatibility Matrix](COMPATIBILITY.md). It records which Aura Connector release
-talks to AuraDB 0.5.0, what it can drive, and what it cannot.
+talks to AuraDB 0.5.1, what it can drive, and what it cannot.
 
-> **AuraDB v0.5.0 introduces a controlled, experimental multi-node server
-> preview. Single-node mode remains the recommended production mode.**
+> **AuraDB v0.5.1 hardens the controlled multi-node preview. Single-node mode
+> remains the recommended production mode.**
 
-AuraDB 0.5.0 adds an experimental cross-process multi-node preview, but it
+AuraDB 0.5.1 hardens the experimental cross-process multi-node preview, but it
 preserves the existing wire behavior, so the same connector compatibility applies
 and **no connector release is required**. The wire additions remain additive: the
-health report's `cluster` section gains per-peer state (`preview_multi_node`,
-`quorum_available`, and a `peers` array), and the `not_leader` error code is
-unchanged — a 0.3.x connector handles both safely (it ignores unknown fields and
-maps unknown error codes to a generic server error). A connector targets the
-**leader's client address**; a write routed to a follower returns `not_leader`.
+health report's `cluster` section gains additional diagnostics fields
+(`preview_multi_node`, `quorum_available`, a `peers` array, and per-peer
+reachability detail), the error payload gains an optional `retryable` hint, and
+the `not_leader` error code is unchanged — a 0.3.x connector handles all of these
+safely (it ignores unknown fields and maps unknown error codes to a generic
+server error). A connector targets the **leader's client address**; a write
+routed to a follower returns `not_leader` with a leader hint embedded in the
+human-readable message.
 
 ## Summary
 
-- **Aura Connector 0.3.x remains fully compatible with AuraDB 0.5.0. No connector
+- **Aura Connector 0.3.x remains fully compatible with AuraDB 0.5.1. No connector
   release is required.** Cluster mode and the multi-node preview are server-side
   and ride the existing AWP 1 wire format and Query IR; the `cluster` health
-  section (including the additive v0.5.0 per-peer fields) and the `not_leader`
-  error code are additive and optional.
+  section (including the additive per-peer diagnostics fields), the optional
+  additive `retryable` error hint, and the `not_leader` error code are additive
+  and optional.
 - **A connector connects to the leader.** In a multi-node cluster, point the
   connector at the leader's client address (use `auradb cluster leader` or the
   `cluster` status section); a write sent to a follower returns `not_leader`.
@@ -41,6 +45,7 @@ maps unknown error codes to a generic server error). A connector targets the
 
 | AuraDB | Aura Connector | Protocol | Status |
 | ------ | -------------- | -------- | ------ |
+| 0.5.1  | 0.3.x          | AWP 1    | Supported (native AuraDB backend; additive diagnostics fields; targets the leader) |
 | 0.5.0  | 0.3.x          | AWP 1    | Supported (native AuraDB backend; cluster fields additive; targets the leader) |
 | 0.4.1  | 0.3.x          | AWP 1    | Supported (native AuraDB backend; cluster fields additive) |
 | 0.4.0  | 0.3.x          | AWP 1    | Supported (native AuraDB backend; cluster fields additive) |
@@ -54,9 +59,13 @@ The connector side is exercised by `run_connector_smoke.py` (a minimal real
 scenario) and `run_connector_conformance.py` (the full suite) in
 `conformance.yml`, against servers with auth disabled and with auth plus TLS.
 
-For v0.5.0, the published `aura-connector` 0.3.0 smoke suite was also run against
+For v0.5.0, the published `aura-connector` 0.3.0 smoke suite was run against
 the **elected leader** of a three-node loopback preview cluster (12/12 checks
-passed, including the additive cluster health fields). The full
+passed, including the additive cluster health fields). v0.5.1 preserves this
+behavior and adds `not_leader` ergonomics tests (the leader hint and retryable
+guidance, and that the same connection stays usable after a `not_leader`
+response); the published-connector smoke against the elected leader continues to
+be exercised by the conformance and cluster CI workflows. The full
 `run_connector_conformance.py` suite and the auth/TLS connector matrix continue
 to run in `conformance.yml`.
 

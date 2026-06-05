@@ -40,7 +40,16 @@ Client ports are `7171`, `7181`, `7191`; cluster (Raft) ports are `7172`, `7182`
 # Wait for an election, then see who won.
 auradb cluster wait-leader --addr 127.0.0.1:7171 --timeout-secs 30
 auradb cluster leader      --addr 127.0.0.1:7171
-auradb status --addr 127.0.0.1:7171 --json   # includes per-peer state
+# Live cluster diagnostics: role, leader (and its client address), quorum,
+# commit/applied/last-log indices, replication lag, and per-peer reachability.
+auradb cluster status --addr 127.0.0.1:7171 --json
+auradb status        --addr 127.0.0.1:7171 --json   # general health + cluster
+```
+
+Or run the whole loopback flow end to end:
+
+```bash
+bash scripts/smoke_cluster_loopback.sh
 ```
 
 ### Write through the leader, observe a follower
@@ -74,10 +83,19 @@ Because containers communicate over a non-loopback Docker network, this path is 
 "public" cluster and requires peer TLS plus a shared peer authentication token
 (the configs under [`docker/`](docker) already set the required flags).
 
-1. **Generate peer certificates** whose SANs cover the service names
-   `node1`, `node2`, `node3` into `./examples/cluster/certs` as `peer.crt`,
-   `peer.key`, and `ca.crt`. Any standard tooling works; the certificate must be
-   trusted by `ca.crt` and present a SAN for each peer hostname.
+1. **Generate development peer certificates.** This produces a shared local CA
+   (`ca.crt`/`ca.key`) and per-node certificates (`node1.crt`/`node1.key`, …),
+   each with SANs covering its service name plus `localhost` and `127.0.0.1`,
+   under the git-ignored `examples/cluster/certs/`:
+
+   ```bash
+   bash examples/cluster/generate-dev-certs.sh   # or generate-dev-certs.ps1 on Windows
+   ```
+
+   > **Development only.** The generated CA and keys are self-signed and
+   > unencrypted. Never use them in production. A peer dialing `node2:7172`
+   > verifies the certificate's SAN against `node2`, which is why each node has
+   > its own certificate.
 
 2. **Choose a shared token** and set it identically as `peer_auth_token` in each
    of `examples/cluster/docker/node{1,2,3}.toml`, replacing
@@ -90,11 +108,18 @@ Because containers communicate over a non-loopback Docker network, this path is 
    docker compose -f docker-compose.cluster.yml up -d
    ```
 
+   Or do steps 1–4 in one shot (generate certs, start, wait for a leader, report
+   status, tear down):
+
+   ```bash
+   bash scripts/smoke_cluster_compose.sh
+   ```
+
 4. **Inspect** (client ports are published to the host as `7171`/`7181`/`7191`):
 
    ```bash
-   auradb cluster wait-leader --addr 127.0.0.1:7171 --timeout-secs 30
-   auradb status --addr 127.0.0.1:7171 --json
+   auradb cluster wait-leader --addr 127.0.0.1:7171 --timeout-secs 60
+   auradb cluster status --addr 127.0.0.1:7171 --json
    ```
 
 5. **Stop / restart a follower** to watch catch-up:
@@ -112,6 +137,33 @@ Because containers communicate over a non-loopback Docker network, this path is 
 
 The loopback option (A) is the validated path used by the project's integration
 tests; the Docker option (B) is provided for a more realistic networked preview.
+
+---
+
+## Rotating peer certificates and the peer token
+
+Peer certificates and the shared peer token are long-lived secrets. Rotate them
+with a **rolling restart**, one node at a time, so a quorum stays available.
+
+**Certificates (same CA).** Re-issue a node's certificate from the same CA
+(`generate-dev-certs.sh` reuses the existing `ca.crt`/`ca.key` in the directory),
+then restart just that node. Because peers trust the CA — not a specific leaf —
+the rotated certificate is accepted without touching the others. A node that
+presents a certificate from the **wrong CA**, or whose **SAN does not match** the
+dialed peer name, is rejected by the TLS handshake (validated by the
+`peer_tls` tests). Repeat per node.
+
+**Rotating the CA.** Issue a new CA, distribute a bundle containing **both** the
+old and new CA in each node's `ca_path`, roll every node to certificates signed by
+the new CA, then drop the old CA from the bundle in a second roll.
+
+**Peer token.** Set the new `peer_auth_token` on each node and restart it; during
+the roll, nodes still on the old token fail the handshake (`AuthFailed`) until
+they are updated, so roll quickly and watch `auradb cluster status --addr` for
+peer connectivity. The token is redacted in logs and `Debug` output.
+
+Never commit `certs/` or any `.key`/token to version control — the example
+directory's `.gitignore` excludes them.
 
 ---
 

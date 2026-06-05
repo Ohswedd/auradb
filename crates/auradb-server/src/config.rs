@@ -492,6 +492,7 @@ token_hash_algorithm = "argon2id"
         auradb_cluster::PeerConfig {
             node_id: node_id.to_string(),
             addr: addr.to_string(),
+            client_addr: None,
         }
     }
 

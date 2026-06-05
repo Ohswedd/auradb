@@ -70,6 +70,13 @@ pub struct PeerConfig {
     pub node_id: String,
     /// The peer's cluster transport address (`host:port`).
     pub addr: String,
+    /// The peer's client-facing address (`host:port`), if known. Optional and
+    /// additive: when an operator declares it, a `not_leader` response and the
+    /// cluster diagnostics can report the leader's *client* address so a client
+    /// can redirect. When unset, the leader's client address is reported as
+    /// unknown rather than guessed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub client_addr: Option<String>,
 }
 
 /// TLS material for the peer (cluster) transport.
@@ -220,6 +227,9 @@ impl ClusterConfig {
             std::collections::HashSet::new();
         for peer in &self.peers {
             validate_addr("peer addr", &peer.addr)?;
+            if let Some(client_addr) = &peer.client_addr {
+                validate_addr("peer client_addr", client_addr)?;
+            }
             if peer.node_id.is_empty() {
                 return Err(ClusterError::Config(format!(
                     "peer {:?} is missing node_id: every static peer needs node_id and addr",
@@ -339,6 +349,7 @@ mod tests {
         PeerConfig {
             node_id: node_id.to_string(),
             addr: addr.to_string(),
+            client_addr: None,
         }
     }
 

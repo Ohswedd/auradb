@@ -149,6 +149,177 @@ async fn connection_survives_not_leader() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn not_leader_error_contains_leader_client_addr() {
+    // When the leader hint carries the leader's client address (as the multi-node
+    // preview builds it from a peer's declared `client_addr`), the wire error
+    // surfaces it so a client can redirect.
+    let dir = tempfile::tempdir().unwrap();
+    let server = Server::open(Config {
+        data_dir: dir.path().to_path_buf(),
+        ..Config::default()
+    })
+    .unwrap();
+    let ctx = server.context();
+    ctx.engine
+        .create_schema(
+            CollectionSchema::new("C")
+                .with_field(FieldDef {
+                    name: "id".into(),
+                    field_type: FieldType::Int,
+                    primary_key: true,
+                    unique: true,
+                    nullable: false,
+                    indexed: false,
+                })
+                .with_field(FieldDef::new("v", FieldType::Int)),
+        )
+        .unwrap();
+    ctx.engine.attach_replicated_log(Arc::new(AlwaysFollower {
+        leader_hint: "this node (0000000000000001) is not the leader; current leader is node \
+                      00000000000000aa (client address 127.0.0.1:7373); retry the write against \
+                      the leader"
+            .to_string(),
+    }));
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap().to_string();
+    let shutdown = Arc::new(Notify::new());
+    let s2 = shutdown.clone();
+    tokio::spawn(async move {
+        let _ = server
+            .run_on(listener, async move { s2.notified().await })
+            .await;
+    });
+    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+
+    let mut stream = TcpStream::connect(&addr).await.unwrap();
+    hello(&mut stream).await;
+    write_frame(&mut stream, &insert_frame(2, 1)).await.unwrap();
+    let resp = read_frame(&mut stream, DEFAULT_MAX_PAYLOAD)
+        .await
+        .unwrap()
+        .unwrap();
+    let payload: auradb_protocol::ErrorPayload = resp.decode_json().unwrap();
+    assert_eq!(payload.code, ErrorCode::NotLeader);
+    assert!(
+        payload.message.contains("client address 127.0.0.1:7373"),
+        "leader client address surfaced in the message: {}",
+        payload.message
+    );
+    shutdown.notify_one();
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn not_leader_unknown_leader_is_retryable() {
+    // A `not_leader` response is marked retryable on the wire (the client may
+    // redirect to, or wait for, the current leader), even when no leader is yet
+    // known.
+    let dir = tempfile::tempdir().unwrap();
+    let server = Server::open(Config {
+        data_dir: dir.path().to_path_buf(),
+        ..Config::default()
+    })
+    .unwrap();
+    let ctx = server.context();
+    ctx.engine
+        .create_schema(
+            CollectionSchema::new("C")
+                .with_field(FieldDef {
+                    name: "id".into(),
+                    field_type: FieldType::Int,
+                    primary_key: true,
+                    unique: true,
+                    nullable: false,
+                    indexed: false,
+                })
+                .with_field(FieldDef::new("v", FieldType::Int)),
+        )
+        .unwrap();
+    ctx.engine.attach_replicated_log(Arc::new(AlwaysFollower {
+        leader_hint: "this node is not the leader and no leader is currently known; retry after \
+                      a short backoff"
+            .to_string(),
+    }));
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap().to_string();
+    let shutdown = Arc::new(Notify::new());
+    let s2 = shutdown.clone();
+    tokio::spawn(async move {
+        let _ = server
+            .run_on(listener, async move { s2.notified().await })
+            .await;
+    });
+    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+
+    let mut stream = TcpStream::connect(&addr).await.unwrap();
+    hello(&mut stream).await;
+    write_frame(&mut stream, &insert_frame(2, 1)).await.unwrap();
+    let resp = read_frame(&mut stream, DEFAULT_MAX_PAYLOAD)
+        .await
+        .unwrap()
+        .unwrap();
+    let payload: auradb_protocol::ErrorPayload = resp.decode_json().unwrap();
+    assert_eq!(payload.code, ErrorCode::NotLeader);
+    assert_eq!(
+        payload.retryable,
+        Some(true),
+        "not_leader is retryable on the wire"
+    );
+    assert!(payload.message.contains("no leader is currently known"));
+    shutdown.notify_one();
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn not_leader_connection_remains_usable() {
+    // The same connection stays usable after a `not_leader`: a follow-up Health
+    // request still returns a normal report (framing and session state intact).
+    let dir = tempfile::tempdir().unwrap();
+    let (addr, shutdown) = start_follower(dir.path()).await;
+    let mut stream = TcpStream::connect(&addr).await.unwrap();
+    hello(&mut stream).await;
+
+    write_frame(&mut stream, &insert_frame(2, 1)).await.unwrap();
+    let err = read_frame(&mut stream, DEFAULT_MAX_PAYLOAD)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(err.opcode, Opcode::Error);
+
+    let health = Frame::new(Opcode::Health, RequestId(5), 0, Vec::new());
+    write_frame(&mut stream, &health).await.unwrap();
+    let resp = read_frame(&mut stream, DEFAULT_MAX_PAYLOAD)
+        .await
+        .unwrap()
+        .unwrap();
+    let report: auradb_protocol::HealthReport = resp.decode_json().unwrap();
+    assert!(report.ready, "server is still serving after not_leader");
+    shutdown.notify_one();
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn not_leader_known_leader_not_retry_loop() {
+    // A known-leader hint returns exactly one prompt, terminal error per write —
+    // the server never loops internally retrying the redirect.
+    let dir = tempfile::tempdir().unwrap();
+    let (addr, shutdown) = start_follower(dir.path()).await;
+    let mut stream = TcpStream::connect(&addr).await.unwrap();
+    hello(&mut stream).await;
+
+    write_frame(&mut stream, &insert_frame(2, 1)).await.unwrap();
+    let resp = tokio::time::timeout(
+        std::time::Duration::from_secs(2),
+        read_frame(&mut stream, DEFAULT_MAX_PAYLOAD),
+    )
+    .await
+    .expect("a known-leader not_leader returns promptly, not in a retry loop")
+    .unwrap()
+    .unwrap();
+    let payload: auradb_protocol::ErrorPayload = resp.decode_json().unwrap();
+    assert_eq!(payload.code, ErrorCode::NotLeader);
+    assert!(payload.message.contains("current leader is node"));
+    shutdown.notify_one();
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn not_leader_does_not_retry_forever() {
     // Each write gets exactly one deterministic `not_leader` response — the
     // server never blocks retrying internally — so a client receives a prompt,

@@ -1,7 +1,7 @@
 # Release guide
 
 This guide describes how a maintainer cuts an AuraDB release. The current release
-is `0.5.0`.
+is `0.5.1`.
 
 ## Pre-release checklist
 
@@ -23,7 +23,16 @@ is `0.5.0`.
       release machine with
       `auradb bench --json --output benches/baseline/<version>.json`.
 
-### Multi-node preview validation (v0.5.0)
+### Multi-node preview validation (v0.5.0, hardened in v0.5.1)
+
+- [ ] **Local Docker cluster smoke (v0.5.1).** Generate dev certs and run the
+      live three-node Compose cluster end to end (or rely on the cluster CI
+      workflow when Docker is unavailable):
+
+      ```bash
+      bash examples/cluster/generate-dev-certs.sh
+      bash scripts/smoke_cluster_compose.sh
+      ```
 
 - [ ] **Three-node loopback smoke.** Start the three local nodes and confirm an
       election, leader-routed writes, `not_leader` from a follower, and follower

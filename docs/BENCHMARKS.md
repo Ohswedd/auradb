@@ -140,3 +140,26 @@ auradb bench compare --baseline benches/baseline/v0.4.1.json --current benches/b
 
 As with every benchmark here, the numbers are machine-specific and used only for
 same-machine regression tracking — never as a universal performance claim.
+
+## Multi-node preview hardening baseline (v0.5.1)
+
+v0.5.1 refreshes the committed engine baseline on the release machine:
+
+```bash
+cargo run --release -p auradb-cli -- bench --data-dir .local/v051-bench --json \
+  --output benches/baseline/v0.5.1.json
+auradb bench compare --baseline benches/baseline/v0.5.0.json --current benches/baseline/v0.5.1.json
+```
+
+The committed baseline (`benches/baseline/v0.5.1.json`) is the single-node engine
+suite — the stable, deterministic regression signal. **Replicated-write latency**
+in the multi-node preview is inherently topology- and network-dependent (it
+includes a round trip to a majority of peers), so it is exercised by the
+cross-process preview tests (`crates/auradb-replication/tests/multi_node.rs`:
+replicated writes, leader restart, and follower catch-up across 1,000+ entries)
+rather than committed as a micro-benchmark number that would not be comparable
+across machines or runs. Expect a three-node loopback leader write to cost more
+than a direct single-node write because it must replicate and commit on a
+majority; a `not_leader` response from a follower returns promptly without a
+replication round trip. Preview cluster overhead is expected and is **not** a
+universal performance claim.

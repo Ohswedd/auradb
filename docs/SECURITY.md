@@ -123,10 +123,10 @@ the environment so no secret is committed. See [DEPLOYMENT.md](DEPLOYMENT.md).
   `--allow-insecure-bind` is passed to `auradb server`. This prevents
   accidentally exposing an unauthenticated server on a public interface.
 
-## Cluster (peer) transport (v0.4.0, multi-node preview in v0.5.0)
+## Cluster (peer) transport (v0.4.0, multi-node preview in v0.5.0, hardened in v0.5.1)
 
-> **AuraDB v0.5.0 introduces a controlled, experimental multi-node server
-> preview. Single-node mode remains the recommended production mode.**
+> **AuraDB v0.5.1 hardens the controlled multi-node preview. Single-node mode
+> remains the recommended production mode.**
 
 Cluster (Raft) mode is disabled by default. v0.5.0 adds a real cross-process peer
 transport, gated by a conservative, fail-closed security baseline:
@@ -157,7 +157,30 @@ transport, gated by a conservative, fail-closed security baseline:
 - **Static membership only.** No join/leave/dynamic membership; a duplicate, a
   self-peer, or a malformed peer address is rejected.
 
-See [CLUSTERING.md](CLUSTERING.md) and [CONFIGURATION.md](CONFIGURATION.md).
+### Development certificates and rotation (v0.5.1)
+
+- **Generate per-node dev certificates.** `auradb cert generate-dev --out-dir DIR
+  --server-name nodeN --san nodeN --san localhost --san 127.0.0.1` writes a CA
+  (reused across calls in the same directory) plus a per-node certificate whose
+  SAN matches the name peers dial. `examples/cluster/generate-dev-certs.sh` drives
+  this for a three-node cluster. These certificates are **development only**.
+- **Verify SANs.** A peer dialing `nodeN:7172` verifies the presented
+  certificate's SAN against `nodeN`. A certificate from the **wrong CA** or with a
+  **non-matching SAN** is rejected by the TLS handshake; an **expired** certificate
+  is likewise rejected (validated by the `peer_tls` tests).
+- **Rotate certificates with a rolling restart.** Re-issue a node's certificate
+  from the same CA and restart only that node; peers trust the CA, not a specific
+  leaf, so a freshly rotated certificate is accepted without disturbing the
+  others. To rotate the CA itself, distribute a bundle of old+new CA in each
+  node's `ca_path`, roll every node onto new-CA certificates, then drop the old CA
+  in a second roll.
+- **Rotate the peer token with a rolling restart.** Update `peer_auth_token` on
+  each node and restart it; nodes still on the old token fail the handshake until
+  updated, so keep a quorum and watch `auradb cluster status --addr`. Never commit
+  `certs/`, private keys, or tokens — `examples/cluster/.gitignore` excludes them.
+
+See [CLUSTERING.md](CLUSTERING.md), [OPERATIONS.md](OPERATIONS.md), and
+[CONFIGURATION.md](CONFIGURATION.md).
 
 ## Redaction
 

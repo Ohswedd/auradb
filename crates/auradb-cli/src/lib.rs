@@ -962,13 +962,14 @@ pub async fn cmd_status(
     }
     if let Some(c) = &report.cluster {
         out.push_str(&format!(
-            "\ncluster_enabled: {}\nnode_id: {}\ncluster_id: {}\nrole: {}\nterm: {}\nleader_id: {}\ncommit_index: {}\napplied_index: {}\nlast_log_index: {}\npeer_count: {}\nreplication_lag_entries: {}",
+            "\ncluster_enabled: {}\nnode_id: {}\ncluster_id: {}\nrole: {}\nterm: {}\nleader_id: {}\nleader_client_addr: {}\ncommit_index: {}\napplied_index: {}\nlast_log_index: {}\npeer_count: {}\nreplication_lag_entries: {}",
             c.enabled,
             c.node_id.as_deref().unwrap_or("n/a"),
             c.cluster_id.as_deref().unwrap_or("n/a"),
             c.role,
             c.term,
             c.leader_id.as_deref().unwrap_or("n/a"),
+            c.leader_client_addr.as_deref().unwrap_or("n/a"),
             c.commit_index,
             c.applied_index,
             c.last_log_index,
@@ -990,6 +991,91 @@ pub async fn cmd_status_json(
     serde_json::to_string_pretty(&report).context("serializing status report")
 }
 
+/// `auradb cluster status --addr` — query a running server for live cluster
+/// diagnostics: role, leader (and its client address when known), quorum,
+/// replication indices, and per-peer reachability. This is the live counterpart
+/// to the offline `auradb cluster status --data-dir` view.
+pub async fn cmd_cluster_status_live(
+    addr: &str,
+    token: Option<String>,
+    tls_ca: Option<PathBuf>,
+    server_name: &str,
+    json: bool,
+) -> Result<String> {
+    let report = status_report(addr, token, tls_ca, server_name).await?;
+    let cluster = report
+        .cluster
+        .ok_or_else(|| anyhow::anyhow!("server at {addr} is not running in cluster mode"))?;
+    if json {
+        return serde_json::to_string_pretty(&cluster).context("serializing cluster status");
+    }
+    let mut out = String::new();
+    out.push_str(&format!("addr: {addr}\n"));
+    out.push_str(&format!("enabled: {}\n", cluster.enabled));
+    out.push_str(&format!(
+        "node_id: {}\n",
+        cluster.node_id.as_deref().unwrap_or("n/a")
+    ));
+    out.push_str(&format!(
+        "cluster_id: {}\n",
+        cluster.cluster_id.as_deref().unwrap_or("n/a")
+    ));
+    out.push_str(&format!("role: {}\n", cluster.role));
+    out.push_str(&format!("term: {}\n", cluster.term));
+    out.push_str(&format!(
+        "leader_id: {}\n",
+        cluster.leader_id.as_deref().unwrap_or("(unknown)")
+    ));
+    out.push_str(&format!(
+        "leader_client_addr: {}\n",
+        cluster.leader_client_addr.as_deref().unwrap_or("(unknown)")
+    ));
+    out.push_str(&format!("single_node: {}\n", cluster.single_node));
+    out.push_str(&format!(
+        "preview_multi_node: {}\n",
+        cluster.preview_multi_node
+    ));
+    out.push_str(&format!("quorum_available: {}\n", cluster.quorum_available));
+    out.push_str(&format!("commit_index: {}\n", cluster.commit_index));
+    out.push_str(&format!("applied_index: {}\n", cluster.applied_index));
+    out.push_str(&format!("last_log_index: {}\n", cluster.last_log_index));
+    out.push_str(&format!(
+        "replication_lag_entries: {}\n",
+        cluster.replication_lag_entries
+    ));
+    out.push_str(&format!("peers: {}\n", cluster.peer_count));
+    for p in &cluster.peers {
+        out.push_str(&format!(
+            "  peer {} @ {}{}: {}{}{}\n",
+            p.node_id,
+            p.addr,
+            p.client_addr
+                .as_deref()
+                .map(|c| format!(" (client {c})"))
+                .unwrap_or_default(),
+            if p.connected {
+                "connected"
+            } else {
+                "disconnected"
+            },
+            format!(", connect_attempts={}", p.connect_attempts)
+                + &p.match_index
+                    .map(|i| format!(", match_index={i}"))
+                    .unwrap_or_default(),
+            p.next_index
+                .map(|i| format!(", next_index={i}"))
+                .unwrap_or_default(),
+        ));
+    }
+    if cluster.preview_multi_node {
+        out.push_str(
+            "note: multi-node mode is an experimental, opt-in preview; single-node mode \
+             remains the recommended production mode\n",
+        );
+    }
+    Ok(out)
+}
+
 /// `auradb cluster leader` — report the leader recognized by a running server.
 pub async fn cmd_cluster_leader(
     addr: &str,
@@ -1009,13 +1095,16 @@ pub async fn cmd_cluster_leader(
             "role": cluster.role,
             "term": cluster.term,
             "leader_id": cluster.leader_id,
+            "leader_client_addr": cluster.leader_client_addr,
         }))
         .context("serializing leader report");
     }
     match &cluster.leader_id {
         Some(id) => Ok(format!(
-            "leader: {id}\nterm: {}\nrole: {}",
-            cluster.term, cluster.role
+            "leader: {id}\nterm: {}\nrole: {}\nleader_client_addr: {}",
+            cluster.term,
+            cluster.role,
+            cluster.leader_client_addr.as_deref().unwrap_or("(unknown)")
         )),
         None => anyhow::bail!("no leader is currently known by the server at {addr}"),
     }
@@ -1124,9 +1213,21 @@ async fn status_report(
 }
 
 /// `auradb cert generate-dev` - generate a self-signed development CA and a
-/// server certificate (SAN localhost/127.0.0.1) signed by it. The output is
-/// suitable for local TLS testing only.
-pub fn cmd_cert_generate_dev(out_dir: &Path) -> Result<String> {
+/// server certificate signed by it. The output is suitable for local TLS testing
+/// only.
+///
+/// With no `server_name` and no `sans`, this preserves the original behavior: a
+/// `localhost` certificate with SANs `localhost` and `127.0.0.1`, written as
+/// `server.crt` / `server.key`. When `server_name` is given, the certificate's
+/// Common Name is set to it and the files are named `<server_name>.crt` /
+/// `<server_name>.key`, so several nodes can share one CA in one directory. When
+/// `sans` is non-empty it sets the Subject Alternative Names verbatim; otherwise
+/// the SANs default to the server name plus `localhost` and `127.0.0.1`.
+pub fn cmd_cert_generate_dev(
+    out_dir: &Path,
+    server_name: Option<String>,
+    sans: Vec<String>,
+) -> Result<String> {
     use rcgen::{
         BasicConstraints, CertificateParams, DistinguishedName, DnType, ExtendedKeyUsagePurpose,
         IsCa, KeyPair, KeyUsagePurpose,
@@ -1134,21 +1235,63 @@ pub fn cmd_cert_generate_dev(out_dir: &Path) -> Result<String> {
 
     std::fs::create_dir_all(out_dir).with_context(|| format!("creating {}", out_dir.display()))?;
 
-    let mut ca_params = CertificateParams::new(Vec::new()).map_err(|e| anyhow::anyhow!("{e}"))?;
-    ca_params.is_ca = IsCa::Ca(BasicConstraints::Unconstrained);
-    ca_params.use_authority_key_identifier_extension = true;
-    ca_params.key_usages = vec![KeyUsagePurpose::KeyCertSign, KeyUsagePurpose::CrlSign];
-    let mut ca_dn = DistinguishedName::new();
-    ca_dn.push(DnType::CommonName, "AuraDB Development CA");
-    ca_params.distinguished_name = ca_dn;
-    let ca_key = KeyPair::generate().map_err(|e| anyhow::anyhow!("{e}"))?;
-    let ca_cert = ca_params
-        .self_signed(&ca_key)
-        .map_err(|e| anyhow::anyhow!("{e}"))?;
+    let common_name = server_name
+        .clone()
+        .unwrap_or_else(|| "localhost".to_string());
+    // SANs: explicit list wins; otherwise default to the server name plus the
+    // loopback names so a generated cert always validates for local use.
+    let mut san_list: Vec<String> = if sans.is_empty() {
+        let mut s = vec![common_name.clone()];
+        for d in ["localhost", "127.0.0.1"] {
+            if !s.iter().any(|x| x == d) {
+                s.push(d.to_string());
+            }
+        }
+        s
+    } else {
+        sans
+    };
+    san_list.dedup();
+
+    // Deterministic CA parameters: the same subject and constraints every time,
+    // so a CA rebuilt from a reloaded key is a functional equal of the persisted
+    // one (same subject DN and public key), and leaf certificates it signs chain
+    // to the persisted `ca.crt`.
+    let ca_params = || -> Result<CertificateParams> {
+        let mut p = CertificateParams::new(Vec::new()).map_err(|e| anyhow::anyhow!("{e}"))?;
+        p.is_ca = IsCa::Ca(BasicConstraints::Unconstrained);
+        p.use_authority_key_identifier_extension = true;
+        p.key_usages = vec![KeyUsagePurpose::KeyCertSign, KeyUsagePurpose::CrlSign];
+        let mut dn = DistinguishedName::new();
+        dn.push(DnType::CommonName, "AuraDB Development CA");
+        p.distinguished_name = dn;
+        Ok(p)
+    };
+
+    // Reuse a single CA if one already exists in the directory (so per-node certs
+    // share a trust root); otherwise generate a fresh CA.
+    let ca_path = out_dir.join("ca.crt");
+    let ca_key_path = out_dir.join("ca.key");
+    let (ca_cert, ca_key, ca_reused) = if ca_key_path.exists() {
+        let ca_key = KeyPair::from_pem(&std::fs::read_to_string(&ca_key_path)?)
+            .map_err(|e| anyhow::anyhow!("loading existing CA key: {e}"))?;
+        let ca_cert = ca_params()?
+            .self_signed(&ca_key)
+            .map_err(|e| anyhow::anyhow!("rebuilding existing CA: {e}"))?;
+        (ca_cert, ca_key, true)
+    } else {
+        let ca_key = KeyPair::generate().map_err(|e| anyhow::anyhow!("{e}"))?;
+        let ca_cert = ca_params()?
+            .self_signed(&ca_key)
+            .map_err(|e| anyhow::anyhow!("{e}"))?;
+        std::fs::write(&ca_path, ca_cert.pem())?;
+        std::fs::write(&ca_key_path, ca_key.serialize_pem())?;
+        restrict_key_permissions(&ca_key_path);
+        (ca_cert, ca_key, false)
+    };
 
     let mut srv_params =
-        CertificateParams::new(vec!["localhost".to_string(), "127.0.0.1".to_string()])
-            .map_err(|e| anyhow::anyhow!("{e}"))?;
+        CertificateParams::new(san_list.clone()).map_err(|e| anyhow::anyhow!("{e}"))?;
     srv_params.use_authority_key_identifier_extension = true;
     srv_params.key_usages = vec![
         KeyUsagePurpose::DigitalSignature,
@@ -1156,34 +1299,41 @@ pub fn cmd_cert_generate_dev(out_dir: &Path) -> Result<String> {
     ];
     srv_params.extended_key_usages = vec![ExtendedKeyUsagePurpose::ServerAuth];
     let mut srv_dn = DistinguishedName::new();
-    srv_dn.push(DnType::CommonName, "localhost");
+    srv_dn.push(DnType::CommonName, common_name.clone());
     srv_params.distinguished_name = srv_dn;
     let srv_key = KeyPair::generate().map_err(|e| anyhow::anyhow!("{e}"))?;
     let srv_cert = srv_params
         .signed_by(&srv_key, &ca_cert, &ca_key)
         .map_err(|e| anyhow::anyhow!("{e}"))?;
 
-    let ca_path = out_dir.join("ca.crt");
-    let ca_key_path = out_dir.join("ca.key");
-    let cert_path = out_dir.join("server.crt");
-    let key_path = out_dir.join("server.key");
-    std::fs::write(&ca_path, ca_cert.pem())?;
-    std::fs::write(&ca_key_path, ca_key.serialize_pem())?;
+    // Per-node file names when a server name is given; otherwise the classic
+    // server.crt / server.key.
+    let stem = server_name.as_deref().unwrap_or("server");
+    let cert_path = out_dir.join(format!("{stem}.crt"));
+    let key_path = out_dir.join(format!("{stem}.key"));
     std::fs::write(&cert_path, srv_cert.pem())?;
     std::fs::write(&key_path, srv_key.serialize_pem())?;
-    restrict_key_permissions(&ca_key_path);
     restrict_key_permissions(&key_path);
 
     Ok(format!(
         "WARNING: self-signed development certificates. Do not use them in production.\n\
-         wrote:\n  {ca}\n  {ca_key}\n  {cert}\n  {key}\n\n\
+         {ca_line}\n\
+         wrote:\n  {ca}\n  {ca_key}\n  {cert}\n  {key}\n\
+         SANs: {sans}\n\n\
          Enable TLS in the server config:\n  [tls]\n  enabled = true\n  \
          cert_path = \"{cert}\"\n  key_path = \"{key}\"\n\n\
-         Point clients at the CA with {ca} (server name: localhost).",
+         Point clients at the CA with {ca} (server name: {cn}).",
+        ca_line = if ca_reused {
+            "reused existing CA in this directory"
+        } else {
+            "generated a new development CA"
+        },
         ca = ca_path.display(),
         ca_key = ca_key_path.display(),
         cert = cert_path.display(),
         key = key_path.display(),
+        sans = san_list.join(", "),
+        cn = common_name,
     ))
 }
 
@@ -2165,7 +2315,7 @@ mod tests {
     fn cert_generate_dev_creates_usable_files() {
         let dir = tempfile::tempdir().unwrap();
         let out = dir.path().join("certs");
-        let report = cmd_cert_generate_dev(&out).unwrap();
+        let report = cmd_cert_generate_dev(&out, None, Vec::new()).unwrap();
         assert!(report.contains("WARNING"));
         for f in ["ca.crt", "ca.key", "server.crt", "server.key"] {
             assert!(out.join(f).exists(), "{f} should be written");
@@ -2182,5 +2332,48 @@ mod tests {
             ..Default::default()
         };
         auradb_server::Server::open(scfg).expect("generated cert should load");
+    }
+
+    #[test]
+    fn cert_generate_dev_per_node_shares_one_ca() {
+        let dir = tempfile::tempdir().unwrap();
+        let out = dir.path().join("certs");
+        // Generate three per-node certs with explicit SANs into one directory.
+        for node in ["node1", "node2", "node3"] {
+            let report = cmd_cert_generate_dev(
+                &out,
+                Some(node.to_string()),
+                vec![node.to_string(), "localhost".into(), "127.0.0.1".into()],
+            )
+            .unwrap();
+            assert!(report.contains("node1") || report.contains(node));
+            assert!(
+                out.join(format!("{node}.crt")).exists(),
+                "{node}.crt should be written"
+            );
+            assert!(out.join(format!("{node}.key")).exists());
+        }
+        // Exactly one CA is shared across the nodes.
+        assert!(out.join("ca.crt").exists());
+        let ca_after_first = std::fs::read_to_string(out.join("ca.crt")).unwrap();
+        // Each per-node certificate loads into the server's TLS stack.
+        for node in ["node1", "node2", "node3"] {
+            let scfg = auradb_server::Config {
+                data_dir: dir.path().join(format!("data-{node}")),
+                tls: auradb_server::TlsConfig {
+                    enabled: true,
+                    cert_path: Some(out.join(format!("{node}.crt"))),
+                    key_path: Some(out.join(format!("{node}.key"))),
+                    ..Default::default()
+                },
+                ..Default::default()
+            };
+            auradb_server::Server::open(scfg).expect("generated per-node cert should load");
+        }
+        // The CA was reused, not regenerated, by later nodes.
+        assert_eq!(
+            ca_after_first,
+            std::fs::read_to_string(out.join("ca.crt")).unwrap()
+        );
     }
 }

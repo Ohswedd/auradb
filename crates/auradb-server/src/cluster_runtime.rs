@@ -87,6 +87,15 @@ impl ClusterRuntime {
         }
     }
 
+    /// The recognized leader's client-facing address, if declared for that peer
+    /// (always `None` for single-node, which has no peers).
+    pub fn leader_client_addr(&self) -> Option<String> {
+        match self {
+            ClusterRuntime::Single(_) => None,
+            ClusterRuntime::Multi(n) => n.leader_client_addr(),
+        }
+    }
+
     /// Whether a quorum is currently reachable (always true for single-node).
     pub fn quorum_available(&self) -> bool {
         match self {

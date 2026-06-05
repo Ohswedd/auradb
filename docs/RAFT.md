@@ -1,7 +1,11 @@
 # Raft Consensus Core
 
-> **AuraDB v0.5.0 introduces a controlled, experimental multi-node server
-> preview. Single-node mode remains the recommended production mode.** Building
+> **AuraDB v0.5.1 hardens the controlled multi-node preview. Single-node mode
+> remains the recommended production mode.** v0.5.1 adds cross-process
+> leader-restart and re-election tests: stopping the leader lets the surviving
+> majority elect a new one, and the restarted old leader rejoins as a follower
+> and catches up. This is preview leader-restart behavior, not production
+> automatic failover. Building
 > on the v0.4.x Raft groundwork (log compaction boundaries, durability checks,
 > deterministic multi-node partition tests), v0.5.0 runs Raft over a real
 > cross-process peer transport so server processes can elect a leader and

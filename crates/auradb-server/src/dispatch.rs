@@ -92,7 +92,9 @@ pub fn cluster_health(ctx: &ServerContext) -> Option<auradb_protocol::ClusterHea
         .map(|p| auradb_protocol::ClusterPeerHealth {
             node_id: p.node_id,
             addr: p.addr,
+            client_addr: p.client_addr,
             connected: p.connected,
+            connect_attempts: p.connect_attempts,
             match_index: p.match_index,
             next_index: p.next_index,
         })
@@ -104,6 +106,7 @@ pub fn cluster_health(ctx: &ServerContext) -> Option<auradb_protocol::ClusterHea
         role: status.role.to_string(),
         term: status.term,
         leader_id: status.leader_id.map(|id| id.to_string()),
+        leader_client_addr: node.leader_client_addr(),
         commit_index: status.commit_index,
         applied_index: status.applied_index,
         last_log_index: status.last_log_index,

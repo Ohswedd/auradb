@@ -279,8 +279,13 @@ pub(crate) fn load_or_init_commit_base(raft_dir: &std::path::Path, engine: &Engi
 
 fn not_leader_hint(leader: Option<auradb_cluster::NodeId>) -> String {
     match leader {
-        Some(id) => format!("this node is not the leader; current leader is node {id}"),
-        None => "this node is not the leader and no leader is currently known".to_string(),
+        Some(id) => format!(
+            "this node is not the leader; current leader is node {id}; \
+             retry the write against the leader"
+        ),
+        None => "this node is not the leader and no leader is currently known; \
+                 retry after a short backoff (a leader may not be elected yet)"
+            .to_string(),
     }
 }
 
