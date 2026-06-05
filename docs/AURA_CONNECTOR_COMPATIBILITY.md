@@ -2,21 +2,22 @@
 
 This document is the connector-focused companion to the
 [Compatibility Matrix](COMPATIBILITY.md). It records which Aura Connector release
-talks to AuraDB 0.4.0, what it can drive, and what it cannot. AuraDB 0.4.0 adds the
-replication and Raft groundwork (optional cluster mode, off by default); it
-preserves the existing wire behavior, so the same connector compatibility applies
-and **no connector release is required**. The only wire additions are additive: a
-`cluster` section in the health report and a new `not_leader` error code, both of
-which a 0.3.x connector handles safely (it ignores unknown fields and maps unknown
-error codes to a generic server error).
+talks to AuraDB 0.4.1, what it can drive, and what it cannot. AuraDB 0.4.1 is a
+patch release that hardens the replication and Raft groundwork from v0.4.0
+(optional cluster mode, off by default); it preserves the existing wire behavior,
+so the same connector compatibility applies and **no connector release is
+required**. The only wire additions remain additive: a `cluster` section in the
+health report and the `not_leader` error code, both of which a 0.3.x connector
+handles safely (it ignores unknown fields and maps unknown error codes to a
+generic server error).
 
 ## Summary
 
-- **Aura Connector 0.3.x remains fully compatible with AuraDB 0.4.0. No connector
+- **Aura Connector 0.3.x remains fully compatible with AuraDB 0.4.1. No connector
   release is required.** Cluster mode is server-side and rides the existing AWP 1
-  wire format and Query IR; the new `cluster` health section and `not_leader` error
+  wire format and Query IR; the `cluster` health section and `not_leader` error
   code are additive and optional.
-- **AuraDB 0.4.0 speaks AWP 1** (the 44-byte framed Aura Wire Protocol header,
+- **AuraDB 0.4.1 speaks AWP 1** (the 44-byte framed Aura Wire Protocol header,
   CRC32-checked, with JSON payloads), unchanged from prior releases. See
   [PROTOCOL.md](PROTOCOL.md).
 - **Use Aura Connector 0.3.x.** The published Aura Connector 0.3.x ships a native
@@ -31,6 +32,7 @@ error codes to a generic server error).
 
 | AuraDB | Aura Connector | Protocol | Status |
 | ------ | -------------- | -------- | ------ |
+| 0.4.1  | 0.3.x          | AWP 1    | Supported (native AuraDB backend; cluster fields additive) |
 | 0.4.0  | 0.3.x          | AWP 1    | Supported (native AuraDB backend; cluster fields additive) |
 | 0.3.1  | 0.3.x          | AWP 1    | Supported (native AuraDB backend) |
 | 0.3.0  | 0.3.x          | AWP 1    | Supported (native AuraDB backend) |
@@ -75,6 +77,28 @@ The pure-standard-library Python conformance client at
 `tests/conformance/python/run_conformance.py` runs these scenarios and accepts
 `--auth-token`, `--tls-ca`, and `--tls-server-name`. See
 [CONFORMANCE.md](CONFORMANCE.md).
+
+## `not_leader` handling (v0.4.1)
+
+A write is only accepted by the leader. On a non-leader node the server returns a
+structured error frame with the additive `not_leader` error code and a
+human-readable leader hint. This is validated over the wire in v0.4.1
+(`crates/auradb-server/tests/not_leader.rs`):
+
+- the write comes back as a single, prompt `not_leader` error — the server never
+  retries internally, so a client receives a terminal response rather than a hang;
+- the connection stays healthy afterward (a subsequent request gets a normal
+  response, with auth/TLS state intact).
+
+A 0.3.x connector that does not model `not_leader` specifically maps the unknown
+code to its generic server-error type and surfaces it to the caller — it does not
+crash, does not retry forever, and does not drop auth/TLS state. This was checked
+directly against the published `aura-connector` 0.3.0 for v0.4.1: the `not_leader`
+code falls back to `AuraServerError`, arrives with `retryable = False` (the wire
+frame omits the field), and the connector's retry policy is bounded
+(`max_attempts = 3`). No connector release is required. In single-node cluster
+mode the sole node is always the leader, so `not_leader` does not arise in normal
+operation.
 
 ## Supported features
 

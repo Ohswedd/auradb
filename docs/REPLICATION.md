@@ -1,9 +1,15 @@
 # Replication
 
-AuraDB v0.4.0 maps database mutations onto the replicated Raft log and applies
-committed entries back to the engine. This document describes the replicated
-command model, the leader-only write path, the idempotent apply path, restart
-replay, the snapshot boundary, and the replication metrics.
+> **AuraDB v0.4.1 hardens the Raft groundwork introduced in v0.4.0. Multi-node
+> server deployment remains experimental and disabled by default. Single-node
+> mode remains the recommended production mode.** v0.4.1 strengthens apply
+> idempotency under restart and the snapshot restore boundary (see *Snapshot
+> boundary* below).
+
+AuraDB maps database mutations onto the replicated Raft log and applies committed
+entries back to the engine. This document describes the replicated command model,
+the leader-only write path, the idempotent apply path, restart replay, the
+snapshot boundary, and the replication metrics.
 
 The replication layer is the bridge between the Raft core (consensus over an
 opaque log, see [RAFT.md](RAFT.md)) and the engine (which holds the data). The
@@ -89,15 +95,30 @@ The snapshot manifest (`SNAPSHOT_FORMAT_VERSION = 1`) records:
 
 - `last_included_index` and `last_included_term` — the log position the snapshot
   covers; entries at or below this index may be compacted once a snapshot is
-  durable.
+  durable. This lines up with the Raft log's compacted prefix (see
+  [RAFT.md](RAFT.md)).
+- `cluster_id` / `node_id` (v0.4.1, optional) — the cluster and node the snapshot
+  was taken from, so a restore can detect a cluster mismatch.
+- `storage_format_version` (v0.4.1) — the storage format the snapshot was captured
+  from; a restore into a build that cannot read it is refused.
+- `collections` / `records` (v0.4.1) — captured counts, a quick integrity
+  cross-check surfaced by `auradb snapshot inspect`.
 - `digest` — a CRC32 digest of the payload, verified on read.
-- `created_by_version` — the AuraDB version that wrote the snapshot.
+- `created_by_version` / `created_at_unix` — provenance.
 
 The payload is a portable logical dump (schemas plus current live records)
 captured through the engine's public API. A restore rebuilds storage, indexes,
 and planner statistics into a fresh engine exactly as a normal load would.
-Decoding or verifying a manifest **rejects a newer format version** and fails on a
-digest mismatch.
+
+**Restore hardening (v0.4.1).** `restore_to(dir, opts)` is **atomic**: it
+materializes the snapshot into a staging directory beside the target, validates
+it, and only then swaps it into place — a failure never corrupts existing data. It
+refuses to overwrite a non-empty target unless `force` is set, and rejects a newer
+format version, a storage format it cannot read, a cluster-id mismatch (unless
+explicitly allowed), a corrupt manifest, and a payload digest mismatch **before
+touching the target**. The v0.4.1 manifest fields are additive and optional, so a
+v0.4.0 manifest still decodes. Operators drive this through `auradb snapshot
+create|inspect|restore` (see [CLI.md](CLI.md)).
 
 ## Replication metrics
 

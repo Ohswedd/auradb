@@ -124,7 +124,14 @@ identity offline and is the first stop when a cluster node refuses to start. A
 single-node cluster provides **no fault tolerance** (same availability as a single
 non-cluster node) and adds write-path overhead. Multi-node deployment is
 experimental and disabled in this release: configuring peers is rejected at
-startup. See [CLUSTERING.md](CLUSTERING.md) and [CLI.md](CLI.md).
+startup.
+
+The durable Raft log grows over time; compact it (after the engine has applied the
+prefix) with `auradb cluster compact-log [--dry-run] [--json]`. Capture and inspect
+portable snapshots with `auradb snapshot create|inspect|restore`. For diagnosing
+`not_leader`, peer rejection, corrupt cluster metadata, or recovery from backup,
+see [CLUSTER_TROUBLESHOOTING.md](CLUSTER_TROUBLESHOOTING.md). See also
+[CLUSTERING.md](CLUSTERING.md) and [CLI.md](CLI.md).
 
 ## Upgrading
 

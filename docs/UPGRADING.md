@@ -1,5 +1,20 @@
 # Upgrading
 
+## From v0.4.0 to v0.4.1
+
+v0.4.1 is a patch release and a drop-in binary replacement. It changes **no
+on-disk format**: storage stays at v2, cluster metadata at v1, the Raft log and
+hard state are unchanged, and the snapshot manifest stays at v1 (the new manifest
+fields are additive and optional). A v0.4.0 data directory — including a v0.4.0
+single-node cluster directory with its `cluster/` identity, `raft-log.bin`,
+`raft-state.json`, and `commit-base.json` — opens directly with no migration.
+
+The Raft log gains an optional `raft-compaction.json`, written only the first time
+you run `auradb cluster compact-log`; a directory without it is treated as having
+an empty compacted prefix. Stop the old binary, swap in the new one, and start it.
+Downgrading back to v0.4.0 is safe as long as you have not compacted the Raft log
+(v0.4.0 does not read `raft-compaction.json`).
+
 ## From v0.3.1 to v0.4.0
 
 v0.4.0 is a drop-in binary replacement. The on-disk **storage format is unchanged

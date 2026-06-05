@@ -355,3 +355,206 @@ fn raft_log_corruption_detected_via_storage() {
     std::fs::write(&path, bytes).unwrap();
     assert!(FileStorage::open(dir.path()).is_err());
 }
+
+// ---- deterministic multi-node partition tests (v0.4.1) ----
+
+/// Drive the simulation until `pred` holds or `budget` ticks are exhausted.
+fn run_until(sim: &mut Sim, budget: u32, mut pred: impl FnMut(&Sim) -> bool) -> bool {
+    for _ in 0..budget {
+        if pred(sim) {
+            return true;
+        }
+        sim.tick();
+        sim.deliver_all();
+    }
+    pred(sim)
+}
+
+fn other_leader(sim: &Sim, excluding: NodeId) -> Option<NodeId> {
+    sim.ids()
+        .iter()
+        .copied()
+        .find(|&id| id != excluding && sim.node(id).role() == NodeRole::Leader)
+}
+
+#[test]
+fn minority_partition_cannot_commit() {
+    let mut sim = Sim::new(&ids(3));
+    let leader = sim.run_until_leader(200).unwrap();
+    // Isolate the leader: it is now a minority of one and cannot reach a majority.
+    sim.partition(leader);
+    let committed_before = sim.node(leader).commit_index();
+    let proposed = sim.propose(leader, db_command(b"isolated")).unwrap();
+    // Give it ample time; with no majority the entry never commits.
+    for _ in 0..100 {
+        sim.tick();
+        sim.deliver_all();
+    }
+    assert!(
+        sim.node(leader).commit_index() < proposed,
+        "an isolated minority leader cannot commit new entries"
+    );
+    assert_eq!(sim.node(leader).commit_index(), committed_before);
+}
+
+#[test]
+fn majority_partition_elects_leader() {
+    let mut sim = Sim::new(&ids(3));
+    let leader = sim.run_until_leader(200).unwrap();
+    sim.partition(leader);
+    // The remaining majority elects a different leader.
+    let elected = run_until(&mut sim, 200, |s| other_leader(s, leader).is_some());
+    assert!(elected, "the majority side elects a new leader");
+    let new_leader = other_leader(&sim, leader).unwrap();
+    assert_ne!(new_leader, leader);
+}
+
+#[test]
+fn leader_loses_majority_stops_committing() {
+    let mut sim = Sim::new(&ids(3));
+    let leader = sim.run_until_leader(200).unwrap();
+    // Commit one entry while healthy.
+    let committed = sim.propose(leader, db_command(b"healthy")).unwrap();
+    run_until(&mut sim, 50, |s| s.node(leader).commit_index() >= committed);
+    let high_water = sim.node(leader).commit_index();
+    // Lose the majority; further proposals on the old leader cannot commit.
+    sim.partition(leader);
+    let _ = sim.propose(leader, db_command(b"after-loss"));
+    for _ in 0..80 {
+        sim.tick();
+        sim.deliver_all();
+    }
+    assert_eq!(
+        sim.node(leader).commit_index(),
+        high_water,
+        "a leader without a majority stops advancing the commit index"
+    );
+}
+
+#[test]
+fn old_leader_rejoins_and_steps_down() {
+    let mut sim = Sim::new(&ids(3));
+    let leader = sim.run_until_leader(200).unwrap();
+    sim.partition(leader);
+    run_until(&mut sim, 200, |s| other_leader(s, leader).is_some());
+    // Heal the old leader; it observes the higher term and reverts to follower.
+    sim.heal(leader);
+    let stepped_down = run_until(&mut sim, 100, |s| {
+        s.node(leader).role() == NodeRole::Follower
+    });
+    assert!(stepped_down, "the old leader steps down after rejoining");
+}
+
+#[test]
+fn partitioned_follower_catches_up_after_heal() {
+    let all = ids(3);
+    let mut sim = Sim::new(&all);
+    let leader = sim.run_until_leader(200).unwrap();
+    let follower = *all.iter().find(|&&id| id != leader).unwrap();
+    // Isolate a follower, then commit several entries with the remaining majority.
+    sim.partition(follower);
+    for i in 0..4 {
+        sim.propose(leader, db_command(&[i])).unwrap();
+        sim.deliver_all();
+    }
+    let target = sim.node(leader).last_log_index();
+    // Heal; the follower catches up to the leader's log.
+    sim.heal(follower);
+    let caught_up = run_until(&mut sim, 200, |s| {
+        s.node(follower).last_log_index() >= target
+    });
+    assert!(caught_up, "the healed follower catches up to the leader");
+}
+
+#[test]
+fn committed_entry_survives_leader_change() {
+    let mut sim = Sim::new(&ids(3));
+    let leader = sim.run_until_leader(200).unwrap();
+    let idx = sim.propose(leader, db_command(b"durable")).unwrap();
+    run_until(&mut sim, 50, |s| s.node(leader).commit_index() >= idx);
+
+    // Force a leader change by partitioning the current leader.
+    sim.partition(leader);
+    run_until(&mut sim, 200, |s| other_leader(s, leader).is_some());
+    let new_leader = other_leader(&sim, leader).unwrap();
+    // The committed entry is present on the new leader.
+    let entry = sim.node(new_leader).storage().entry_at(idx);
+    assert!(
+        entry.is_some(),
+        "a committed entry survives the leader change"
+    );
+    assert_eq!(entry.unwrap().command.payload, b"durable");
+}
+
+#[test]
+fn uncommitted_old_leader_entry_not_committed_after_partition() {
+    let all = ids(3);
+    let mut sim = Sim::new(&all);
+    let leader = sim.run_until_leader(200).unwrap();
+
+    // The leader appends an entry but is isolated before it can replicate: it is
+    // uncommitted.
+    sim.partition(leader);
+    let orphan = sim.propose(leader, db_command(b"orphan")).unwrap();
+    for _ in 0..20 {
+        sim.tick();
+        sim.deliver_all();
+    }
+    assert!(sim.node(leader).commit_index() < orphan);
+
+    // The majority elects a new leader and commits its own entries at the same
+    // indices.
+    run_until(&mut sim, 200, |s| other_leader(s, leader).is_some());
+    let new_leader = other_leader(&sim, leader).unwrap();
+    let committed = sim.propose(new_leader, db_command(b"real")).unwrap();
+    run_until(&mut sim, 100, |s| {
+        s.node(new_leader).commit_index() >= committed
+    });
+
+    // Heal the old leader; its orphaned entry is repaired away and never commits.
+    let real_commit = sim.node(new_leader).commit_index();
+    sim.heal(leader);
+    run_until(&mut sim, 200, |s| {
+        s.node(leader).role() == NodeRole::Follower
+            && s.node(leader).last_log_index() >= real_commit
+    });
+    let repaired = sim.node(leader).storage().entry_at(orphan);
+    if let Some(entry) = repaired {
+        assert_ne!(
+            entry.command.payload, b"orphan",
+            "the orphaned uncommitted entry was overwritten by the new leader's log"
+        );
+    }
+}
+
+#[test]
+fn conflicting_logs_repaired_after_partition() {
+    let all = ids(3);
+    let mut sim = Sim::new(&all);
+    let leader = sim.run_until_leader(200).unwrap();
+    // Old leader writes a divergent, uncommitted tail while isolated.
+    sim.partition(leader);
+    sim.propose(leader, db_command(b"diverged-1")).unwrap();
+    sim.propose(leader, db_command(b"diverged-2")).unwrap();
+    for _ in 0..10 {
+        sim.tick();
+        sim.deliver_all();
+    }
+    // Majority elects a new leader and commits its own entries.
+    run_until(&mut sim, 200, |s| other_leader(s, leader).is_some());
+    let new_leader = other_leader(&sim, leader).unwrap();
+    for _ in 0..3 {
+        sim.propose(new_leader, db_command(b"authoritative"))
+            .unwrap();
+    }
+    sim.deliver_all();
+    let target = sim.node(new_leader).last_log_index();
+
+    // Heal; the old leader's conflicting tail is repaired to match the new leader.
+    sim.heal(leader);
+    let converged = run_until(&mut sim, 300, |s| {
+        s.node(leader).last_log_index() == target
+            && s.node(leader).storage().last_term() == s.node(new_leader).storage().last_term()
+    });
+    assert!(converged, "the divergent log is repaired after healing");
+}

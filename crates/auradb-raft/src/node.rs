@@ -220,6 +220,13 @@ impl<S: RaftStorage> RaftNode<S> {
         &self.storage
     }
 
+    /// Mutably borrow the underlying storage (for maintenance such as log
+    /// compaction). The consensus invariants are unaffected as long as the caller
+    /// only compacts a prefix at or below the applied index.
+    pub fn storage_mut(&mut self) -> &mut S {
+        &mut self.storage
+    }
+
     /// Replication lag in entries (commit minus applied).
     pub fn replication_lag(&self) -> u64 {
         self.commit_index

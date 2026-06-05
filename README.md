@@ -7,7 +7,7 @@
 [![CI](https://github.com/Ohswedd/auradb/actions/workflows/ci.yml/badge.svg)](https://github.com/Ohswedd/auradb/actions/workflows/ci.yml)
 [![Security](https://github.com/Ohswedd/auradb/actions/workflows/security.yml/badge.svg)](https://github.com/Ohswedd/auradb/actions/workflows/security.yml)
 [![Docker](https://github.com/Ohswedd/auradb/actions/workflows/docker.yml/badge.svg)](https://github.com/Ohswedd/auradb/actions/workflows/docker.yml)
-[![Release](https://img.shields.io/badge/release-v0.4.0-green.svg)](CHANGELOG.md)
+[![Release](https://img.shields.io/badge/release-v0.4.1-green.svg)](CHANGELOG.md)
 [![Rust](https://img.shields.io/badge/rust-1.85%2B-orange.svg)](https://www.rust-lang.org)
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
 
@@ -29,6 +29,13 @@ a real, persistent, recoverable, single-node server, not a mock or an in-memory
 demo.
 
 ## Scope and honesty
+
+AuraDB 0.4.1 is a patch release that hardens the Raft and replication groundwork
+introduced in 0.4.0 — log compaction boundaries, snapshot restore edge cases,
+apply idempotency under restart, cluster-metadata corruption handling, peer
+configuration validation, and operational diagnostics — before any cross-process
+multi-node preview. **Multi-node server deployment remains experimental and
+disabled by default; single-node mode remains the recommended production path.**
 
 AuraDB 0.4.0 adds the replication and Raft foundation for future clustered
 deployments, on top of the 0.3.x MVCC and query-planner foundations: each record
@@ -271,7 +278,7 @@ auradb check --data-dir .local/auradb
 auradb gc --data-dir .local/auradb
 auradb stats analyze --data-dir .local/auradb
 auradb stats show --data-dir .local/auradb --json
-auradb bench --json --output benches/baseline/v0.4.0.json
+auradb bench --json --output benches/baseline/v0.4.1.json
 auradb status --addr 127.0.0.1:7171 --json
 auradb auth hash-token --token "your-secret"
 auradb auth rotate-token --config AuraDB.toml --token "new-secret" --backup
@@ -370,7 +377,7 @@ are exposed. No external collector is required to run the server. See
 A published image is available on the GitHub Container Registry:
 
 ```bash
-docker run --rm -p 7171:7171 -v auradb-data:/data ghcr.io/ohswedd/auradb:0.4.0
+docker run --rm -p 7171:7171 -v auradb-data:/data ghcr.io/ohswedd/auradb:0.4.1
 ```
 
 The image runs as a non-root user, exposes `7171`, stores data in the `/data`
@@ -426,7 +433,7 @@ and `EXPLAIN ANALYZE`.
 The CLI also runs a baseline suite and writes a JSON snapshot:
 
 ```bash
-auradb bench --json --output benches/baseline/v0.4.0.json
+auradb bench --json --output benches/baseline/v0.4.1.json
 ```
 
 Benchmarks are hardware-dependent and exist to catch regressions on the same

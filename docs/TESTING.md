@@ -87,8 +87,11 @@ cargo build --workspace --all-features
   the v0.3.1 release these were validated locally with `aura-connector` 0.3.0
   (from PyPI) in plaintext, auth, and TLS-plus-auth modes — the connector smoke
   passing 11/11 and the standard-library wire conformance 17/17 over TLS plus
-  auth — with no token, token hash, or private key in the server logs. See
-  [CONFORMANCE.md](CONFORMANCE.md).
+  auth — with no token, token hash, or private key in the server logs. For the
+  **v0.4.1** release the same published `aura-connector` 0.3.0 was re-run against
+  a freshly built server in both non-cluster and single-node cluster modes — the
+  connector smoke passing 12/12 and the standard-library wire conformance 18/18
+  in each mode. See [CONFORMANCE.md](CONFORMANCE.md).
 - **Secure deployment** (`docker-compose.secure.yml`): the secure Compose example
   was validated at runtime with development certificates and a generated token
   hash. The container reports healthy over TLS with authentication, a plaintext
@@ -152,4 +155,37 @@ never wall-clock timing — so they are reproducible and never flaky.
 
 See [CLUSTERING.md](CLUSTERING.md), [RAFT.md](RAFT.md), and
 [REPLICATION.md](REPLICATION.md).
+
+## Raft durability and cluster-mode hardening suites (v0.4.1)
+
+These suites harden the v0.4.0 groundwork. All are deterministic — multi-node
+behavior is driven by the in-process simulation with a logical clock, so there are
+no flaky sleeps.
+
+- **Raft log compaction** (`auradb-raft`) — the compactable-prefix calculation
+  refuses to discard unapplied or uncommitted entries, preserves the last included
+  index/term, returns a structured `Compacted` error for reads before the prefix,
+  understands the boundary in the AppendEntries check, persists across restart, and
+  fails closed on corrupt or disagreeing compaction metadata.
+- **Snapshot restore edge cases** (`auradb-replication`) — atomic restore that
+  rejects future formats, cluster-id mismatch, corrupt payloads, and a non-empty
+  target without `--force`, and preserves existing data on a validation failure;
+  plus index/stats rebuild and manifest inspection.
+- **Apply idempotency under restart** (`auradb-replication`) — committed entries
+  apply once across restarts; commit-before-apply, partial apply, and
+  apply-before-watermark sequences recover without duplicates; uncommitted entries
+  are not applied.
+- **Cluster metadata corruption** (`auradb-cluster`) — missing, malformed,
+  future-format, partial, and id-mismatch identity is rejected (fail closed), and
+  peer configuration is validated (duplicate / self / invalid peers).
+- **Deterministic multi-node partitions** (`auradb-raft`) — minority cannot
+  commit, majority elects a leader, the old leader steps down on rejoin, committed
+  entries survive a leader change, and an uncommitted old-leader entry is repaired
+  away.
+- **`not_leader` over the wire** (`auradb-server`) — a non-leader write returns a
+  structured `not_leader` error with a hint, the connection stays healthy, and the
+  response is prompt and terminal (no internal retry loop).
+- **v0.4.1 upgrade** (`auradb`) — pre-0.4.x fixtures and the v0.4.0 cluster layout
+  open unchanged; compaction metadata initializes safely; v0.4.0 snapshot manifests
+  still decode; future formats are rejected.
 - `cmd_bench_compare` unit tests cover the benchmark regression comparison logic.

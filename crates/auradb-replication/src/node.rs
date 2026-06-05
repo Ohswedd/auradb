@@ -176,6 +176,56 @@ impl ClusterNode {
             apply_errors: self.apply_errors.load(Ordering::Relaxed),
         }
     }
+
+    /// Compact the durable Raft log up to the safely-applied prefix.
+    ///
+    /// The engine's applied state is the durable local snapshot that covers the
+    /// prefix, so every entry at or below the applied index can be discarded. The
+    /// prefix is bounded by both the committed and applied indices, so compaction
+    /// never runs ahead of durability. With `dry_run`, nothing is modified and the
+    /// report describes what would happen.
+    pub fn compact_log(&self, dry_run: bool) -> Result<CompactionReport> {
+        let mut node = self.raft.lock().expect("raft mutex");
+        let applied = node.applied_index();
+        let commit = node.commit_index();
+        let up_to = node.storage().compactable_prefix(applied);
+        let outcome = if dry_run {
+            node.storage().compact_dry_run(up_to, applied)?
+        } else {
+            node.storage_mut().compact(up_to, applied)?
+        };
+        Ok(CompactionReport {
+            compacted: outcome.compacted,
+            entries_discarded: outcome.entries_discarded,
+            last_included_index: outcome.last_included_index.get(),
+            last_included_term: outcome.last_included_term.get(),
+            commit_index: commit.get(),
+            applied_index: applied.get(),
+            last_log_index: outcome.last_index.get(),
+            dry_run: outcome.dry_run,
+        })
+    }
+}
+
+/// The result of a Raft log compaction (or dry run) on a [`ClusterNode`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct CompactionReport {
+    /// Whether any entries were (or would be) discarded.
+    pub compacted: bool,
+    /// Number of entries discarded (or that would be discarded).
+    pub entries_discarded: u64,
+    /// The last log index included in the compacted prefix afterwards.
+    pub last_included_index: u64,
+    /// The Raft term of `last_included_index`.
+    pub last_included_term: u64,
+    /// The Raft commit index at the time of compaction.
+    pub commit_index: u64,
+    /// The applied index that bounded the compaction.
+    pub applied_index: u64,
+    /// The log's last index (unchanged by compaction).
+    pub last_log_index: u64,
+    /// Whether this was a dry run (no files modified).
+    pub dry_run: bool,
 }
 
 /// The `ReplicatedLog` the engine commits through. It only touches Raft — the
@@ -272,5 +322,28 @@ mod tests {
         };
         let err = log.replicate(&batch).unwrap_err();
         assert_eq!(err.code(), auradb_core::ErrorCode::NotLeader);
+    }
+
+    #[test]
+    fn not_leader_error_contains_hint() {
+        let dir = tempdir().unwrap();
+        let storage = FileStorage::open(dir.path()).unwrap();
+        let node = RaftNode::new(
+            RaftConfig::single_node(auradb_cluster::NodeId::from_raw(1)),
+            storage,
+        );
+        let log = RaftWriteLog {
+            raft: Arc::new(Mutex::new(node)),
+            commit_ts_base: 0,
+        };
+        let batch = Batch {
+            txn_id: auradb_core::TxnId(1),
+            ops: vec![],
+        };
+        let err = log.replicate(&batch).unwrap_err();
+        // The structured error carries a human-readable leader hint, even when no
+        // leader is yet known, so a client can surface why the write was refused.
+        let msg = err.to_string();
+        assert!(msg.contains("not the leader"), "{msg}");
     }
 }

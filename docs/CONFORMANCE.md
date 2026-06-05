@@ -120,6 +120,31 @@ standard-library Python wire conformance passed over TLS-plus-auth (17/17
 scenarios), with no token, token hash, or private key appearing in the server
 logs.
 
+For the **v0.4.1** release the connector conformance gap was closed against the
+**published** `aura-connector` 0.3.0 (installed from PyPI within
+`aura-connector>=0.3,<0.4`; `aura.__version__ == "0.3.0"`), driven through its
+native AuraDB backend against a freshly built v0.4.1 server in **both** supported
+deployment modes:
+
+- **Non-cluster (recommended) mode** — `run_connector_smoke.py` 12/12 checks and
+  `run_conformance.py` 18/18 scenarios passed; the server's `health()` frame
+  carries no `cluster` section and the connector handles it cleanly.
+- **Single-node cluster mode** (`examples/auradb.cluster.local.toml`, writes
+  routed through the Raft log) — `run_connector_smoke.py` 12/12 checks and
+  `run_conformance.py` 18/18 scenarios passed. The additive `cluster` health
+  section is present and honest (`single_node = true`, `peer_count = 0`,
+  `applied_index == commit_index`, role `leader`) and the published 0.3.x
+  connector ignores the unknown field without error.
+
+`not_leader` was validated by the staged server-layer test
+(`crates/auradb-server/tests/not_leader.rs`, 3/3 passing) plus a direct check of
+the published connector's error mapping: the `not_leader` code is not modelled by
+0.3.x, so it falls back to the generic `AuraServerError` (acceptable for v0.4.1),
+arrives with `retryable = False` (the wire frame omits the field, which the
+connector defaults to false), and the connector retry policy is bounded
+(`max_attempts = 3`), so a client never retries forever. No connector change was
+required.
+
 ## Official client
 
 The published Aura Connector (>= 0.3.0) drives the same server through its native

@@ -531,6 +531,42 @@ token_hash_algorithm = "argon2id"
     }
 
     #[test]
+    fn cluster_peers_rejected_in_v041() {
+        // Any non-empty peers list is rejected at startup: cross-process
+        // multi-node deployment is experimental and not enabled in this release.
+        let mut cluster = auradb_cluster::ClusterConfig::single_node();
+        cluster.peers = vec!["10.0.0.2:7172".into()];
+        let c = Config {
+            cluster,
+            ..Config::default()
+        };
+        assert!(c.validate().is_err());
+    }
+
+    #[test]
+    fn cluster_non_loopback_peer_rejected_without_override() {
+        // A non-loopback cluster bind requires an explicit insecure-bind override
+        // because cluster transport authentication is not available yet.
+        let mut cluster = auradb_cluster::ClusterConfig::single_node();
+        cluster.listen_addr = "10.0.0.1:7172".into();
+        cluster.advertise_addr = "10.0.0.1:7172".into();
+        let c = Config {
+            cluster,
+            ..Config::default()
+        };
+        assert!(c.validate().is_err());
+    }
+
+    #[test]
+    fn cluster_disabled_ignores_missing_metadata() {
+        // The default (disabled) cluster section validates and leaves single-node
+        // behavior unchanged regardless of on-disk cluster metadata.
+        let c = Config::default();
+        assert!(!c.cluster.enabled);
+        c.validate().unwrap();
+    }
+
+    #[test]
     fn loopback_addresses_are_not_public() {
         for host in ["127.0.0.1", "::1", "localhost"] {
             let c = Config {

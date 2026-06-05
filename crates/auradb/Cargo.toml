@@ -23,6 +23,8 @@ criterion = { workspace = true }
 rand = { workspace = true }
 auradb-cluster = { workspace = true }
 auradb-replication = { workspace = true }
+auradb-storage = { workspace = true }
+crc32fast = { workspace = true }
 
 [[bench]]
 name = "storage"

@@ -1,7 +1,13 @@
 # Raft Consensus Core
 
-AuraDB v0.4.0 includes a minimal, deterministic Raft log and consensus core that
-underpins cluster mode. This document describes the log model, the durable
+> **AuraDB v0.4.1 hardens the Raft groundwork introduced in v0.4.0. Multi-node
+> server deployment remains experimental and disabled by default. Single-node
+> mode remains the recommended production mode.** v0.4.1 adds log compaction
+> boundaries (see below), stronger durability checks, and deterministic
+> multi-node partition tests.
+
+AuraDB's Raft log and consensus core is a minimal, deterministic implementation
+that underpins cluster mode. This document describes the log model, the durable
 storage and its corruption handling, the node state machine, the deterministic
 test clock, and precisely what is and is not implemented.
 
@@ -76,6 +82,37 @@ Appends always extend the tail and are validated on every append:
 
 The consensus core truncates any conflicting suffix before appending, so an
 append is always a clean extension of the tail.
+
+## Log compaction boundaries (v0.4.1)
+
+Once a snapshot durably covers a prefix of the log, those entries can be
+discarded. The durable store (`FileStorage`) records the compacted prefix — the
+**last included index** and **term** — in `raft-compaction.json`, and keeps only
+the retained suffix in `raft-log.bin`. The boundary is enforced strictly:
+
+- **Compaction never runs ahead of durability.** `compact(up_to, applied)`
+  refuses (with `CompactionRefused`) to discard any entry that is beyond the
+  committed index, beyond the applied index the caller supplies, or beyond the end
+  of the log. `compactable_prefix(applied)` returns the highest safely compactable
+  index — the minimum of the committed index, the applied index, and the last
+  index.
+- **The boundary is preserved.** After compaction, `last_included_index` /
+  `last_included_term` are retained; `term_at(last_included_index)` still resolves
+  the boundary term, so the AppendEntries consistency check works across the
+  compacted prefix.
+- **Reads before the prefix fail closed.** `read_at(index)` for an index at or
+  below the compacted prefix returns a structured `Compacted` error rather than a
+  wrong or empty result. Truncating into the compacted prefix is likewise refused.
+- **Restart preserves the boundary, and corruption fails closed.** The compaction
+  metadata is reloaded on open; a future format version, or metadata that
+  disagrees with the retained log's first entry, is rejected as corruption.
+- **Snapshots line up with the boundary.** A local snapshot is captured at a
+  `last_included_index` / `last_included_term` that matches the compacted prefix
+  (see [REPLICATION.md](REPLICATION.md)).
+
+Operators compact through `auradb cluster compact-log [--dry-run] [--json]` (see
+[CLI.md](CLI.md)). Compaction is local: this release does **not** ship streaming
+snapshot transfer between nodes.
 
 ## The node state machine
 
