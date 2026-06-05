@@ -7,7 +7,7 @@
 [![CI](https://github.com/Ohswedd/auradb/actions/workflows/ci.yml/badge.svg)](https://github.com/Ohswedd/auradb/actions/workflows/ci.yml)
 [![Security](https://github.com/Ohswedd/auradb/actions/workflows/security.yml/badge.svg)](https://github.com/Ohswedd/auradb/actions/workflows/security.yml)
 [![Docker](https://github.com/Ohswedd/auradb/actions/workflows/docker.yml/badge.svg)](https://github.com/Ohswedd/auradb/actions/workflows/docker.yml)
-[![Release](https://img.shields.io/badge/release-v0.4.1-green.svg)](CHANGELOG.md)
+[![Release](https://img.shields.io/badge/release-v0.5.0-green.svg)](CHANGELOG.md)
 [![Rust](https://img.shields.io/badge/rust-1.85%2B-orange.svg)](https://www.rust-lang.org)
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
 
@@ -30,12 +30,15 @@ demo.
 
 ## Scope and honesty
 
-AuraDB 0.4.1 is a patch release that hardens the Raft and replication groundwork
-introduced in 0.4.0 — log compaction boundaries, snapshot restore edge cases,
-apply idempotency under restart, cluster-metadata corruption handling, peer
-configuration validation, and operational diagnostics — before any cross-process
-multi-node preview. **Multi-node server deployment remains experimental and
-disabled by default; single-node mode remains the recommended production path.**
+AuraDB 0.5.0 introduces a **controlled, experimental multi-node server preview**:
+real AuraDB server processes can form a cross-process cluster, elect a leader, and
+replicate writes through Raft over a dedicated, frame-checked, authenticated peer
+transport. The preview is **off by default** and gated behind two explicit
+`[cluster]` opt-ins. **AuraDB v0.5.0 introduces a controlled, experimental
+multi-node server preview. Single-node mode remains the recommended production
+mode.** It builds on the v0.4.x Raft and replication groundwork (a durable
+consensus core, a replicated commit path, log compaction boundaries, and snapshot
+restore hardening), and changes no on-disk or wire format.
 
 AuraDB 0.4.0 adds the replication and Raft foundation for future clustered
 deployments, on top of the 0.3.x MVCC and query-planner foundations: each record
@@ -48,15 +51,15 @@ error, an idempotent replicated apply path, a snapshot boundary, and cluster
 CLI/metrics/status — all validated by tests. When cluster mode is disabled (the
 default), every v0.3.1 behavior is preserved byte-for-byte. AuraDB implements
 single-node snapshot isolation with optimistic write conflict detection. It is
-not serializable isolation. It is honest about its boundaries. Multi-node
-clustering is **experimental**: the Raft and replication core is exercised by
-deterministic in-process tests, but cross-process multi-node server deployment is
-not enabled in this release (configuring peers is rejected at startup), and a
-single-node cluster provides no fault tolerance. The following are not
+not serializable isolation. It is honest about its boundaries. The multi-node
+server preview is **experimental**: real cross-process leader election and Raft
+replication work, but the preview is off by default, gated behind two opt-ins
+(`enabled = true` and `experimental_multi_node = true`), uses static membership,
+and a single-node cluster provides no fault tolerance. The following are not
 implemented and not claimed: production multi-node clustering, automatic
-failover, linearizable reads, distributed transactions, sharding, multi-region;
-approximate (ANN/HNSW) vector indexes; BM25 full-text and hybrid fusion ranking;
-and serializable isolation.
+failover, dynamic membership, linearizable reads, follower reads, distributed
+transactions, sharding, multi-region; approximate (ANN/HNSW) vector indexes; BM25
+full-text and hybrid fusion ranking; and serializable isolation.
 Authentication and TLS are now implemented and enforced
 when enabled, but RBAC, field-level encryption, encryption at rest, and audit
 logging are not. Unsupported operations return a structured error. See
@@ -155,15 +158,62 @@ mode remains the recommended production path.**
   future state transfer; Raft/replication metrics; and
   `auradb cluster init|status|peers|doctor|bootstrap`.
 
-Multi-node clustering is **experimental and not enabled for server deployment**:
-configuring `peers` is rejected at startup. See [`docs/CLUSTERING.md`](docs/CLUSTERING.md),
+See [`docs/CLUSTERING.md`](docs/CLUSTERING.md),
 [`docs/RAFT.md`](docs/RAFT.md), and [`docs/REPLICATION.md`](docs/REPLICATION.md).
+
+## New in 0.5.0: experimental multi-node preview
+
+> **AuraDB v0.5.0 introduces a controlled, experimental multi-node server
+> preview. Single-node mode remains the recommended production mode.**
+
+Real AuraDB server processes can now form a cross-process cluster, elect a leader,
+and replicate writes through Raft. The preview is **off by default** and requires
+two explicit `[cluster]` opt-ins:
+
+```toml
+[cluster]
+enabled = true
+experimental_multi_node = true
+```
+
+- **Cross-process peer transport.** A dedicated, frame-checked (magic `APR1`,
+  protocol v1, length-delimited, CRC32, 16 MiB cap) socket carries Raft messages;
+  connections open with a `PeerHello` handshake that verifies the protocol
+  version, cluster id, node id (against static membership), and a shared token.
+- **Static membership.** Every node declares every other by `{ node_id, addr }`;
+  there is no join/leave/dynamic membership.
+- **Fail-closed guardrails.** A non-empty `peers` list requires
+  `experimental_multi_node = true`; any non-loopback cluster address requires
+  `allow_experimental_public_cluster = true`, which additionally requires peer TLS
+  and a `peer_auth_token`.
+- **Leader/follower behavior.** Writes go to the leader and commit on a majority
+  (a minority cannot commit); followers reject writes with a structured
+  `not_leader` error and reject reads. A restarted follower catches up from the
+  leader.
+- **Live tooling.** `auradb cluster leader|wait-leader|wait-ready` query a running
+  node, and `auradb status --json` reports per-peer state (`preview_multi_node`,
+  `quorum_available`, `peers`).
+
+The validated path is the three-node loopback example. Try it from
+[`examples/cluster`](examples/cluster) and read
+[`docs/CLUSTERING.md`](docs/CLUSTERING.md):
+
+```bash
+auradb server --config examples/cluster/node1.toml
+auradb server --config examples/cluster/node2.toml
+auradb server --config examples/cluster/node3.toml
+auradb cluster wait-leader --addr 127.0.0.1:7171 --timeout-secs 30
+auradb cluster status      --addr 127.0.0.1:7171 --json
+```
+
+This is an experimental preview for local testing and early validation only; it
+is not production multi-node clustering and has no automatic failover.
 
 ## What is intentionally not claimed yet
 
-Production multi-node clustering, automatic failover, linearizable reads,
-distributed transactions, sharding, and multi-region (the Raft/replication
-foundation in 0.4.0 is single-node and experimental for multi-node);
+Production multi-node clustering, automatic failover, dynamic membership,
+linearizable reads, follower reads, distributed transactions, sharding, and
+multi-region (the 0.5.0 multi-node path is an experimental, opt-in preview);
 ANN/HNSW vector indexes; BM25 full-text and hybrid fusion ranking; serializable
 isolation; RBAC, field-level encryption, encryption at rest, and audit logging;
 time-travel queries; and change streams. These are tracked in the
@@ -278,8 +328,11 @@ auradb check --data-dir .local/auradb
 auradb gc --data-dir .local/auradb
 auradb stats analyze --data-dir .local/auradb
 auradb stats show --data-dir .local/auradb --json
-auradb bench --json --output benches/baseline/v0.4.1.json
+auradb bench --json --output benches/baseline/v0.5.0.json
 auradb status --addr 127.0.0.1:7171 --json
+auradb cluster leader --addr 127.0.0.1:7171 --json
+auradb cluster wait-leader --addr 127.0.0.1:7171 --timeout-secs 30
+auradb cluster wait-ready --addr 127.0.0.1:7171 --timeout-secs 30
 auradb auth hash-token --token "your-secret"
 auradb auth rotate-token --config AuraDB.toml --token "new-secret" --backup
 auradb cert generate-dev --out-dir .local/certs
@@ -311,6 +364,9 @@ auradb index check --data-dir .local/auradb
 | `auradb compatibility` | Print version, AWP version, capabilities, and tested connector version |
 | `auradb index check` | Report how indexes loaded and verify consistency |
 | `auradb index rebuild` | Rebuild indexes from storage and persist fresh snapshots |
+| `auradb cluster leader` | Report the leader a running server recognizes (`--addr`, `--json`) |
+| `auradb cluster wait-leader` | Block until a running server reports a leader (`--addr`, `--timeout-secs`) |
+| `auradb cluster wait-ready` | Block until a running server reports ready (`--addr`, `--timeout-secs`) |
 
 See [`docs/CLI.md`](docs/CLI.md) and [`docs/COMPATIBILITY.md`](docs/COMPATIBILITY.md).
 
@@ -377,7 +433,7 @@ are exposed. No external collector is required to run the server. See
 A published image is available on the GitHub Container Registry:
 
 ```bash
-docker run --rm -p 7171:7171 -v auradb-data:/data ghcr.io/ohswedd/auradb:0.4.1
+docker run --rm -p 7171:7171 -v auradb-data:/data ghcr.io/ohswedd/auradb:0.5.0
 ```
 
 The image runs as a non-root user, exposes `7171`, stores data in the `/data`
@@ -433,7 +489,7 @@ and `EXPLAIN ANALYZE`.
 The CLI also runs a baseline suite and writes a JSON snapshot:
 
 ```bash
-auradb bench --json --output benches/baseline/v0.4.1.json
+auradb bench --json --output benches/baseline/v0.5.0.json
 ```
 
 Benchmarks are hardware-dependent and exist to catch regressions on the same

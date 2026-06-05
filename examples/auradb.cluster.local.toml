@@ -7,8 +7,11 @@
 # overhead. For production, single-node (non-cluster) mode remains the
 # recommended path; see docs/CLUSTERING.md.
 #
-# Multi-node cluster deployment is experimental and intentionally NOT enabled in
-# this release: configuring `peers` is rejected at startup (fail closed).
+# Multi-node cluster deployment is an EXPERIMENTAL preview in v0.5.0 and is off by
+# default: configuring `peers` here without also setting
+# `experimental_multi_node = true` is rejected at startup (fail closed). To try
+# the cross-process preview, use the dedicated three-node example instead
+# (examples/cluster/, docs/CLUSTERING.md).
 #
 # Validate with:
 #   auradb config validate --config examples/auradb.cluster.local.toml
@@ -51,6 +54,6 @@ listen_addr = "127.0.0.1:7172"
 advertise_addr = "127.0.0.1:7172"
 # Bootstrap a brand-new single-node cluster.
 bootstrap = true
-# Multi-node deployment is experimental; configuring peers is rejected at
-# startup in this release.
+# Multi-node deployment is an experimental preview; see examples/cluster/ for a
+# real three-node setup. Leaving peers empty keeps this a single-node cluster.
 peers = []

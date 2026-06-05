@@ -1,0 +1,98 @@
+name: Cluster preview
+
+# Exercises the EXPERIMENTAL multi-node server preview: the cross-process peer
+# transport, real leader election and replication over loopback TCP sockets, the
+# live cluster CLI commands, and the Docker Compose cluster definition.
+#
+# These tests bind real loopback sockets and use readiness checks with bounded
+# polling (no fixed sleeps). They run on push, on PRs, and on demand.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+
+jobs:
+  multi-node:
+    name: multi-node preview tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo
+        uses: actions/cache@v5
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Build workspace
+        run: cargo build --workspace --all-features
+
+      - name: Peer transport unit tests
+        run: cargo test -p auradb-replication transport
+
+      - name: Cross-process Raft + replication (real TCP sockets)
+        run: cargo test -p auradb-replication --test multi_node
+
+      - name: Server-level multi-node preview (AWP routing)
+        run: cargo test -p auradb-server --test cluster_preview
+
+      - name: Live cluster CLI commands
+        run: cargo test -p auradb-cli --test cluster_cli
+
+      - name: Validate example configs
+        run: |
+          cargo run -p auradb-cli -- config validate --config examples/cluster/node1.toml
+          cargo run -p auradb-cli -- config validate --config examples/cluster/node2.toml
+          cargo run -p auradb-cli -- config validate --config examples/cluster/node3.toml
+
+      - name: Validate Docker Compose cluster definition
+        run: docker compose -f docker-compose.cluster.yml config
+
+  local-three-node-smoke:
+    name: three-node loopback smoke
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo
+        uses: actions/cache@v5
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Build CLI
+        run: cargo build -p auradb-cli
+
+      - name: Start a three-node loopback cluster and elect a leader
+        run: |
+          set -eu
+          ./target/debug/auradb server --config examples/cluster/node1.toml > node1.log 2>&1 &
+          ./target/debug/auradb server --config examples/cluster/node2.toml > node2.log 2>&1 &
+          ./target/debug/auradb server --config examples/cluster/node3.toml > node3.log 2>&1 &
+          ./target/debug/auradb cluster wait-leader --addr 127.0.0.1:7171 --timeout-secs 30
+          # Live status uses the top-level `status` command (the `cluster status`
+          # subcommand is the offline, data-dir view).
+          ./target/debug/auradb status --addr 127.0.0.1:7171 --json
+          ./target/debug/auradb cluster leader --addr 127.0.0.1:7171
+
+      - name: Tear down
+        if: always()
+        run: pkill -f 'auradb server --config examples/cluster' || true

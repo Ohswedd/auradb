@@ -1,21 +1,54 @@
 # Clustering
 
-> **AuraDB v0.4.1 hardens the Raft groundwork introduced in v0.4.0. Multi-node
-> server deployment remains experimental and disabled by default. Single-node
-> mode remains the recommended production mode.** v0.4.1 adds Raft log compaction
-> boundaries, snapshot restore hardening, cluster-metadata corruption handling,
-> stronger peer-configuration validation, and operational diagnostics. For
-> diagnosing and recovering cluster mode, see
+> **AuraDB v0.5.0 introduces a controlled, experimental multi-node server
+> preview. Single-node mode remains the recommended production mode.** Real
+> AuraDB server processes can now form a cross-process cluster, elect a leader,
+> and replicate writes through Raft. This preview is **off by default** and is
+> intended for local testing and early validation only. For diagnosing and
+> recovering cluster mode, see
 > [CLUSTER_TROUBLESHOOTING.md](CLUSTER_TROUBLESHOOTING.md).
 
-AuraDB v0.4.0 introduces cluster mode: an optional, durable replication path
-built on a Raft consensus core. This document explains what cluster mode is in
-this release, how it relates to the recommended single-node production path, how
-to configure and operate it, and exactly where its boundaries are.
+AuraDB introduced cluster mode in v0.4.0 (an optional, durable replication path
+built on a Raft consensus core) and hardened it in v0.4.1. v0.5.0 builds on that
+groundwork by adding a real cross-process peer transport and Raft over it, so a
+set of server processes can elect a leader and replicate writes to one another.
+This document explains what the preview is, how it relates to the recommended
+single-node production path, the two opt-ins and guardrails that gate it, how to
+configure and run it, leader/follower behavior, and exactly where its boundaries
+are.
 
 Cluster mode is **disabled by default**. When it is disabled the engine behaves
 exactly as it did in v0.3.1 — the write path is byte-for-byte the previous
 single-node direct path, and the `[cluster]` configuration table is inert.
+
+## The multi-node preview at a glance (v0.5.0)
+
+Forming a **real cross-process cluster** requires two explicit opt-ins in
+`[cluster]`:
+
+```toml
+[cluster]
+enabled = true
+experimental_multi_node = true
+```
+
+- Without `experimental_multi_node = true`, a non-empty `peers` list is
+  **rejected at startup** — exactly the v0.4.1 behavior is preserved.
+- Membership is **static**: every node declares every other node by `node_id`
+  and `addr` (as `[[cluster.peers]]` entries or an inline
+  `peers = [{ node_id = "...", addr = "..." }]`). There is **no join, leave, or
+  dynamic membership.**
+- Writes go to the **leader**; followers reject writes with a structured
+  `not_leader` error carrying a leader hint, and the connection stays healthy.
+  Followers reject reads by default.
+- The leader write path **blocks until a majority commits**; a minority cannot
+  commit.
+- A restarted follower replays its durable log and is brought current by the
+  leader.
+
+Single-node mode (cluster disabled, or cluster enabled with no peers) remains the
+recommended production path. The multi-node preview is for local testing and
+early validation only.
 
 ## What cluster mode is
 
@@ -26,12 +59,14 @@ identical on every replica derived from the same log. On restart, any entry that
 was committed to the Raft log but not yet applied to storage is replayed, which
 closes the crash window between a durable consensus commit and the storage apply.
 
-This release ships and wires up **single-node cluster mode** for the server: one
-node that is its own majority, elects itself leader, and orders its own writes
-through the Raft log. The consensus core, the replicated apply path, and the
-snapshot boundary are all real and tested. Multi-node server deployment is
-**experimental and not enabled** in this release (see
-[Multi-node status](#multi-node-status-experimental)).
+This release ships **single-node cluster mode** (one node that is its own
+majority, elects itself leader, and orders its own writes through the Raft log)
+and, new in v0.5.0, an **experimental cross-process multi-node preview** in which
+several server processes form a cluster over a real peer transport, elect a
+leader, and replicate writes through Raft. The consensus core, the replicated
+apply path, and the snapshot boundary are all real and tested. The multi-node
+preview is off by default and gated behind two opt-ins (see
+[The multi-node preview](#the-multi-node-preview-v050)).
 
 ### Single-node cluster vs. recommended single-node production mode
 
@@ -59,12 +94,16 @@ configuration file. Every field:
 | Field | Type | Default | Meaning |
 | ----- | ---- | ------- | ------- |
 | `enabled` | bool | `false` | Whether cluster (Raft) mode is enabled. When `false`, the rest of the table is inert and the engine uses the single-node direct write path. |
-| `cluster_id` | string (hex) | `""` | Optional pinned 128-bit cluster id (32 hex digits). Empty means use the persisted id, or generate one on bootstrap. Pinning enforces a specific identity; a mismatch with the persisted id is rejected. |
-| `node_id` | string (hex) | `""` | Optional pinned non-zero 64-bit node id (16 hex digits). Empty means use the persisted id, or generate one on init. |
-| `listen_addr` | string (`host:port`) | `127.0.0.1:7172` | Address the cluster (Raft) transport binds to. Must be loopback in this release unless `--allow-insecure-bind` is passed. |
+| `experimental_multi_node` | bool | `false` | **(v0.5.0)** Second opt-in required to form a real cross-process cluster. A non-empty `peers` list without this set to `true` is rejected at startup (preserving v0.4.1 behavior). |
+| `allow_experimental_public_cluster` | bool | `false` | **(v0.5.0)** Permit a non-loopback cluster address (listen/advertise/peer). Setting this additionally **requires** peer TLS (`[cluster.tls]`) and a `peer_auth_token`. |
+| `cluster_id` | string (hex) | `""` | Optional pinned 128-bit cluster id (32 hex digits). Identical on every node. Empty means use the persisted id, or generate one on bootstrap. Pinning enforces a specific identity; a mismatch is rejected. |
+| `node_id` | string (hex) | `""` | Optional pinned non-zero 64-bit node id (16 hex digits). Distinct per node. Empty means use the persisted id, or generate one on init. |
+| `listen_addr` | string (`host:port`) | `127.0.0.1:7172` | Address the cluster (Raft) transport binds to. Must be loopback unless `allow_experimental_public_cluster = true`. |
 | `advertise_addr` | string (`host:port`) | `127.0.0.1:7172` | Address advertised to peers (may differ from `listen_addr` behind NAT). |
-| `bootstrap` | bool | `true` | Whether this node bootstraps a brand-new single-node cluster. |
-| `peers` | list of `host:port` | `[]` | Peer cluster addresses for multi-node deployments. **Configuring any peer is rejected at server startup in this release.** |
+| `bootstrap` | bool | `true` | Whether this node bootstraps a brand-new cluster. |
+| `peer_auth_token` | string | `""` | **(v0.5.0)** Shared peer authentication token verified in the `PeerHello` handshake. Required when `allow_experimental_public_cluster = true`. |
+| `peers` | list of `{ node_id, addr }` | `[]` | **(v0.5.0)** Static membership: every other node, by id and cluster address. A non-empty list requires `experimental_multi_node = true`. |
+| `[cluster.tls]` | disabled | **(v0.5.0)** Peer-transport TLS (`cert_path`, `key_path`, `ca_path`). Required when `allow_experimental_public_cluster = true`. |
 
 A single-node cluster configuration looks like this:
 
@@ -79,12 +118,31 @@ bootstrap = true
 peers = []             # empty: single-node cluster
 ```
 
-A complete example ships at `examples/auradb.cluster.local.toml`. Validate any
-configuration offline before starting the server:
+A complete example ships at `examples/auradb.cluster.local.toml`. The three-node
+loopback preview ships at `examples/cluster/node{1,2,3}.toml` and a Docker
+Compose preview (which requires peer TLS and a token) at
+`examples/cluster/docker/`. Validate any configuration offline before starting
+the server:
 
 ```sh
 auradb config validate --config examples/auradb.cluster.local.toml
 ```
+
+### Guardrails (all fail closed)
+
+The multi-node preview is gated so a cluster is never *appeared* to be formed
+when it is not, and an unsafe transport is never opened silently:
+
+- A non-empty `peers` list **without** `experimental_multi_node = true` is
+  rejected at startup.
+- Any non-loopback cluster address (listen / advertise / peer) is rejected
+  **unless** `allow_experimental_public_cluster = true`, which **additionally**
+  requires peer TLS (`[cluster.tls]` with `cert_path` / `key_path` / `ca_path`)
+  and a `peer_auth_token`.
+- Membership is static; a duplicate peer, a peer pointing at this node, or a
+  malformed `host:port` is rejected.
+
+See [SECURITY.md](SECURITY.md) and [CONFIGURATION.md](CONFIGURATION.md).
 
 ## On-disk layout
 
@@ -133,8 +191,49 @@ auradb cluster bootstrap --data-dir .local/auradb
 `auradb init` now also creates node identity, and `auradb status --json` and
 `auradb doctor` include the cluster fields. See [CLI.md](CLI.md).
 
+New in v0.5.0, three **live** subcommands query a running server over its client
+address (and accept `--json`, `--token`, `--tls-ca`, `--server-name`):
+
+```sh
+# Report the leader a running server currently recognizes.
+auradb cluster leader --addr 127.0.0.1:7171
+
+# Block until a server reports a recognized leader, or is ready.
+auradb cluster wait-leader --addr 127.0.0.1:7171 --timeout-secs 30
+auradb cluster wait-ready  --addr 127.0.0.1:7171 --timeout-secs 30
+```
+
 The membership operations `join`, `leave`, and `step-down` are **intentionally
 not provided**, because membership changes are not implemented in this release.
+
+## Running the three-node loopback preview
+
+The validated preview path is three local processes on loopback with no TLS. The
+configs ship at `examples/cluster/node{1,2,3}.toml`; client ports are
+`7171`/`7181`/`7191` and cluster (Raft) ports are `7172`/`7182`/`7192`.
+
+```sh
+# Three terminals from the repository root:
+auradb server --config examples/cluster/node1.toml
+auradb server --config examples/cluster/node2.toml
+auradb server --config examples/cluster/node3.toml
+
+# Wait for an election, then see who won and the per-peer state.
+auradb cluster wait-leader --addr 127.0.0.1:7171 --timeout-secs 30
+auradb cluster leader      --addr 127.0.0.1:7171
+auradb cluster status      --addr 127.0.0.1:7171 --json
+```
+
+Write through the leader's client address (use the Aura Connector or any AWP
+client). A write sent to a follower returns `not_leader` with a leader hint. To
+watch catch-up: stop one follower (a 2/3 majority remains, so writes continue),
+keep writing through the leader, then restart the follower with the same config —
+it replays its durable log and the leader brings it current.
+
+A Docker Compose preview that runs over a Docker bridge network (and therefore
+requires `allow_experimental_public_cluster = true`, peer TLS, and a shared
+token) ships at `examples/cluster/docker/` with `docker-compose.cluster.yml`. See
+[examples/cluster/README.md](../examples/cluster/README.md).
 
 ## Writes and reads
 
@@ -142,8 +241,11 @@ not provided**, because membership changes are not implemented in this release.
 
 Only the leader accepts writes. A write that reaches a non-leader is rejected with
 the `not_leader` error code, which carries a hint identifying the current leader
-when one is known. In a single-node cluster the sole node is always the leader, so
-writes are accepted as usual.
+when one is known; the connection stays healthy afterward. In the multi-node
+preview the leader appends to its Raft log, replicates via AppendEntries, and the
+write path **blocks until a majority commits** — a minority cannot commit. Every
+node applies committed entries to its engine. In a single-node cluster the sole
+node is always the leader, so writes are accepted as usual.
 
 The `not_leader` error code is additive on the wire. The Aura Wire Protocol
 version is unchanged at AWP 1; an Aura Connector 0.3.x client maps an unknown
@@ -151,52 +253,66 @@ error code safely. See [AURA_CONNECTOR_COMPATIBILITY.md](AURA_CONNECTOR_COMPATIB
 
 ### Read policy
 
-Reads are served by the leader. This release does **not** offer linearizable
-reads, follower reads, or stale-read tuning — those are not implemented and are
-not claimed. In a single-node cluster, leader-served reads are simply reads
-against the only node.
+Reads are served by the leader. **Followers reject reads by default.** This
+release does **not** offer linearizable reads, follower reads, or stale-read
+tuning — those are not implemented and are not claimed. In a single-node cluster,
+leader-served reads are simply reads against the only node.
 
 ## Cluster health and status
 
 When cluster mode is enabled, the health/status report gains an additive
 `cluster` section with these fields: `node_id`, `cluster_id`, `role`, `term`,
 `leader_id`, `commit_index`, `applied_index`, `last_log_index`, `peer_count`,
-`single_node`, and `replication_lag_entries`. The field is purely additive JSON;
-the wire protocol version is unchanged. See [OBSERVABILITY.md](OBSERVABILITY.md)
-for the field meanings and the corresponding metrics.
+`single_node`, and `replication_lag_entries`. New in v0.5.0, the section also
+carries `preview_multi_node` (bool), `quorum_available` (bool), and `peers` (an
+array of `{ node_id, addr, connected, match_index, next_index }`). These are
+additive AWP fields; older clients ignore them. The field is purely additive
+JSON; the wire protocol version is unchanged. See
+[OBSERVABILITY.md](OBSERVABILITY.md) for the field meanings and the corresponding
+metrics.
 
-## Multi-node status (experimental)
+## The multi-node preview (v0.5.0)
 
 The Raft consensus core (leader election, log replication, log repair, commit
-advancement) and the replicated apply path are implemented and validated through
-deterministic in-process tests. Cross-process, multi-node *server* deployment is
-**not** part of this release:
+advancement) and the replicated apply path are validated both through
+deterministic in-process tests and, in v0.5.0, across **real server processes**
+over a dedicated peer transport:
 
-- Configuring any `peers` in `[cluster]` is **rejected at server startup** (fail
-  closed). The server will not appear to form a multi-node cluster.
-- The cluster transport is unauthenticated in this release, so a non-loopback
-  cluster `listen_addr` is rejected unless `--allow-insecure-bind` is explicitly
-  passed. See [SECURITY.md](SECURITY.md).
+- **Cross-process peer transport.** A dedicated cluster socket carries Raft
+  messages. Each frame is magic-tagged (`APR1`), protocol-version-tagged (v1),
+  length-delimited, and CRC32-checksummed, with a 16 MiB payload-size limit. A
+  connection opens with a `PeerHello` handshake verifying the protocol version,
+  the cluster id, the peer's node id (against static membership), and a shared
+  token. Wrong-cluster, unknown-node, duplicate-node, and bad-token connections
+  are rejected with a structured `PeerError`. Reconnect uses bounded backoff
+  (50 ms .. 2 s) and shutdown is graceful.
+- **Snapshot install is not implemented** and is answered with a structured
+  *unsupported* response — never silently ignored. See [RAFT.md](RAFT.md).
+- **commit_ts = commit_ts_base + raft_log_index**, unchanged from v0.4.x.
 
-Multi-node consensus is exercised entirely by the deterministic in-memory test
-harness described in [RAFT.md](RAFT.md) and [TESTING.md](TESTING.md).
+The preview is gated behind `enabled = true` **and** `experimental_multi_node =
+true`, and any non-loopback address fails closed unless
+`allow_experimental_public_cluster = true` (which then requires peer TLS and a
+token). See [RAFT.md](RAFT.md), [REPLICATION.md](REPLICATION.md), and
+[TESTING.md](TESTING.md).
 
 ## Limitations
 
 This release deliberately does not provide, and does not claim:
 
 - A production-grade distributed database. Single-node non-cluster mode is the
-  recommended production path.
-- Multi-node server deployment. Configuring peers is rejected at startup.
+  recommended production path; the multi-node preview is experimental.
+- Production multi-node clustering or production-grade peer networking.
 - Fault tolerance from a single-node cluster (it has the same availability as a
   single non-cluster node).
 - Automatic failover.
-- Linearizable reads or follower reads.
+- Linearizable reads or follower reads (followers reject reads).
 - Distributed transactions, sharding, or multi-region deployment.
-- An authenticated cluster transport (cluster mode is loopback-only here).
-- Membership changes (`join` / `leave` / `step-down`) or joint consensus.
-- Streaming snapshot transfer between nodes (only the snapshot boundary is
-  defined; see [REPLICATION.md](REPLICATION.md)).
+- Dynamic membership (`join` / `leave` / `step-down`) or joint consensus;
+  membership is static.
+- Streaming snapshot transfer between nodes (snapshot install is answered as
+  unsupported; only the snapshot boundary is defined; see
+  [REPLICATION.md](REPLICATION.md)).
 
 Cluster mode changes nothing about single-node isolation semantics: AuraDB
 provides single-node snapshot isolation, not serializable or distributed

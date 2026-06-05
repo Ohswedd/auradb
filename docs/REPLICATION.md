@@ -1,10 +1,11 @@
 # Replication
 
-> **AuraDB v0.4.1 hardens the Raft groundwork introduced in v0.4.0. Multi-node
-> server deployment remains experimental and disabled by default. Single-node
-> mode remains the recommended production mode.** v0.4.1 strengthens apply
-> idempotency under restart and the snapshot restore boundary (see *Snapshot
-> boundary* below).
+> **AuraDB v0.5.0 introduces a controlled, experimental multi-node server
+> preview. Single-node mode remains the recommended production mode.** Building
+> on the v0.4.x replication groundwork (apply idempotency under restart, the
+> snapshot restore boundary), v0.5.0 replicates writes across real server
+> processes: the leader commits on a majority, followers apply committed entries,
+> and a restarted follower catches up. The preview is off by default.
 
 AuraDB maps database mutations onto the replicated Raft log and applies committed
 entries back to the engine. This document describes the replicated command model,
@@ -46,9 +47,13 @@ an attached replicated log:
    the MVCC commit timestamp and applies the batch to storage inline.
 
 In a single-node cluster the sole node is always the leader and is its own
-majority, so a proposed entry is committed immediately. When cluster mode is
-disabled (the default), no replicated log is attached and commits go straight to
-storage exactly as in v0.3.1.
+majority, so a proposed entry is committed immediately. In the v0.5.0 multi-node
+preview, the leader replicates the entry to its peers and the write path **blocks
+until a majority commits** — a minority cannot commit, and a follower that
+receives the write returns `not_leader` rather than accepting it. Followers also
+reject reads by default. When cluster mode is disabled (the default), no
+replicated log is attached and commits go straight to storage exactly as in
+v0.3.1.
 
 ## The idempotent apply path
 
@@ -82,6 +87,12 @@ When the server starts a single-node cluster, the coordinator:
 This closes the crash window between a durable Raft commit and the storage apply,
 so a write that reached the log is never lost on restart, and replaying it is safe
 because apply is idempotent.
+
+In the v0.5.0 multi-node preview the same path covers **follower catch-up after
+restart**: a restarted follower replays its own durable log to its watermark and
+the leader then brings it current over the peer transport via AppendEntries. The
+idempotent apply (commit timestamp equals log index) means a follower never
+double-applies an entry it already has.
 
 ## The snapshot boundary
 
@@ -139,11 +150,12 @@ is normally zero because each commit is applied inline.
 
 ## What this release does not do
 
-- No multi-node *server* replication: cross-process transport is not implemented,
-  and configuring peers is rejected at startup. Multi-node consensus and the
-  replicated apply path are validated by deterministic in-process tests only. See
-  [CLUSTERING.md](CLUSTERING.md) and [RAFT.md](RAFT.md).
-- No streaming snapshot shipping between nodes (only the snapshot boundary is
-  defined).
+- The multi-node *server* replication in v0.5.0 is an **experimental preview**,
+  off by default and gated behind two opt-ins; it is not production multi-node
+  clustering and provides no automatic failover. See [CLUSTERING.md](CLUSTERING.md)
+  and [RAFT.md](RAFT.md).
+- No streaming snapshot shipping between nodes: a snapshot-install request is
+  answered as unsupported, and only the snapshot boundary is defined.
+- No follower reads or linearizable reads; followers reject reads by default.
 - No distributed transactions. Cluster mode orders commits through Raft but does
   not change single-node isolation semantics; see [TRANSACTIONS.md](TRANSACTIONS.md).

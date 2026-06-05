@@ -69,7 +69,11 @@ fn metadata_report(data_dir: &Path, config: &Config) -> Result<ClusterMetadataRe
         cluster_id: identity.as_ref().map(|i| i.cluster_id().to_string()),
         single_node: cluster.peers.is_empty(),
         peer_count: cluster.peers.len(),
-        peers: cluster.peers.clone(),
+        peers: cluster
+            .peers
+            .iter()
+            .map(|p| format!("{}@{}", p.node_id, p.addr))
+            .collect(),
         listen_addr: cluster.listen_addr.clone(),
         advertise_addr: cluster.advertise_addr.clone(),
         bootstrap: cluster.bootstrap,
@@ -101,8 +105,9 @@ pub fn cmd_cluster_init(data_dir: &Path, config: &Config) -> Result<String> {
 pub fn cmd_cluster_bootstrap(data_dir: &Path, config: &Config) -> Result<String> {
     if config.cluster.is_multi_node() {
         anyhow::bail!(
-            "multi-node cluster deployment is experimental and not enabled in this release; \
-             remove peers to bootstrap a single-node cluster"
+            "`auradb cluster bootstrap` forms a durable single-node cluster; it does not start \
+             the multi-node preview. Remove peers to bootstrap a single-node cluster, or start a \
+             multi-node preview node with `auradb server --config <node>.toml`"
         );
     }
     std::fs::create_dir_all(data_dir)
@@ -402,7 +407,11 @@ mod tests {
     fn multi_node_bootstrap_fails_closed() {
         let dir = tempdir().unwrap();
         let mut cluster = ClusterConfig::single_node();
-        cluster.peers = vec!["10.0.0.2:7172".into()];
+        cluster.experimental_multi_node = true;
+        cluster.peers = vec![auradb_cluster::PeerConfig {
+            node_id: "00000000000000a2".into(),
+            addr: "127.0.0.1:7272".into(),
+        }];
         let cfg = Config {
             data_dir: dir.path().to_path_buf(),
             cluster,

@@ -23,7 +23,7 @@ mod id;
 mod metadata;
 mod role;
 
-pub use config::{ClusterConfig, DEFAULT_CLUSTER_ADDR};
+pub use config::{ClusterConfig, ClusterTlsConfig, PeerConfig, Secret, DEFAULT_CLUSTER_ADDR};
 pub use error::{ClusterError, Result};
 pub use id::{ClusterId, NodeId};
 pub use metadata::{

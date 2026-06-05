@@ -164,6 +164,35 @@ pub struct ClusterHealth {
     pub single_node: bool,
     /// Replication lag in entries (committed minus applied).
     pub replication_lag_entries: u64,
+    /// Whether the experimental multi-node preview is active on this node.
+    /// Additive field (v0.5.0); older clients ignore it.
+    #[serde(default)]
+    pub preview_multi_node: bool,
+    /// Whether a quorum is currently reachable from this node (multi-node only).
+    #[serde(default)]
+    pub quorum_available: bool,
+    /// Per-peer reachability and replication state (multi-node preview only).
+    /// Empty for single-node clusters and older servers.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub peers: Vec<ClusterPeerHealth>,
+}
+
+/// Per-peer reachability and replication state, carried in [`ClusterHealth`] for
+/// the multi-node preview.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ClusterPeerHealth {
+    /// The peer's node id (hex).
+    pub node_id: String,
+    /// The peer's configured cluster transport address.
+    pub addr: String,
+    /// Whether this node currently holds an outbound connection to the peer.
+    pub connected: bool,
+    /// The leader's record of the peer's highest matching log index, if known.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub match_index: Option<u64>,
+    /// The leader's next index to send to the peer, if known.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub next_index: Option<u64>,
 }
 
 /// MVCC health and version-pressure summary carried in [`HealthReport`].

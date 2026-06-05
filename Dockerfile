@@ -29,7 +29,7 @@ EXPOSE 7171
 HEALTHCHECK --interval=30s --timeout=5s --start-period=5s --retries=3 \
     CMD ["auradb", "status", "--addr", "127.0.0.1:7171"]
 # Default command runs the server. Override it to run any other auradb command,
-# for example: docker run --rm ghcr.io/ohswedd/auradb:0.4.1 auradb version
+# for example: docker run --rm ghcr.io/ohswedd/auradb:0.5.0 auradb version
 # Bind to all interfaces inside the container; publish the port with -p. AuraDB
 # refuses a non-loopback bind with auth disabled, so this development image opts
 # in with --allow-insecure-bind: the operator controls exposure with -p, and

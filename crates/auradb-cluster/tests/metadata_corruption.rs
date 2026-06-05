@@ -80,26 +80,39 @@ fn cluster_node_id_mismatch_rejected() {
     assert!(matches!(err, ClusterError::IdentityConflict(_)), "{err}");
 }
 
+fn peer(node_id: &str, addr: &str) -> auradb_cluster::PeerConfig {
+    auradb_cluster::PeerConfig {
+        node_id: node_id.to_string(),
+        addr: addr.to_string(),
+    }
+}
+
 #[test]
 fn cluster_duplicate_peer_rejected() {
     let mut cfg = ClusterConfig::single_node();
-    cfg.peers = vec!["10.0.0.2:7172".into(), "10.0.0.2:7172".into()];
+    cfg.experimental_multi_node = true;
+    cfg.peers = vec![
+        peer("00000000000000a2", "127.0.0.1:7272"),
+        peer("00000000000000a3", "127.0.0.1:7272"),
+    ];
     assert!(cfg.validate().is_err());
 }
 
 #[test]
 fn cluster_self_peer_rejected() {
     let mut cfg = ClusterConfig::single_node();
-    cfg.listen_addr = "10.0.0.1:7172".into();
-    cfg.advertise_addr = "10.0.0.1:7172".into();
-    cfg.peers = vec!["10.0.0.1:7172".into()];
+    cfg.experimental_multi_node = true;
+    cfg.listen_addr = "127.0.0.1:7172".into();
+    cfg.advertise_addr = "127.0.0.1:7172".into();
+    cfg.peers = vec![peer("00000000000000a2", "127.0.0.1:7172")];
     assert!(cfg.validate().is_err());
 }
 
 #[test]
 fn cluster_invalid_peer_address_rejected() {
     let mut cfg = ClusterConfig::single_node();
-    cfg.peers = vec!["nope".into()];
+    cfg.experimental_multi_node = true;
+    cfg.peers = vec![peer("00000000000000a2", "nope")];
     assert!(cfg.validate().is_err());
 }
 

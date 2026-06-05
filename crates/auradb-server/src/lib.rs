@@ -8,6 +8,7 @@
 #![warn(missing_docs)]
 
 pub mod auth;
+mod cluster_runtime;
 mod config;
 mod cursor;
 mod dispatch;
@@ -15,6 +16,7 @@ mod server;
 mod tls;
 mod wire;
 
+pub use cluster_runtime::ClusterRuntime;
 pub use config::{AuthConfig, AuthMode, Config, TlsConfig, TokenHashAlgorithm};
 pub use cursor::{CursorPage, CursorRegistry};
 pub use dispatch::{respond, ServerContext, Session};

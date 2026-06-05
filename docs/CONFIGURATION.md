@@ -149,38 +149,95 @@ rejects `abandoned_transaction_reaper_secs = 0` while timeouts are enabled. See
 
 ## `[cluster]`
 
-Cluster (Raft) mode, added in v0.4.0. **Disabled by default**; when disabled the
-whole table is inert and the engine uses the single-node direct write path
+Cluster (Raft) mode, added in v0.4.0 and extended with an experimental
+cross-process multi-node preview in v0.5.0. **Disabled by default**; when disabled
+the whole table is inert and the engine uses the single-node direct write path
 exactly as in v0.3.1.
+
+> **AuraDB v0.5.0 introduces a controlled, experimental multi-node server
+> preview. Single-node mode remains the recommended production mode.**
+
+A single-node cluster (no peers):
 
 ```toml
 [cluster]
-enabled = false                 # enable cluster (Raft) mode
+enabled = true                  # enable cluster (Raft) mode
 cluster_id = ""                 # optional pinned cluster id (32 hex); empty = use/generate
 node_id = ""                    # optional pinned node id (16 hex, non-zero); empty = use/generate
-listen_addr = "127.0.0.1:7172"  # cluster (Raft) transport bind; loopback-only in this release
+listen_addr = "127.0.0.1:7172"  # cluster (Raft) transport bind
 advertise_addr = "127.0.0.1:7172"  # address advertised to peers (may differ behind NAT)
-bootstrap = true                # bootstrap a brand-new single-node cluster
-peers = []                      # peer addresses; configuring any peer is rejected at startup
+bootstrap = true                # bootstrap a brand-new cluster
+peers = []                      # empty: single-node cluster
 ```
+
+A three-node loopback preview node (no TLS — the validated local path; the other
+nodes mirror this with their own `node_id`/ports):
+
+```toml
+[cluster]
+enabled = true
+experimental_multi_node = true   # second opt-in, required for a real cluster
+cluster_id = "0000000000000000000000000000a1a2"  # identical on every node
+node_id    = "00000000000000a1"                  # distinct per node
+listen_addr    = "127.0.0.1:7172"
+advertise_addr = "127.0.0.1:7172"
+bootstrap = true
+# Static membership: every other node, by id and cluster address.
+peers = [
+  { node_id = "00000000000000a2", addr = "127.0.0.1:7182" },
+  { node_id = "00000000000000a3", addr = "127.0.0.1:7192" },
+]
+```
+
+A public (non-loopback) preview additionally requires
+`allow_experimental_public_cluster = true`, peer TLS, and a token:
+
+```toml
+[cluster]
+enabled = true
+experimental_multi_node = true
+allow_experimental_public_cluster = true
+peer_auth_token = "a-shared-secret"   # verified in the PeerHello handshake
+# ... cluster_id / node_id / addrs / peers ...
+
+[cluster.tls]
+enabled   = true
+cert_path = "/certs/peer.crt"
+key_path  = "/certs/peer.key"
+ca_path   = "/certs/ca.crt"
+```
+
+Fields:
 
 - `enabled` — when `true` with no `peers`, the node runs as a real, durable
   single-node cluster: every commit is ordered through the Raft log. A single-node
   cluster provides no fault tolerance.
+- `experimental_multi_node` — **(v0.5.0)** the second opt-in. A non-empty `peers`
+  list **without** this set to `true` is rejected at startup (preserving v0.4.1
+  behavior), so a cluster never silently forms.
+- `allow_experimental_public_cluster` — **(v0.5.0)** permit a non-loopback
+  cluster address. Any non-loopback listen/advertise/peer address is rejected
+  unless this is `true`, and setting it **additionally requires** `[cluster.tls]`
+  and a `peer_auth_token`.
 - `cluster_id` / `node_id` — leave empty to use the persisted identity (created by
-  `auradb init` / `auradb cluster init`) or generate one. Pin them only to enforce
-  a specific identity; a mismatch with the persisted id is rejected.
-- `listen_addr` / `advertise_addr` — the dedicated cluster transport. The cluster
-  transport is unauthenticated in this release, so a non-loopback `listen_addr` is
-  rejected unless `--allow-insecure-bind` is passed.
-- `peers` — multi-node deployment is **experimental and not enabled** in this
-  release; configuring any peer is **rejected at server startup (fail closed)**.
-  v0.4.1 also validates peer entries structurally: a duplicate peer address, and a
-  peer that points at this node's own `listen_addr`/`advertise_addr`, are rejected
-  with a clear error, as is a malformed `host:port`.
+  `auradb init` / `auradb cluster init`) or generate one. In a real cluster
+  `cluster_id` is identical on every node and each `node_id` is distinct. Pinned
+  ids are enforced; a mismatch with the persisted id is rejected.
+- `listen_addr` / `advertise_addr` — the dedicated peer (Raft) transport. A
+  non-loopback address fails closed unless `allow_experimental_public_cluster`.
+- `peer_auth_token` — **(v0.5.0)** shared token verified in the `PeerHello`
+  handshake; required for a public cluster. It is treated as a secret and never
+  printed or logged.
+- `peers` — **(v0.5.0)** static membership as `{ node_id, addr }` entries (inline
+  or `[[cluster.peers]]`). There is no join/leave/dynamic membership. A duplicate
+  peer, a self-peer, or a malformed `host:port` is rejected.
+- `[cluster.tls]` — **(v0.5.0)** peer-transport TLS (`cert_path`, `key_path`,
+  `ca_path`); required for a public cluster.
 
 Validate a cluster configuration offline with
 `auradb config validate --config AuraDB.toml` or `auradb cluster doctor`. A
-complete example ships at `examples/auradb.cluster.local.toml`. See
+single-node example ships at `examples/auradb.cluster.local.toml`; the three-node
+loopback preview at `examples/cluster/node{1,2,3}.toml`; and the Docker Compose
+preview (peer TLS + token) at `examples/cluster/docker/`. See
 [CLUSTERING.md](CLUSTERING.md), [SECURITY.md](SECURITY.md),
 [CLUSTER_TROUBLESHOOTING.md](CLUSTER_TROUBLESHOOTING.md), and [CLI.md](CLI.md).

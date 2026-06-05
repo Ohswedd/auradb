@@ -4,18 +4,38 @@ This roadmap describes where AuraDB is headed beyond the first single-node
 release. It is a statement of direction, not a delivery commitment. Items are
 grouped by theme and listed roughly in the order we expect to approach them.
 
-## Current release: 0.4.1
+## Current release: 0.5.0
 
-AuraDB 0.4.1 is a patch release that **hardens the Raft and replication
-groundwork** shipped in 0.4.0 before any real cross-process multi-node preview:
-Raft log compaction boundaries, snapshot restore edge cases, apply idempotency
-under restart, cluster-metadata corruption handling, stronger peer configuration
-validation, deterministic multi-node partition tests, single-node cluster overhead
-benchmarks, and operational diagnostics (`auradb cluster compact-log`, `auradb
-snapshot create|inspect|restore`). No format or wire change: multi-node server
-deployment remains experimental and disabled by default, and single-node mode
-remains the recommended production path. The groundwork itself was delivered in
-0.4.0:
+AuraDB 0.5.0 introduces a **controlled, experimental multi-node server preview**.
+Real AuraDB server processes can now form a cross-process cluster, elect a leader,
+and replicate writes through Raft over a dedicated, frame-checked, authenticated
+peer transport. **Single-node mode remains the recommended production mode**, and
+the preview is **off by default**, gated behind two explicit `[cluster]` opt-ins
+(`enabled = true` and `experimental_multi_node = true`) with fail-closed
+guardrails (a non-empty `peers` list requires the second opt-in; any non-loopback
+address requires `allow_experimental_public_cluster = true` plus peer TLS and a
+token). Membership is static. The leader write path blocks until a majority
+commits; followers reject writes with `not_leader` and reject reads. The release
+adds live cluster CLI commands (`auradb cluster leader|wait-leader|wait-ready`),
+additive per-peer status fields (`preview_multi_node`, `quorum_available`,
+`peers`), and multi-node metrics. There is **no format or wire change** (storage
+unchanged from v0.4.x; AWP 1 with additive fields), so Aura Connector 0.3.x
+remains compatible — a connector targets the leader's client address.
+
+Still **not** part of the preview (and tracked as future): production multi-node
+clustering, automatic failover, dynamic membership (join/leave), streaming
+snapshot install over the wire (answered as unsupported), linearizable and
+follower reads, sharding, and multi-region.
+
+### Hardened in 0.4.1 (groundwork before the preview)
+
+AuraDB 0.4.1 was a patch release that **hardened the Raft and replication
+groundwork** shipped in 0.4.0: Raft log compaction boundaries, snapshot restore
+edge cases, apply idempotency under restart, cluster-metadata corruption handling,
+stronger peer configuration validation, deterministic multi-node partition tests,
+single-node cluster overhead benchmarks, and operational diagnostics (`auradb
+cluster compact-log`, `auradb snapshot create|inspect|restore`). The groundwork
+itself was delivered in 0.4.0:
 
 AuraDB 0.4.0 adds the **Replication and Raft groundwork**: an optional cluster
 mode built on a durable, deterministic Raft consensus core, a replicated command
@@ -169,21 +189,28 @@ Enforced TLS and enforced static-token authentication ship in 0.2.0.
 
 ## Distribution
 
-The Raft and replication **groundwork** ships in 0.4.0 (see *Delivered in 0.4.0*):
-a durable consensus core, a replicated commit path, single-node cluster mode, and
-a snapshot boundary. The following remain **future** and are not present in 0.4.0:
+The Raft and replication **groundwork** shipped in 0.4.0 (a durable consensus
+core, a replicated commit path, single-node cluster mode, and a snapshot
+boundary). **Preview (0.5.0):** a controlled, experimental cross-process
+multi-node server preview — real leader election, AppendEntries replication,
+majority commit, follower apply, and follower catch-up over an authenticated peer
+transport. It is off by default, gated behind two opt-ins, with static membership.
+Single-node mode remains the recommended production path.
 
-- Multi-node server deployment with an authenticated cluster transport (configuring
-  peers is rejected at startup in 0.4.0).
+The following remain **future** and are not present in 0.5.0:
+
+- **Production** multi-node clustering and production-grade peer networking (the
+  0.5.0 multi-node path is an experimental preview).
 - Automatic failover.
-- Cluster membership changes / joint consensus (`join` / `leave` / `step-down`).
-- Streaming snapshot shipping between nodes (only the snapshot boundary is defined
-  in 0.4.0).
-- Linearizable reads and follower reads.
+- Dynamic cluster membership / joint consensus (`join` / `leave` / `step-down`);
+  membership is static in the preview.
+- Streaming snapshot install between nodes (the snapshot boundary is defined and
+  an install request is answered as unsupported in 0.5.0).
+- Linearizable reads and follower reads (followers reject reads in the preview).
 - Sharding and multi-region deployment.
 
-These multi-node distributed capabilities are explicitly not present in any 0.2.x,
-0.3.x, or 0.4.0 release and are not implied by any current documentation.
+These remain explicitly out of scope for the 0.5.0 preview and are not implied by
+any current documentation.
 
 ## Data services
 

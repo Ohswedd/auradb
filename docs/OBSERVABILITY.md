@@ -33,6 +33,14 @@ The `Metrics` registry tracks:
   `auradb_raft_replication_lag_entries`, `auradb_replication_apply_errors_total`,
   and the `auradb_raft_apply_latency_us` summary. See
   [REPLICATION.md](REPLICATION.md).
+- **Multi-node preview metrics (v0.5.0, present when the preview is enabled)** -
+  `auradb_peer_connected`, `auradb_peer_replication_lag_entries`,
+  `auradb_raft_elections_total`, `auradb_raft_election_timeouts_total`,
+  `auradb_raft_append_entries_failures_total`,
+  `auradb_raft_heartbeat_latency_ms`, and `auradb_cluster_quorum_available`.
+  These cover peer connectivity, per-peer replication lag, election activity,
+  AppendEntries failures, heartbeat latency, and whether a majority is available.
+  See [CLUSTERING.md](CLUSTERING.md).
 
 A `snapshot()` is serializable and can be exported:
 
@@ -67,15 +75,23 @@ is high, the oldest snapshot is too old, retained versions exceed a threshold, G
 is disabled, transaction timeouts are disabled, statistics are stale, or the index
 consistency check fails. See [OPERATIONS.md](OPERATIONS.md).
 
-### Cluster health (v0.4.0)
+### Cluster health (v0.4.0, extended in v0.5.0)
 
 When cluster mode is enabled, the health report gains an additive `cluster`
 section: `node_id`, `cluster_id`, `role`, `term`, `leader_id`, `commit_index`,
 `applied_index`, `last_log_index`, `peer_count`, `single_node`, and
-`replication_lag_entries`. The field is purely additive JSON; the Aura Wire
-Protocol version is unchanged at AWP 1, and an older client ignores the field. The
-`auradb status --json` and `auradb doctor` outputs include the cluster fields. See
-[CLUSTERING.md](CLUSTERING.md).
+`replication_lag_entries`. New in v0.5.0, the section also carries:
+
+- `preview_multi_node` (bool) — whether the experimental multi-node preview is
+  active.
+- `quorum_available` (bool) — whether a majority of nodes is connected (a
+  minority cannot commit).
+- `peers` — an array of `{ node_id, addr, connected, match_index, next_index }`,
+  one entry per declared peer.
+
+These are additive AWP fields; the Aura Wire Protocol version is unchanged at AWP
+1, and an older client ignores them. The `auradb status --json` and `auradb
+doctor` outputs include the cluster fields. See [CLUSTERING.md](CLUSTERING.md).
 
 ### JSON output
 

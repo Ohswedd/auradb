@@ -1,7 +1,7 @@
 # Release guide
 
 This guide describes how a maintainer cuts an AuraDB release. The current release
-is `0.4.1`.
+is `0.5.0`.
 
 ## Pre-release checklist
 
@@ -13,12 +13,39 @@ is `0.4.1`.
       planner, and chaos restart tests pass.
 - [ ] The cluster metadata, Raft log, Raft consensus (deterministic in-process),
       replicated apply, snapshot, and single-node cluster tests pass.
+- [ ] The multi-node preview tests pass: peer transport (frame codec and
+      `PeerHello` handshake), cross-process replication, leader/follower client
+      behavior, and the live cluster CLI commands.
 - [ ] Cluster mode limitations are stated honestly: single-node remains the
-      recommended production path; multi-node server deployment is experimental
-      and rejected at startup.
+      recommended production path; the multi-node server preview is experimental,
+      off by default, and gated by two opt-ins.
 - [ ] The benchmark baseline under `benches/baseline/` is refreshed on the
       release machine with
       `auradb bench --json --output benches/baseline/<version>.json`.
+
+### Multi-node preview validation (v0.5.0)
+
+- [ ] **Three-node loopback smoke.** Start the three local nodes and confirm an
+      election, leader-routed writes, `not_leader` from a follower, and follower
+      catch-up after restart:
+
+      ```bash
+      auradb server --config examples/cluster/node1.toml
+      auradb server --config examples/cluster/node2.toml
+      auradb server --config examples/cluster/node3.toml
+      auradb cluster wait-leader --addr 127.0.0.1:7171 --timeout-secs 30
+      auradb cluster leader      --addr 127.0.0.1:7171 --json
+      auradb status              --addr 127.0.0.1:7171 --json   # per-peer state
+      ```
+
+- [ ] **Cluster CLI.** `auradb cluster leader|wait-leader|wait-ready` against a
+      running node return correctly in text and `--json`.
+- [ ] **Docker Compose config check.** The Docker-network preview (peer TLS +
+      token) validates structurally:
+
+      ```bash
+      docker compose -f docker-compose.cluster.yml config
+      ```
 
 ## Validation
 

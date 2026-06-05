@@ -7,10 +7,11 @@ use anyhow::Result;
 use auradb_cli::{
     build_config, cmd_auth_hash_token, cmd_auth_rotate_token, cmd_bench, cmd_bench_compare,
     cmd_bench_json, cmd_cert_generate_dev, cmd_check, cmd_cluster_bootstrap,
-    cmd_cluster_compact_log, cmd_cluster_doctor, cmd_cluster_init, cmd_cluster_peers,
-    cmd_cluster_status, cmd_compact, cmd_compatibility, cmd_config_validate, cmd_doctor,
-    cmd_doctor_json, cmd_dump, cmd_gc, cmd_index_check, cmd_index_rebuild, cmd_init, cmd_restore,
-    cmd_server, cmd_snapshot_create, cmd_snapshot_inspect, cmd_snapshot_restore, cmd_stats_analyze,
+    cmd_cluster_compact_log, cmd_cluster_doctor, cmd_cluster_init, cmd_cluster_leader,
+    cmd_cluster_peers, cmd_cluster_status, cmd_cluster_wait_leader, cmd_cluster_wait_ready,
+    cmd_compact, cmd_compatibility, cmd_config_validate, cmd_doctor, cmd_doctor_json, cmd_dump,
+    cmd_gc, cmd_index_check, cmd_index_rebuild, cmd_init, cmd_restore, cmd_server,
+    cmd_snapshot_create, cmd_snapshot_inspect, cmd_snapshot_restore, cmd_stats_analyze,
     cmd_stats_show, cmd_status, cmd_status_json, cmd_version,
 };
 use clap::{Parser, Subcommand};
@@ -260,6 +261,58 @@ enum ClusterCommand {
         #[arg(long)]
         dry_run: bool,
         /// Emit the report as JSON.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Report the current leader as seen by a running server.
+    Leader {
+        /// Address of a running server's client port.
+        #[arg(long, default_value = "127.0.0.1:7171")]
+        addr: String,
+        /// Authentication token, if the server requires auth.
+        #[arg(long)]
+        token: Option<String>,
+        /// PEM CA bundle to enable and verify TLS.
+        #[arg(long)]
+        tls_ca: Option<PathBuf>,
+        /// TLS server name to verify against.
+        #[arg(long, default_value = "localhost")]
+        server_name: String,
+        /// Emit the result as JSON.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Wait until a running server reports a recognized leader.
+    WaitLeader {
+        /// Address of a running server's client port.
+        #[arg(long, default_value = "127.0.0.1:7171")]
+        addr: String,
+        /// Maximum seconds to wait.
+        #[arg(long, default_value_t = 30)]
+        timeout_secs: u64,
+        #[arg(long)]
+        token: Option<String>,
+        #[arg(long)]
+        tls_ca: Option<PathBuf>,
+        #[arg(long, default_value = "localhost")]
+        server_name: String,
+        #[arg(long)]
+        json: bool,
+    },
+    /// Wait until a server is reachable and reports ready.
+    WaitReady {
+        /// Address of a running server's client port.
+        #[arg(long, default_value = "127.0.0.1:7171")]
+        addr: String,
+        /// Maximum seconds to wait.
+        #[arg(long, default_value_t = 30)]
+        timeout_secs: u64,
+        #[arg(long)]
+        token: Option<String>,
+        #[arg(long)]
+        tls_ca: Option<PathBuf>,
+        #[arg(long, default_value = "localhost")]
+        server_name: String,
         #[arg(long)]
         json: bool,
     },
@@ -553,6 +606,46 @@ async fn main() -> Result<()> {
                 if json {
                     println!();
                 }
+            }
+            ClusterCommand::Leader {
+                addr,
+                token,
+                tls_ca,
+                server_name,
+                json,
+            } => {
+                println!(
+                    "{}",
+                    cmd_cluster_leader(&addr, token, tls_ca, &server_name, json).await?
+                );
+            }
+            ClusterCommand::WaitLeader {
+                addr,
+                timeout_secs,
+                token,
+                tls_ca,
+                server_name,
+                json,
+            } => {
+                println!(
+                    "{}",
+                    cmd_cluster_wait_leader(&addr, timeout_secs, token, tls_ca, &server_name, json)
+                        .await?
+                );
+            }
+            ClusterCommand::WaitReady {
+                addr,
+                timeout_secs,
+                token,
+                tls_ca,
+                server_name,
+                json,
+            } => {
+                println!(
+                    "{}",
+                    cmd_cluster_wait_ready(&addr, timeout_secs, token, tls_ca, &server_name, json)
+                        .await?
+                );
             }
         },
         Command::Snapshot { command } => match command {

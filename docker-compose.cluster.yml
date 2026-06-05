@@ -1,0 +1,108 @@
+# AuraDB three-node EXPERIMENTAL multi-node preview cluster (Docker network).
+#
+# This is a controlled preview for local testing and early validation only.
+# Single-node mode remains the recommended production path. See
+# docs/CLUSTERING.md and examples/cluster/README.md.
+#
+# Because the nodes talk over a Docker bridge network (non-loopback), the peer
+# transport is a "public" cluster and requires peer TLS plus a shared token, as
+# encoded in examples/cluster/docker/node{1,2,3}.toml.
+#
+# Before running:
+#   1. Generate peer certificates whose SANs cover the service names
+#      (node1, node2, node3) into ./examples/cluster/certs as peer.crt / peer.key
+#      / ca.crt. See examples/cluster/README.md for a one-liner.
+#   2. Choose a shared peer token and set it identically in each node config
+#      (peer_auth_token), replacing "change-me-preview-cluster-token".
+#   3. Start it:
+#        docker compose -f docker-compose.cluster.yml up -d
+#
+# Validate the compose file without starting it:
+#   docker compose -f docker-compose.cluster.yml config
+#
+# Inspect the cluster (client ports are published on the host):
+#   auradb cluster wait-leader --addr 127.0.0.1:7171 --timeout-secs 30
+#   auradb cluster status      --addr 127.0.0.1:7171 --json
+#   auradb cluster leader      --addr 127.0.0.1:7171
+#
+# Tear down (removing volumes):
+#   docker compose -f docker-compose.cluster.yml down -v
+
+x-node-common: &node-common
+  image: ghcr.io/ohswedd/auradb:0.5.0
+  user: "10001:10001"
+  networks:
+    - aura-cluster
+  read_only: true
+  tmpfs:
+    - /tmp
+  security_opt:
+    - "no-new-privileges:true"
+  cap_drop:
+    - ALL
+  restart: unless-stopped
+
+services:
+  node1:
+    <<: *node-common
+    container_name: auradb-node1
+    hostname: node1
+    # Published client port (host:container). Cluster port 7172 stays internal.
+    ports:
+      - "7171:7171"
+    volumes:
+      - node1-data:/data
+      - ./examples/cluster/docker/node1.toml:/config/node.toml:ro
+      - ./examples/cluster/certs:/certs:ro
+    command: ["auradb", "server", "--config", "/config/node.toml"]
+    healthcheck:
+      test: ["CMD", "auradb", "status", "--addr", "127.0.0.1:7171"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 5s
+
+  node2:
+    <<: *node-common
+    container_name: auradb-node2
+    hostname: node2
+    ports:
+      - "7181:7171"
+    volumes:
+      - node2-data:/data
+      - ./examples/cluster/docker/node2.toml:/config/node.toml:ro
+      - ./examples/cluster/certs:/certs:ro
+    command: ["auradb", "server", "--config", "/config/node.toml"]
+    healthcheck:
+      test: ["CMD", "auradb", "status", "--addr", "127.0.0.1:7171"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 5s
+
+  node3:
+    <<: *node-common
+    container_name: auradb-node3
+    hostname: node3
+    ports:
+      - "7191:7171"
+    volumes:
+      - node3-data:/data
+      - ./examples/cluster/docker/node3.toml:/config/node.toml:ro
+      - ./examples/cluster/certs:/certs:ro
+    command: ["auradb", "server", "--config", "/config/node.toml"]
+    healthcheck:
+      test: ["CMD", "auradb", "status", "--addr", "127.0.0.1:7171"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 5s
+
+networks:
+  aura-cluster:
+    driver: bridge
+
+volumes:
+  node1-data:
+  node2-data:
+  node3-data:

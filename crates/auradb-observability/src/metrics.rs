@@ -126,6 +126,20 @@ pub struct Metrics {
     pub raft_replication_lag_entries: AtomicU64,
     /// Replication: cumulative apply errors (counter).
     pub replication_apply_errors_total: AtomicU64,
+    /// Multi-node preview: number of peers with an outbound connection (gauge).
+    pub peer_connected: AtomicU64,
+    /// Multi-node preview: max peer replication lag in entries (gauge).
+    pub peer_replication_lag_entries: AtomicU64,
+    /// Raft: cumulative elections started (counter).
+    pub raft_elections_total: AtomicU64,
+    /// Raft: cumulative election timeouts (counter).
+    pub raft_election_timeouts_total: AtomicU64,
+    /// Raft: cumulative AppendEntries rejected by a follower (counter).
+    pub raft_append_entries_failures_total: AtomicU64,
+    /// Raft: most recent heartbeat round-trip latency in ms (gauge).
+    pub raft_heartbeat_latency_ms: AtomicU64,
+    /// Cluster: whether a quorum is reachable (gauge, 0/1).
+    pub cluster_quorum_available: AtomicU64,
     /// Per-request latency.
     pub request_latency: Histogram,
     /// Query execution latency.
@@ -210,6 +224,34 @@ impl Metrics {
         Metrics::gauge_set(&self.replication_apply_errors_total, apply_errors_total);
     }
 
+    /// Mirror the multi-node preview's peer/Raft counters into the registry.
+    /// A no-op for single-node clusters (which report no peers).
+    #[allow(clippy::too_many_arguments)]
+    pub fn set_peer_metrics(
+        &self,
+        peers_connected: u64,
+        peer_replication_lag_entries: u64,
+        elections_total: u64,
+        election_timeouts_total: u64,
+        append_entries_failures_total: u64,
+        heartbeat_latency_ms: u64,
+        quorum_available: bool,
+    ) {
+        Metrics::gauge_set(&self.peer_connected, peers_connected);
+        Metrics::gauge_set(
+            &self.peer_replication_lag_entries,
+            peer_replication_lag_entries,
+        );
+        Metrics::gauge_set(&self.raft_elections_total, elections_total);
+        Metrics::gauge_set(&self.raft_election_timeouts_total, election_timeouts_total);
+        Metrics::gauge_set(
+            &self.raft_append_entries_failures_total,
+            append_entries_failures_total,
+        );
+        Metrics::gauge_set(&self.raft_heartbeat_latency_ms, heartbeat_latency_ms);
+        Metrics::gauge_set(&self.cluster_quorum_available, quorum_available as u64);
+    }
+
     /// Capture a snapshot of all metrics.
     pub fn snapshot(&self) -> MetricsSnapshot {
         MetricsSnapshot {
@@ -257,6 +299,15 @@ impl Metrics {
             replication_apply_errors_total: self
                 .replication_apply_errors_total
                 .load(Ordering::Relaxed),
+            peer_connected: self.peer_connected.load(Ordering::Relaxed),
+            peer_replication_lag_entries: self.peer_replication_lag_entries.load(Ordering::Relaxed),
+            raft_elections_total: self.raft_elections_total.load(Ordering::Relaxed),
+            raft_election_timeouts_total: self.raft_election_timeouts_total.load(Ordering::Relaxed),
+            raft_append_entries_failures_total: self
+                .raft_append_entries_failures_total
+                .load(Ordering::Relaxed),
+            raft_heartbeat_latency_ms: self.raft_heartbeat_latency_ms.load(Ordering::Relaxed),
+            cluster_quorum_available: self.cluster_quorum_available.load(Ordering::Relaxed),
             request_latency: self.request_latency.snapshot(),
             query_latency: self.query_latency.snapshot(),
             storage_latency: self.storage_latency.snapshot(),
@@ -328,6 +379,20 @@ pub struct MetricsSnapshot {
     pub raft_replication_lag_entries: u64,
     /// Replication: cumulative apply errors.
     pub replication_apply_errors_total: u64,
+    /// Multi-node preview: peers with an outbound connection.
+    pub peer_connected: u64,
+    /// Multi-node preview: max peer replication lag in entries.
+    pub peer_replication_lag_entries: u64,
+    /// Raft: cumulative elections started.
+    pub raft_elections_total: u64,
+    /// Raft: cumulative election timeouts.
+    pub raft_election_timeouts_total: u64,
+    /// Raft: cumulative AppendEntries rejected by a follower.
+    pub raft_append_entries_failures_total: u64,
+    /// Raft: most recent heartbeat round-trip latency in ms.
+    pub raft_heartbeat_latency_ms: u64,
+    /// Cluster: whether a quorum is reachable (0/1).
+    pub cluster_quorum_available: u64,
     /// Request latency histogram.
     pub request_latency: HistogramSnapshot,
     /// Query latency histogram.
@@ -386,9 +451,31 @@ impl MetricsSnapshot {
             "auradb_replication_apply_errors_total",
             self.replication_apply_errors_total,
         );
+        counter("auradb_raft_elections_total", self.raft_elections_total);
+        counter(
+            "auradb_raft_election_timeouts_total",
+            self.raft_election_timeouts_total,
+        );
+        counter(
+            "auradb_raft_append_entries_failures_total",
+            self.raft_append_entries_failures_total,
+        );
         let mut gauge = |name: &str, value: u64| {
             out.push_str(&format!("# TYPE {name} gauge\n{name} {value}\n"));
         };
+        gauge("auradb_peer_connected", self.peer_connected);
+        gauge(
+            "auradb_peer_replication_lag_entries",
+            self.peer_replication_lag_entries,
+        );
+        gauge(
+            "auradb_raft_heartbeat_latency_ms",
+            self.raft_heartbeat_latency_ms,
+        );
+        gauge(
+            "auradb_cluster_quorum_available",
+            self.cluster_quorum_available,
+        );
         gauge("auradb_cluster_enabled", self.cluster_enabled);
         gauge("auradb_node_role", self.node_role);
         gauge("auradb_raft_current_term", self.raft_current_term);

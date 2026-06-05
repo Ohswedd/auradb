@@ -57,7 +57,7 @@ impl RaftConfig {
 }
 
 /// A Raft message addressed to a peer.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct Envelope {
     /// The recipient.
     pub to: NodeId,
@@ -66,7 +66,11 @@ pub struct Envelope {
 }
 
 /// The Raft RPC messages.
-#[derive(Debug, Clone, PartialEq, Eq)]
+///
+/// These derive `Serialize`/`Deserialize` so the cross-process peer transport
+/// (see `auradb-replication`) can carry them over the wire. The Raft state
+/// machine itself remains transport-agnostic.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum Message {
     /// A candidate solicits a vote.
     RequestVote {
@@ -232,6 +236,23 @@ impl<S: RaftStorage> RaftNode<S> {
         self.commit_index
             .get()
             .saturating_sub(self.last_applied.get())
+    }
+
+    /// The leader's record of a peer's highest matching log index, if this node
+    /// is (or was) a leader tracking that peer. Used for per-peer diagnostics.
+    pub fn match_index(&self, peer: NodeId) -> Option<LogIndex> {
+        self.match_index.get(&peer).copied()
+    }
+
+    /// The leader's next-index for a peer (the next log index to send), if
+    /// tracked. Used for per-peer diagnostics.
+    pub fn next_index(&self, peer: NodeId) -> Option<LogIndex> {
+        self.next_index.get(&peer).copied()
+    }
+
+    /// The configured peer ids.
+    pub fn peers(&self) -> &[NodeId] {
+        &self.config.peers
     }
 
     // ---- driving the clock ----

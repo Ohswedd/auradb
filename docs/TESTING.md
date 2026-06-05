@@ -156,6 +156,39 @@ never wall-clock timing — so they are reproducible and never flaky.
 See [CLUSTERING.md](CLUSTERING.md), [RAFT.md](RAFT.md), and
 [REPLICATION.md](REPLICATION.md).
 
+## Multi-node preview suites (v0.5.0)
+
+> **AuraDB v0.5.0 introduces a controlled, experimental multi-node server
+> preview. Single-node mode remains the recommended production mode.**
+
+These integration suites stand up **multiple real server processes over real TCP
+sockets** (the loopback three-node configuration) and exercise the cross-process
+cluster. They use **readiness/bounded polling** (for example
+`auradb cluster wait-ready` / `wait-leader`) rather than fixed sleeps, so they are
+not timing-flaky.
+
+- **Peer transport** — the frame codec (magic `APR1`, protocol version v1,
+  length-delimited, CRC32, 16 MiB payload cap) round-trips and rejects bad
+  frames; the `PeerHello` handshake accepts a valid peer and rejects
+  wrong-cluster, unknown-node, duplicate-node, and bad-token peers with a
+  structured `PeerError`; a snapshot-install request is answered with the
+  structured *unsupported* response; reconnect uses bounded backoff and shutdown
+  is graceful.
+- **Cross-process replication** — real leader election across processes,
+  AppendEntries replication, majority commit (a minority cannot commit), follower
+  apply, and follower catch-up after restart.
+- **Leader/follower client behavior** — writes go to the leader; a follower
+  rejects writes with a structured `not_leader` error and a leader hint while the
+  connection stays healthy; followers reject reads; the `cluster` status section
+  reports `preview_multi_node`, `quorum_available`, and per-peer state.
+- **CLI cluster commands** — the live `auradb cluster leader`, `wait-leader`, and
+  `wait-ready` commands against a running server (text and `--json`), including
+  the readiness/leader-detection polling and detecting when no leader is known
+  yet.
+
+See [CLUSTERING.md](CLUSTERING.md), [RAFT.md](RAFT.md),
+[REPLICATION.md](REPLICATION.md), and [CONFORMANCE.md](CONFORMANCE.md).
+
 ## Raft durability and cluster-mode hardening suites (v0.4.1)
 
 These suites harden the v0.4.0 groundwork. All are deterministic — multi-node

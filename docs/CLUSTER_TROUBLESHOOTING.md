@@ -1,15 +1,17 @@
 # Cluster troubleshooting
 
 This guide covers diagnosing and recovering AuraDB's optional cluster mode. It
-applies to **single-node cluster mode**, which is the only cluster deployment
-enabled in this release.
+applies to **single-node cluster mode** and to the **v0.5.0 experimental
+multi-node preview**.
 
-> **Scope and honesty.** Multi-node server deployment is **experimental and
-> disabled by default**. Configuring peers is rejected at startup. A single-node
-> cluster orders writes through a durable local Raft log but provides **no fault
-> tolerance** — it is one process. There is no automatic failover, no linearizable
-> follower reads, and no distributed transactions. Single-node (non-cluster) mode
-> remains the recommended production path.
+> **AuraDB v0.5.0 introduces a controlled, experimental multi-node server
+> preview. Single-node mode remains the recommended production mode.** The
+> preview is off by default and gated behind two `[cluster]` opt-ins. A
+> single-node cluster orders writes through a durable local Raft log but provides
+> **no fault tolerance** — it is one process. The preview has **no automatic
+> failover**, **no linearizable or follower reads** (followers reject reads), and
+> **no distributed transactions**. It is for local testing and early validation
+> only.
 
 ## Inspecting node and cluster identity
 
@@ -48,7 +50,12 @@ Common doctor warnings:
 | ------- | ------- |
 | `cluster mode is enabled but no identity is initialized` | Run `auradb cluster bootstrap` (or `auradb cluster init`). |
 | `cluster mode is enabled with no peers and bootstrap = false` | A node with `bootstrap = false` needs at least one peer; either bootstrap a new single-node cluster or fix the config. |
-| `cluster listen_addr … is not loopback and cluster transport is unauthenticated` | Cluster transport has no authentication in this release; bind loopback, or pass `--allow-insecure-bind` to accept the risk explicitly. |
+| `cluster listen_addr … is not loopback` | A non-loopback cluster address requires `allow_experimental_public_cluster = true` plus peer TLS and a token; otherwise bind loopback. |
+
+The doctor warnings available for the preview cover: no leader, no quorum, a
+follower lagging, a peer unreachable, a cluster id mismatch, a node id mismatch,
+insecure peer transport, preview mode enabled, public cluster allowed, and
+snapshot install unsupported.
 
 ## What `not_leader` means
 
@@ -60,24 +67,47 @@ not_leader: this node is not the leader; current leader is node <hex>
 ```
 
 In single-node cluster mode the sole node is always the leader, so you should not
-see `not_leader` in normal operation. If you do, the node has not yet completed
-its election on startup — retry after it is ready (`auradb status` reports
-readiness). Aura Connector 0.3.x surfaces this as a normal server error; it does
-not crash, does not retry forever, and does not drop auth/TLS state.
+see `not_leader` in normal operation. In the multi-node preview, **route writes
+to the leader's client address.** A write to a follower returns `not_leader` with
+a hint; find the leader with `auradb cluster leader --addr <client-addr>` (or the
+`cluster` section of `auradb status --json`) and send writes there. If no leader
+is known yet, the node has not finished its election — wait with `auradb cluster
+wait-leader`. Aura Connector 0.3.x surfaces `not_leader` as a normal server
+error; it does not crash, does not retry forever, and does not drop auth/TLS
+state.
 
-## What peer rejection means in this release
+## Multi-node preview troubleshooting (v0.5.0)
 
-Any non-empty `cluster.peers` list is rejected at startup:
+The v0.5.0 preview forms a real cross-process cluster when both opt-ins are set
+(`enabled = true` and `experimental_multi_node = true`). Use the live commands
+against a running server's client address (they accept `--json`, `--token`,
+`--tls-ca`, `--server-name`):
 
-```text
-multi-node cluster deployment is experimental and not enabled in this release;
-run a single-node cluster (no peers) or disable [cluster]
+```bash
+auradb cluster wait-ready  --addr 127.0.0.1:7171 --timeout-secs 30
+auradb cluster wait-leader --addr 127.0.0.1:7171 --timeout-secs 30
+auradb cluster leader      --addr 127.0.0.1:7171 --json
+auradb status              --addr 127.0.0.1:7171 --json   # per-peer cluster state
 ```
 
-This is intentional. The Raft and replication core is validated by deterministic
-in-process tests, but cross-process transport and its security story are not
-production-ready. Configuration is also validated for duplicate peers and a peer
-that points at the node's own address — both are configuration errors.
+The `cluster` section of `auradb status --json` reports `preview_multi_node`,
+`quorum_available`, and a `peers` array of `{ node_id, addr, connected,
+match_index, next_index }`. Common situations:
+
+| Symptom | Likely cause and action |
+| ------- | ----------------------- |
+| Writes return `not_leader` | You are talking to a follower. Route to the leader's client address (`cluster leader`). |
+| `quorum_available: false`, no leader | Fewer than a majority of nodes are reachable. A minority **cannot** commit by design. Start enough nodes to form a majority. |
+| A peer shows `connected: false` | Peer unreachable: check the process is up, the cluster (Raft) address/port is correct, and (for a public cluster) that peer TLS and the token match. |
+| A follower lags (`match_index` well behind the leader) | It is catching up; the leader replicates via AppendEntries. Confirm it converges; if it was restarted it first replays its durable log, then the leader brings it current. |
+| Handshake rejected with a `PeerError` | Cluster id mismatch, an unknown or duplicate node id, a bad token, or a protocol-version mismatch — verify every node shares one `cluster_id`, declares a distinct `node_id` in the static membership, and (public cluster) shares the `peer_auth_token`. |
+| A snapshot-install request returns *unsupported* | Expected: snapshot install over the wire is not implemented and is answered with a structured unsupported response, never silently ignored. |
+
+The peer transport is frame-checked (magic `APR1`, protocol version v1,
+length-delimited, CRC32, 16 MiB cap), and any non-loopback cluster address fails
+closed unless `allow_experimental_public_cluster = true` (which then requires
+peer TLS and a token). Membership is static; a duplicate peer, a self-peer, or a
+malformed `host:port` is rejected at startup.
 
 ## Compacting the Raft log
 
@@ -141,13 +171,14 @@ auradb snapshot restore --input <file> --data-dir <new-dir>
 Restore is atomic: it builds into a staging directory, validates, and only then
 swaps into place, so a failed restore never corrupts an existing directory.
 
-## Why multi-node server deployment is not production-ready yet
+## Why the multi-node preview is not production-ready yet
 
-Cross-process Raft transport, its authentication/TLS story, membership changes,
-snapshot shipping, and automatic failover are not implemented. Enabling peers is
-rejected at startup precisely so a cluster is never *appeared* to be formed when
-it is not. Treat single-node mode as the production path; use single-node cluster
-mode only to exercise the durable Raft write path.
+The v0.5.0 cross-process Raft transport, leader election, and replication are
+real, but dynamic membership, snapshot shipping over the wire, automatic
+failover, and production-grade peer networking are not. The preview is an
+experimental, opt-in path for local testing and early validation. Treat
+single-node mode as the production path; use the multi-node preview only to
+explore cross-process replication.
 
 ## Metrics to watch
 
