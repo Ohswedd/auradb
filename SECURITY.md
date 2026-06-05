@@ -2,7 +2,7 @@
 
 ## Supported versions
 
-AuraDB is at `0.2.1`. Security fixes target the latest released version.
+AuraDB is at `0.3.1`. Security fixes target the latest released version.
 
 ## Reporting a vulnerability
 
@@ -13,7 +13,7 @@ acknowledge reports within a few business days.
 
 ## Security posture of this release
 
-AuraDB `0.2.1` is a single-node engine. Its implemented and enforced security
+AuraDB `0.3.1` is a single-node engine. Its implemented and enforced security
 controls are:
 
 - **Authentication.** Optional static-token authentication, enforced when
@@ -27,6 +27,11 @@ controls are:
   which is for local development only.
 - **Payload limits.** The server rejects frames whose declared payload exceeds
   `max_payload_bytes` before reading the body.
+- **Transaction resource guardrails.** Idle transactions are reaped after
+  `[mvcc] transaction_timeout_secs`, releasing their pinned MVCC snapshots, and a
+  closed connection's transactions are rolled back, so an abandoned or dropped
+  transaction cannot pin versions indefinitely. MVCC pressure is exposed through
+  metrics and `auradb doctor` warnings.
 - **Frame validation.** Magic bytes, protocol version, header length, and CRC32
   header and payload checksums are validated before a frame is processed;
   malformed frames yield a structured error and the connection is closed.

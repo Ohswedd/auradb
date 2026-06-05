@@ -31,6 +31,12 @@ pub trait DataSource {
     fn stats(&self, _collection: &str) -> Option<&CollectionStats> {
         None
     }
+    /// The persisted planner-statistics format version, when statistics are
+    /// available. Reported by `EXPLAIN ANALYZE` for diagnostics. The default is
+    /// `None` (no persisted statistics).
+    fn stats_version(&self) -> Option<u32> {
+        None
+    }
 }
 
 /// The selection strategy chosen by the planner.
@@ -98,6 +104,22 @@ pub struct ExplainAnalysis {
     /// The snapshot read timestamp, when executed within a transaction.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub snapshot_ts: Option<u64>,
+    /// The planner row estimate for the chosen access path (mirrors
+    /// `ExplainPlan::estimated_rows`, placed here so a single ANALYZE object
+    /// carries both the estimate and the measured `matched_rows`).
+    #[serde(default)]
+    pub estimated_rows: usize,
+    /// The persisted planner-statistics format version used for planning, if
+    /// statistics were available.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub planner_stats_version: Option<u32>,
+    /// A short, human-readable reason the planner selected its access path.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub selected_index_reason: Option<String>,
+    /// Whether the planner statistics looked stale or absent when planning (the
+    /// plan is still correct; the cost choice may be suboptimal).
+    #[serde(default)]
+    pub stale_stats: bool,
 }
 
 /// Vector clause summary in an EXPLAIN plan.
@@ -455,7 +477,22 @@ pub fn explain_analyze(
     let started = std::time::Instant::now();
     let (planned, counts) = run_find(ds, query)?;
     let execution_micros = started.elapsed().as_micros();
+    let stats_version = ds.stats_version();
+    // Statistics look stale or absent when there are none, or when rows exist but
+    // no per-field cardinality has been recorded (the planner then falls back to
+    // default selectivity). Correctness is unaffected; the cost choice may not be
+    // optimal until `analyze` runs.
+    let stale_stats = match ds.stats(&query.collection) {
+        None => true,
+        Some(s) => s.row_count > 0 && s.field_cardinality.is_empty(),
+    };
     let mut plan = planned.plan;
+    let selected_index_reason = Some(selection_reason(&plan));
+    if stale_stats && !plan.warnings.iter().any(|w| w.contains("statistics")) {
+        plan.warnings.push(
+            "planner statistics are unavailable or stale; access path chosen from defaults".into(),
+        );
+    }
     plan.analysis = Some(ExplainAnalysis {
         scanned_rows: counts.scanned,
         matched_rows: counts.matched,
@@ -463,6 +500,29 @@ pub fn explain_analyze(
         execution_micros,
         planning_micros: counts.planning.as_micros(),
         snapshot_ts,
+        estimated_rows: plan.estimated_rows,
+        planner_stats_version: stats_version,
+        selected_index_reason,
+        stale_stats,
     });
     Ok(plan)
+}
+
+/// A short, human-readable explanation of why the planner chose its access path.
+fn selection_reason(plan: &ExplainPlan) -> String {
+    match (&plan.strategy, &plan.used_index) {
+        (Strategy::IndexLookup, Some(idx)) => {
+            format!("equality lookup seeded by index `{idx}`")
+        }
+        (Strategy::FullTextScan, Some(idx)) => {
+            format!("full-text index `{idx}` serves the text query")
+        }
+        (Strategy::VectorExactScan, Some(idx)) => {
+            format!("vector index `{idx}` serves the nearest-neighbour search")
+        }
+        (Strategy::FullScan, _) => {
+            "no usable index for the filter; full collection scan".to_string()
+        }
+        (strategy, _) => format!("{strategy:?} access path"),
+    }
 }

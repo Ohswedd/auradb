@@ -1,0 +1,57 @@
+{
+  "schemas": {
+    "Doc": {
+      "name": "Doc",
+      "fields": [
+        {
+          "name": "id",
+          "field_type": {
+            "kind": "uuid"
+          },
+          "primary_key": true,
+          "unique": true,
+          "nullable": false,
+          "indexed": false
+        },
+        {
+          "name": "name",
+          "field_type": {
+            "kind": "string"
+          },
+          "primary_key": false,
+          "unique": false,
+          "nullable": true,
+          "indexed": true
+        },
+        {
+          "name": "views",
+          "field_type": {
+            "kind": "int"
+          },
+          "primary_key": false,
+          "unique": false,
+          "nullable": true,
+          "indexed": false
+        },
+        {
+          "name": "body",
+          "field_type": {
+            "kind": "string"
+          },
+          "primary_key": false,
+          "unique": false,
+          "nullable": true,
+          "indexed": false
+        }
+      ],
+      "relationships": [],
+      "indexes": [
+        {
+          "path": "body",
+          "kind": "full_text"
+        }
+      ]
+    }
+  },
+  "schema_version": 1
+}

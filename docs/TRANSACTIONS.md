@@ -134,3 +134,31 @@ The snapshot-isolation suite (`crates/auradb/tests/mvcc.rs`) covers
 `relationship_include_uses_snapshot`, `vector_nearest_uses_snapshot`,
 `document_path_index_uses_snapshot`, `full_text_uses_snapshot`, and
 `gc_reclaims_old_versions_but_keeps_active_snapshot`.
+
+## Transaction lifecycle and timeouts (v0.3.1)
+
+A transaction pins the versions visible at its snapshot until it commits, rolls
+back, or is reaped. The engine keeps an **active transaction registry** — id, read
+timestamp, start time, last-activity time, owning connection, and state — and GC
+computes its reclamation horizon from this registry, never from stale state.
+
+To bound how long an idle or abandoned transaction can pin versions:
+
+- A transaction idle longer than `[mvcc] transaction_timeout_secs` (default 300s)
+  is reaped: marked aborted, its snapshot released so GC can progress, and any
+  further operation rejected with a structured `transaction_timeout` error.
+- The abandoned-transaction reaper runs every
+  `[mvcc] abandoned_transaction_reaper_secs` (default 30s). A transaction handle
+  dropped without commit or rollback cannot be cleaned up in `Drop` (releasing a
+  snapshot is an engine operation), so the reaper handles it.
+- On connection close, the server rolls back every transaction the connection
+  owned.
+
+A long-lived but *active* transaction still legitimately pins its snapshot; the
+timeout bounds idleness, and `auradb status`/`doctor` and the
+`auradb_mvcc_*` metrics make active long-lived snapshots visible. The lifecycle is
+covered by `crates/auradb/tests/transaction_lifecycle.rs` (registry, timeout,
+reaper, GC-progresses-after-timeout, status, metrics — all driven by a
+controllable clock so the tests are deterministic). See
+[OPERATIONS.md](OPERATIONS.md) and the `[mvcc]` section of
+[CONFIGURATION.md](CONFIGURATION.md).

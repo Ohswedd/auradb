@@ -2,15 +2,19 @@
 
 This document is the connector-focused companion to the
 [Compatibility Matrix](COMPATIBILITY.md). It records which Aura Connector release
-talks to AuraDB 0.3.0, what it can drive, and what it cannot. AuraDB 0.3.0 adds
-MVCC and a cost-based query planner; it preserves the v0.2.1 wire behavior, so the
-same connector compatibility applies and **no connector release is required**.
+talks to AuraDB 0.3.1, what it can drive, and what it cannot. AuraDB 0.3.1 is a
+stabilization release for the v0.3.0 MVCC and planner behavior; it preserves the
+v0.3.0 wire behavior, so the same connector compatibility applies and **no
+connector release is required**. The only wire additions are additive JSON
+fields: an `mvcc` section in the health report and extra `EXPLAIN ANALYZE`
+diagnostics, both of which older clients ignore.
 
 ## Summary
 
-- **Aura Connector 0.3.x remains fully compatible with AuraDB 0.3.0. No connector
-  release is required.** The MVCC and query-planner changes are server-side and
-  ride the existing AWP 1 wire format and Query IR.
+- **Aura Connector 0.3.x remains fully compatible with AuraDB 0.3.1. No connector
+  release is required.** The MVCC stabilization changes are server-side and ride
+  the existing AWP 1 wire format and Query IR; new health/EXPLAIN fields are
+  additive and optional.
 - **AuraDB 0.3.0 speaks AWP 1** (the 44-byte framed Aura Wire Protocol header,
   CRC32-checked, with JSON payloads). See [PROTOCOL.md](PROTOCOL.md).
 - **Use Aura Connector 0.3.x.** The published Aura Connector 0.3.x ships a native
@@ -25,6 +29,7 @@ same connector compatibility applies and **no connector release is required**.
 
 | AuraDB | Aura Connector | Protocol | Status |
 | ------ | -------------- | -------- | ------ |
+| 0.3.1  | 0.3.x          | AWP 1    | Supported (native AuraDB backend) |
 | 0.3.0  | 0.3.x          | AWP 1    | Supported (native AuraDB backend) |
 | 0.2.1  | 0.3.x          | AWP 1    | Supported (native AuraDB backend) |
 | 0.2.0  | 0.3.x          | AWP 1    | Supported (native AuraDB backend) |

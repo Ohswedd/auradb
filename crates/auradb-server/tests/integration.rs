@@ -125,6 +125,28 @@ async fn hello_returns_capabilities() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn health_reports_mvcc_fields() {
+    let dir = tempfile::tempdir().unwrap();
+    let (addr, shutdown) = start(dir.path()).await;
+    let mut stream = TcpStream::connect(&addr).await.unwrap();
+    let _ = hello(&mut stream).await;
+
+    let req = Frame::new(Opcode::Health, RequestId(2), 0, Vec::new());
+    write_frame(&mut stream, &req).await.unwrap();
+    let resp = read_frame(&mut stream, DEFAULT_MAX_PAYLOAD)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(resp.opcode, Opcode::HealthResult);
+    let report: auradb_protocol::HealthReport = resp.decode_json().unwrap();
+    let mvcc = report.mvcc.expect("v0.3.1 health carries an mvcc section");
+    assert_eq!(mvcc.active_transactions, 0);
+    assert_eq!(mvcc.transaction_timeout_secs, 300);
+    assert!(mvcc.gc_enabled);
+    shutdown.notify_one();
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn malformed_frame_gets_structured_error() {
     let dir = tempfile::tempdir().unwrap();
     let (addr, shutdown) = start(dir.path()).await;

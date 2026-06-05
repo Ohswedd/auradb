@@ -18,7 +18,12 @@ use auradb_query::{
 use auradb_storage::{Batch, LogOp, Storage, StorageOptions};
 use auradb_txn::{Key, StagedOp, Transaction};
 
+use crate::clock::WallClock;
 use crate::idgen::record_id_for;
+
+/// Default transaction idle timeout in seconds (mirrors the server's
+/// `[mvcc] transaction_timeout_secs` default).
+pub const DEFAULT_TRANSACTION_TIMEOUT_SECS: u64 = 300;
 
 /// Engine configuration.
 #[derive(Debug, Clone)]
@@ -27,6 +32,13 @@ pub struct EngineOptions {
     pub storage: StorageOptions,
     /// Minimum number of most-recent versions of each live record GC retains.
     pub gc_min_retained_versions: usize,
+    /// Idle timeout after which an unfinished transaction is reaped: its
+    /// snapshot is released and further operations on it are rejected. `0`
+    /// disables transaction timeouts.
+    pub transaction_timeout_secs: u64,
+    /// Wall-clock time source. Defaults to the system clock; tests inject a
+    /// manual clock so timeouts are deterministic.
+    pub clock: WallClock,
 }
 
 impl Default for EngineOptions {
@@ -34,8 +46,57 @@ impl Default for EngineOptions {
         EngineOptions {
             storage: StorageOptions::default(),
             gc_min_retained_versions: 1,
+            transaction_timeout_secs: DEFAULT_TRANSACTION_TIMEOUT_SECS,
+            clock: WallClock::System,
         }
     }
+}
+
+/// The lifecycle state of a registered transaction.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TxnState {
+    /// Open and able to read and stage writes.
+    Active,
+    /// Reaped after exceeding the idle timeout. Its snapshot has been released;
+    /// any further operation on it is rejected with a transaction-timeout error.
+    TimedOut,
+}
+
+/// Per-transaction bookkeeping held by the active-transaction registry. The
+/// registry is the single source of truth for which snapshots are pinned, so GC
+/// can never reclaim a version a live transaction can still observe and an
+/// abandoned transaction can be reaped instead of pinning versions forever.
+#[derive(Debug, Clone)]
+struct TxnEntry {
+    /// The pinned MVCC read timestamp (snapshot).
+    read_ts: u64,
+    /// Wall-clock second the transaction began.
+    started_at: u64,
+    /// Wall-clock second of the most recent operation on the transaction.
+    last_activity: u64,
+    /// The owning connection, when the transaction was begun on the server.
+    connection_id: Option<u64>,
+    /// Lifecycle state.
+    state: TxnState,
+}
+
+/// A public, point-in-time view of one registered transaction, for status and
+/// observability output. Carries no record data.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct ActiveTransaction {
+    /// The transaction id.
+    pub id: u64,
+    /// The pinned MVCC read timestamp (snapshot).
+    pub read_ts: u64,
+    /// Age in seconds since the transaction began.
+    pub age_secs: u64,
+    /// Seconds since the most recent operation on the transaction.
+    pub idle_secs: u64,
+    /// The owning connection, if known.
+    pub connection_id: Option<u64>,
+    /// Lifecycle state.
+    pub state: TxnState,
 }
 
 /// Aggregate engine statistics (for observability and health).
@@ -47,8 +108,18 @@ pub struct EngineStats {
     pub records: usize,
     /// Total stored MVCC versions (including superseded versions and tombstones).
     pub versions: usize,
-    /// Number of transactions currently holding a pinned snapshot.
+    /// Number of transactions currently holding a pinned snapshot (state Active).
     pub active_transactions: usize,
+    /// Number of registered transactions that have timed out but have not yet
+    /// been cleaned up by their connection.
+    pub timed_out_transactions: usize,
+    /// The oldest read timestamp pinned by an active transaction, if any. This
+    /// is the GC reclamation horizon when transactions are active.
+    pub oldest_active_read_ts: Option<u64>,
+    /// Age in seconds of the oldest active transaction, if any.
+    pub oldest_transaction_age_secs: Option<u64>,
+    /// Cumulative number of transactions reaped for exceeding the idle timeout.
+    pub transaction_timeouts_total: u64,
     /// Schema catalog version.
     pub schema_version: u64,
 }
@@ -69,10 +140,17 @@ struct Inner {
     clock: LogicalClock,
     index_dir: PathBuf,
     load_report: IndexLoadReport,
-    /// Read timestamps pinned by currently-active transactions (a multiset, since
-    /// concurrent transactions may begin at the same watermark). The smallest key
-    /// is the oldest snapshot GC must preserve.
-    active_read_ts: BTreeMap<u64, usize>,
+    /// The active-transaction registry, keyed by transaction id. The single
+    /// source of truth for pinned snapshots: GC preserves every version any
+    /// `Active` entry can observe, and the abandoned-transaction reaper releases
+    /// entries idle past the timeout.
+    txns: BTreeMap<u64, TxnEntry>,
+    /// Wall-clock time source for transaction lifecycle timestamps and timeouts.
+    wall_clock: WallClock,
+    /// Idle timeout after which an unfinished transaction is reaped (`0` = off).
+    transaction_timeout_secs: u64,
+    /// Cumulative count of transactions reaped for exceeding the idle timeout.
+    transaction_timeouts_total: u64,
     /// Minimum versions per live record GC retains (from [`EngineOptions`]).
     gc_min_retained_versions: usize,
     /// Persisted planner statistics (advisory; refreshed by `analyze` and
@@ -111,6 +189,9 @@ impl DataSource for Inner {
     }
     fn stats(&self, collection: &str) -> Option<&CollectionStats> {
         self.planner_stats.get(collection)
+    }
+    fn stats_version(&self) -> Option<u32> {
+        Some(self.planner_stats.format_version)
     }
 }
 
@@ -194,6 +275,9 @@ impl DataSource for TxnView<'_> {
     fn stats(&self, collection: &str) -> Option<&CollectionStats> {
         self.inner.planner_stats.get(collection)
     }
+    fn stats_version(&self) -> Option<u32> {
+        Some(self.inner.planner_stats.format_version)
+    }
 }
 
 impl Engine {
@@ -250,7 +334,10 @@ impl Engine {
                 clock,
                 index_dir,
                 load_report,
-                active_read_ts: BTreeMap::new(),
+                txns: BTreeMap::new(),
+                wall_clock: options.clock,
+                transaction_timeout_secs: options.transaction_timeout_secs,
+                transaction_timeouts_total: 0,
                 gc_min_retained_versions: options.gc_min_retained_versions.max(1),
                 planner_stats,
                 stats_path,
@@ -401,16 +488,62 @@ impl Engine {
     /// commit watermark. All reads within the transaction see committed state as
     /// of this point in MVCC time (overlaid with the transaction's own writes).
     pub fn begin(&self) -> Transaction {
+        self.begin_with_connection(None)
+    }
+
+    /// Begin a transaction owned by a connection. The connection id is recorded
+    /// in the active-transaction registry for observability and so the server
+    /// can attribute and clean up a connection's transactions on disconnect.
+    pub fn begin_with_connection(&self, connection_id: Option<u64>) -> Transaction {
         let mut inner = self.lock();
         let read_ts = inner.storage.commit_watermark();
         let id = TxnId(inner.clock.tick());
-        *inner.active_read_ts.entry(read_ts).or_default() += 1;
+        let now = inner.wall_clock.now_secs();
+        inner.txns.insert(
+            id.get(),
+            TxnEntry {
+                read_ts,
+                started_at: now,
+                last_activity: now,
+                connection_id,
+                state: TxnState::Active,
+            },
+        );
         Transaction::begin_at(id, read_ts)
+    }
+
+    /// Reap transactions idle longer than the configured timeout: mark each
+    /// `TimedOut`, release its pinned snapshot (so GC can progress), and count
+    /// it. Returns the number reaped. A no-op when the timeout is disabled.
+    /// Driven by the server's abandoned-transaction reaper task, and callable
+    /// directly (with a manual clock) in tests.
+    pub fn reap_transactions(&self) -> usize {
+        self.lock().reap_transactions()
+    }
+
+    /// A point-in-time snapshot of every registered transaction, for status and
+    /// observability output.
+    pub fn active_transactions(&self) -> Vec<ActiveTransaction> {
+        let inner = self.lock();
+        let now = inner.wall_clock.now_secs();
+        inner
+            .txns
+            .iter()
+            .map(|(id, e)| ActiveTransaction {
+                id: *id,
+                read_ts: e.read_ts,
+                age_secs: now.saturating_sub(e.started_at),
+                idle_secs: now.saturating_sub(e.last_activity),
+                connection_id: e.connection_id,
+                state: e.state,
+            })
+            .collect()
     }
 
     /// Stage a mutation within a transaction (no durable write yet).
     pub fn stage(&self, txn: &mut Transaction, mutation: Mutation) -> Result<MutationResult> {
-        let inner = self.lock();
+        let mut inner = self.lock();
+        inner.touch_txn(txn.id().get())?;
         inner.stage_mutation(txn, mutation)
     }
 
@@ -445,7 +578,8 @@ impl Engine {
     /// vector, full-text) runs against the transaction view, so staged writes
     /// are visible and staged deletes are hidden.
     pub fn txn_plan_find(&self, txn: &Transaction, q: &FindQuery) -> Result<query::PlannedFind> {
-        let inner = self.lock();
+        let mut inner = self.lock();
+        inner.touch_txn(txn.id().get())?;
         let view = inner.txn_view(txn, &q.collection)?;
         query::execute_find(&view, q)
     }
@@ -458,7 +592,8 @@ impl Engine {
         q: &FindQuery,
         page: &[(RecordId, Option<f32>)],
     ) -> Result<Vec<Row>> {
-        let inner = self.lock();
+        let mut inner = self.lock();
+        inner.touch_txn(txn.id().get())?;
         let view = inner.txn_view(txn, &q.collection)?;
         query::materialize(&view, q, page)
     }
@@ -466,7 +601,8 @@ impl Engine {
     /// Run a find to completion within a transaction, returning all matching
     /// rows from the transaction view.
     pub fn txn_find(&self, txn: &Transaction, q: &FindQuery) -> Result<Vec<Row>> {
-        let inner = self.lock();
+        let mut inner = self.lock();
+        inner.touch_txn(txn.id().get())?;
         let view = inner.txn_view(txn, &q.collection)?;
         let planned = query::execute_find(&view, q)?;
         query::materialize(&view, q, &planned.ordered)
@@ -474,21 +610,24 @@ impl Engine {
 
     /// Count matching records within a transaction.
     pub fn txn_count(&self, txn: &Transaction, q: &CountQuery) -> Result<usize> {
-        let inner = self.lock();
+        let mut inner = self.lock();
+        inner.touch_txn(txn.id().get())?;
         let view = inner.txn_view(txn, &q.collection)?;
         query::execute_count(&view, q)
     }
 
     /// Test whether any record matches within a transaction.
     pub fn txn_exists(&self, txn: &Transaction, q: &ExistsQuery) -> Result<bool> {
-        let inner = self.lock();
+        let mut inner = self.lock();
+        inner.touch_txn(txn.id().get())?;
         let view = inner.txn_view(txn, &q.collection)?;
         query::execute_exists(&view, q)
     }
 
     /// Produce an EXPLAIN plan for a find within a transaction.
     pub fn txn_explain(&self, txn: &Transaction, q: &FindQuery) -> Result<ExplainPlan> {
-        let inner = self.lock();
+        let mut inner = self.lock();
+        inner.touch_txn(txn.id().get())?;
         let view = inner.txn_view(txn, &q.collection)?;
         query::explain(&view, q)
     }
@@ -497,20 +636,33 @@ impl Engine {
     /// detection. On conflict the transaction is aborted and its snapshot
     /// released.
     pub fn commit(&self, txn: Transaction) -> Result<()> {
-        let read_ts = txn.read_ts();
+        let id = txn.id().get();
         let mut inner = self.lock();
+        // A transaction reaped for timeout cannot commit: its snapshot was
+        // already released, so its first-committer-wins conflict check is no
+        // longer sound. Reject with a structured timeout error and clean up.
+        if matches!(
+            inner.txns.get(&id).map(|e| e.state),
+            Some(TxnState::TimedOut)
+        ) {
+            inner.txns.remove(&id);
+            return Err(Error::TransactionTimeout(format!(
+                "transaction {id} timed out before commit and was aborted"
+            )));
+        }
         let result = inner.commit_transaction(txn);
-        inner.release_read_ts(read_ts);
+        inner.txns.remove(&id);
         result
     }
 
     /// Roll back a transaction, discarding all staged writes and releasing its
-    /// snapshot.
+    /// snapshot. Rolling back a timed-out transaction is accepted (it is the
+    /// connection cleaning up after the reaper) and simply unregisters it.
     pub fn rollback(&self, mut txn: Transaction) {
-        let read_ts = txn.read_ts();
+        let id = txn.id().get();
         txn.finish();
         drop(txn);
-        self.lock().release_read_ts(read_ts);
+        self.lock().txns.remove(&id);
     }
 
     /// Reclaim MVCC versions no active transaction can observe.
@@ -526,6 +678,16 @@ impl Engine {
         let cutoff = inner.gc_cutoff();
         let min_retained = inner.gc_min_retained_versions;
         inner.storage.gc(cutoff, min_retained)
+    }
+
+    /// Report what [`gc`](Self::gc) would reclaim at the current horizon without
+    /// modifying any data. Used by `auradb gc --dry-run`.
+    pub fn gc_dry_run(&self) -> auradb_storage::GcReport {
+        let inner = self.lock();
+        let cutoff = inner.gc_cutoff();
+        inner
+            .storage
+            .gc_preview(cutoff, inner.gc_min_retained_versions)
     }
 
     /// Recompute and persist planner statistics (`analyze`). Statistics are
@@ -549,7 +711,8 @@ impl Engine {
     /// Produce an `EXPLAIN ANALYZE` plan within a transaction; reports the
     /// snapshot read timestamp.
     pub fn txn_explain_analyze(&self, txn: &Transaction, q: &FindQuery) -> Result<ExplainPlan> {
-        let inner = self.lock();
+        let mut inner = self.lock();
+        inner.touch_txn(txn.id().get())?;
         let view = inner.txn_view(txn, &q.collection)?;
         query::explain_analyze(&view, q, Some(txn.read_ts()))
     }
@@ -625,11 +788,32 @@ impl Engine {
     /// Current aggregate statistics.
     pub fn stats(&self) -> EngineStats {
         let inner = self.lock();
+        let now = inner.wall_clock.now_secs();
+        let active_transactions = inner
+            .txns
+            .values()
+            .filter(|e| e.state == TxnState::Active)
+            .count();
+        let timed_out_transactions = inner
+            .txns
+            .values()
+            .filter(|e| e.state == TxnState::TimedOut)
+            .count();
+        let oldest_transaction_age_secs = inner
+            .txns
+            .values()
+            .filter(|e| e.state == TxnState::Active)
+            .map(|e| now.saturating_sub(e.started_at))
+            .max();
         EngineStats {
             collections: inner.storage.collection_count(),
             records: inner.storage.total_records(),
             versions: inner.storage.total_versions(),
-            active_transactions: inner.active_read_ts.values().sum(),
+            active_transactions,
+            timed_out_transactions,
+            oldest_active_read_ts: inner.oldest_active_read_ts(),
+            oldest_transaction_age_secs,
+            transaction_timeouts_total: inner.transaction_timeouts_total,
             schema_version: inner.storage.schema_version(),
         }
     }
@@ -682,23 +866,63 @@ impl Inner {
         Ok(())
     }
 
-    /// Release a transaction's pinned read timestamp from the active set.
-    fn release_read_ts(&mut self, read_ts: u64) {
-        if let Some(count) = self.active_read_ts.get_mut(&read_ts) {
-            *count -= 1;
-            if *count == 0 {
-                self.active_read_ts.remove(&read_ts);
-            }
+    /// Record activity on a transaction and reject operations on one that has
+    /// timed out. Updates `last_activity` for an active transaction. An id the
+    /// registry does not know (an embedded `Transaction` built without `begin`,
+    /// or one already finished) is treated as a no-op so direct embedded use
+    /// keeps working.
+    fn touch_txn(&mut self, id: u64) -> Result<()> {
+        let now = self.wall_clock.now_secs();
+        match self.txns.get_mut(&id) {
+            Some(entry) => match entry.state {
+                TxnState::Active => {
+                    entry.last_activity = now;
+                    Ok(())
+                }
+                TxnState::TimedOut => Err(Error::TransactionTimeout(format!(
+                    "transaction {id} exceeded its idle timeout and was aborted"
+                ))),
+            },
+            None => Ok(()),
         }
     }
 
-    /// The GC reclamation horizon: the oldest active snapshot, or the commit
-    /// watermark when no transactions are active.
+    /// Reap transactions idle past the configured timeout. Each is marked
+    /// `TimedOut` (so further operations are rejected) and its snapshot is no
+    /// longer counted toward the GC horizon, letting GC progress.
+    fn reap_transactions(&mut self) -> usize {
+        if self.transaction_timeout_secs == 0 {
+            return 0;
+        }
+        let now = self.wall_clock.now_secs();
+        let timeout = self.transaction_timeout_secs;
+        let mut reaped = 0;
+        for entry in self.txns.values_mut() {
+            if entry.state == TxnState::Active && now.saturating_sub(entry.last_activity) >= timeout
+            {
+                entry.state = TxnState::TimedOut;
+                reaped += 1;
+            }
+        }
+        self.transaction_timeouts_total += reaped as u64;
+        reaped
+    }
+
+    /// The smallest read timestamp pinned by an `Active` transaction, if any.
+    fn oldest_active_read_ts(&self) -> Option<u64> {
+        self.txns
+            .values()
+            .filter(|e| e.state == TxnState::Active)
+            .map(|e| e.read_ts)
+            .min()
+    }
+
+    /// The GC reclamation horizon: the oldest snapshot pinned by an active
+    /// transaction, or the commit watermark when none are active. Timed-out
+    /// transactions are excluded, so reaping an abandoned transaction lets GC
+    /// reclaim the versions it had pinned.
     fn gc_cutoff(&self) -> u64 {
-        self.active_read_ts
-            .keys()
-            .next()
-            .copied()
+        self.oldest_active_read_ts()
             .unwrap_or_else(|| self.storage.commit_watermark())
     }
 

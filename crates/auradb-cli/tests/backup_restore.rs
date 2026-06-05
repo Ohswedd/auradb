@@ -195,3 +195,157 @@ fn dump_restore_preserves_all_field_and_index_kinds() {
     // `auradb check` passes on the restored database.
     assert!(cmd_check(&dst).unwrap().contains("OK"));
 }
+
+// ---- Backup / restore combined with MVCC garbage collection (v0.3.1) ----
+//
+// AuraDB's logical dump exports the latest committed visible state, not the full
+// version history. These tests pin that contract down against GC: a dump after
+// GC restores the same visible state, restoring then GC'ing is safe, a dump
+// taken while a snapshot is held is still the latest committed state, and a
+// restore never resurrects versions GC has reclaimed.
+
+/// A minimal single-collection database for the GC interaction tests.
+fn build_versioned(dir: &std::path::Path) {
+    let engine = Engine::open(dir).unwrap();
+    let schema = CollectionSchema::new("Item")
+        .with_field(FieldDef {
+            name: "id".into(),
+            field_type: FieldType::Uuid,
+            primary_key: true,
+            unique: true,
+            nullable: false,
+            indexed: false,
+        })
+        .with_field(FieldDef::new("views", FieldType::Int));
+    engine.create_schema(schema).unwrap();
+    for i in 0..4 {
+        let mut f = Document::new();
+        f.insert("id".into(), Value::Text(format!("item{i}")));
+        f.insert("views".into(), Value::Int(0));
+        engine.insert("Item", f).unwrap();
+    }
+    // Create superseded versions by updating every item twice.
+    for v in 1..=2 {
+        engine
+            .apply_mutation(auradb::query::Mutation::Update {
+                collection: "Item".into(),
+                filter: None,
+                set: {
+                    let mut s = Document::new();
+                    s.insert("views".into(), Value::Int(v));
+                    s
+                },
+            })
+            .unwrap();
+    }
+}
+
+#[test]
+fn backup_after_gc_restores_visible_latest_state() {
+    let tmp = tempfile::tempdir().unwrap();
+    let src = tmp.path().join("src");
+    let dump = tmp.path().join("backup.jsonl");
+    let dst = tmp.path().join("restored");
+    build_versioned(&src);
+
+    // GC reclaims superseded versions, then we back up the latest state.
+    let engine = Engine::open(&src).unwrap();
+    let report = engine.gc().unwrap();
+    assert!(report.versions_reclaimed > 0);
+    drop(engine);
+
+    cmd_dump(&src, &dump).unwrap();
+    cmd_restore(&dst, &dump).unwrap();
+    let restored = Engine::open(&dst).unwrap();
+    let rows = restored.find(&FindQuery::new("Item")).unwrap();
+    assert_eq!(rows.len(), 4);
+    for r in &rows {
+        assert_eq!(r.fields.get("views"), Some(&Value::Int(2)));
+    }
+}
+
+#[test]
+fn restore_then_gc_is_safe() {
+    let tmp = tempfile::tempdir().unwrap();
+    let src = tmp.path().join("src");
+    let dump = tmp.path().join("backup.jsonl");
+    let dst = tmp.path().join("restored");
+    build_versioned(&src);
+    cmd_dump(&src, &dump).unwrap();
+    cmd_restore(&dst, &dump).unwrap();
+
+    let engine = Engine::open(&dst).unwrap();
+    engine.gc().unwrap();
+    engine.gc().unwrap(); // idempotent
+    assert_eq!(engine.find(&FindQuery::new("Item")).unwrap().len(), 4);
+    assert!(cmd_check(&dst).unwrap().contains("OK"));
+}
+
+#[test]
+fn backup_with_active_snapshot_is_consistent() {
+    let tmp = tempfile::tempdir().unwrap();
+    let src = tmp.path().join("src");
+    let dump = tmp.path().join("backup.jsonl");
+    let dst = tmp.path().join("restored");
+    build_versioned(&src);
+
+    let engine = Engine::open(&src).unwrap();
+    // Hold a snapshot while the backup runs; the logical dump still exports the
+    // latest committed state, not the snapshot's older view.
+    let txn = engine.begin();
+    let lines = cmd_dump(&src, &dump).unwrap();
+    assert_eq!(lines, 1 + 4); // schema + 4 records
+    engine.rollback(txn);
+
+    cmd_restore(&dst, &dump).unwrap();
+    let restored = Engine::open(&dst).unwrap();
+    let rows = restored.find(&FindQuery::new("Item")).unwrap();
+    assert_eq!(rows.len(), 4);
+    for r in &rows {
+        assert_eq!(r.fields.get("views"), Some(&Value::Int(2)));
+    }
+}
+
+#[test]
+fn dump_restore_preserves_mvcc_latest_state() {
+    let tmp = tempfile::tempdir().unwrap();
+    let src = tmp.path().join("src");
+    let dump = tmp.path().join("backup.jsonl");
+    let dst = tmp.path().join("restored");
+    build_versioned(&src);
+
+    cmd_dump(&src, &dump).unwrap();
+    cmd_restore(&dst, &dump).unwrap();
+    let restored = Engine::open(&dst).unwrap();
+    // Latest value preserved; superseded versions are not exported.
+    let rows = restored.find(&FindQuery::new("Item")).unwrap();
+    assert!(rows
+        .iter()
+        .all(|r| r.fields.get("views") == Some(&Value::Int(2))));
+    // The restored store starts with one version per record (a fresh insert).
+    assert_eq!(restored.stats().records, 4);
+    assert_eq!(restored.stats().versions, 4);
+}
+
+#[test]
+fn dump_restore_does_not_resurrect_gc_removed_versions() {
+    let tmp = tempfile::tempdir().unwrap();
+    let src = tmp.path().join("src");
+    let dump = tmp.path().join("backup.jsonl");
+    let dst = tmp.path().join("restored");
+    build_versioned(&src);
+
+    let engine = Engine::open(&src).unwrap();
+    engine.gc().unwrap(); // reclaim old versions in the source
+    drop(engine);
+
+    cmd_dump(&src, &dump).unwrap();
+    cmd_restore(&dst, &dump).unwrap();
+    let restored = Engine::open(&dst).unwrap();
+    // No reclaimed version reappears: exactly one version per live record.
+    assert_eq!(restored.stats().versions, 4);
+    let rows = restored.find(&FindQuery::new("Item")).unwrap();
+    assert!(rows
+        .iter()
+        .all(|r| r.fields.get("views") == Some(&Value::Int(2))));
+}

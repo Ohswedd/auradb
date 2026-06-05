@@ -91,9 +91,10 @@ All Rust scenarios pass in CI via `cargo test`. The standard-library Python
 harness passes all scenarios against a locally running server. The connector
 harnesses were also validated locally with the published `aura-connector` 0.3.0
 (installed from PyPI within `aura-connector>=0.3,<0.4`): the smoke passed in
-plaintext, auth, and TLS-plus-auth modes (11/11 checks each) and the full
-connector conformance passed over TLS-plus-auth (16/16 scenarios), with no secret
-appearing in the server logs.
+plaintext, auth, and TLS-plus-auth modes (11/11 checks each), and the
+standard-library Python wire conformance passed over TLS-plus-auth (17/17
+scenarios), with no token, token hash, or private key appearing in the server
+logs.
 
 ## Official client
 

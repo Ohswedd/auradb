@@ -43,6 +43,8 @@ impl Server {
                     sync_on_commit: config.sync_on_commit,
                 },
                 gc_min_retained_versions: config.mvcc.min_retained_versions,
+                transaction_timeout_secs: config.mvcc.transaction_timeout_secs,
+                clock: auradb::WallClock::System,
             },
         )?;
         let cursors = Arc::new(CursorRegistry::new(Duration::from_secs(
@@ -54,6 +56,7 @@ impl Server {
             metrics,
             cursors,
             config: Arc::new(config),
+            connection_counter: Arc::new(std::sync::atomic::AtomicU64::new(1)),
         };
         Ok(Server { ctx, tls })
     }
@@ -89,16 +92,19 @@ impl Server {
     ) -> Result<()> {
         let reaper = spawn_reaper(self.ctx.clone());
         let gc = spawn_gc(self.ctx.clone());
+        let txn_reaper = spawn_txn_reaper(self.ctx.clone());
         let result = tokio::select! {
             result = self.accept_loop(&listener) => {
                 reaper.abort();
                 if let Some(gc) = &gc { gc.abort(); }
+                if let Some(t) = &txn_reaper { t.abort(); }
                 result
             }
             _ = shutdown => {
                 tracing::info!("shutdown signal received; stopping accept loop");
                 reaper.abort();
                 if let Some(gc) = &gc { gc.abort(); }
+                if let Some(t) = &txn_reaper { t.abort(); }
                 Ok(())
             }
         };
@@ -168,18 +174,75 @@ fn spawn_gc(ctx: ServerContext) -> Option<tokio::task::JoinHandle<()>> {
         loop {
             tick.tick().await;
             match ctx.engine.gc() {
-                Ok(report) if report.versions_reclaimed > 0 || report.records_removed > 0 => {
-                    tracing::debug!(
-                        versions = report.versions_reclaimed,
-                        records = report.records_removed,
-                        "background GC reclaimed old versions"
+                Ok(report) => {
+                    Metrics::incr(&ctx.metrics.mvcc_gc_runs_total);
+                    Metrics::add(
+                        &ctx.metrics.mvcc_gc_reclaimed_versions_total,
+                        report.versions_reclaimed as u64,
                     );
+                    Metrics::add(
+                        &ctx.metrics.mvcc_gc_reclaimed_bytes_total,
+                        report.bytes_reclaimed,
+                    );
+                    if report.versions_reclaimed > 0 || report.records_removed > 0 {
+                        tracing::debug!(
+                            versions = report.versions_reclaimed,
+                            records = report.records_removed,
+                            bytes = report.bytes_reclaimed,
+                            "background GC reclaimed old versions"
+                        );
+                    }
+                    refresh_mvcc_metrics(&ctx);
                 }
-                Ok(_) => {}
                 Err(e) => tracing::warn!(error = %e, "background GC failed"),
             }
         }
     }))
+}
+
+/// Spawn the abandoned-transaction reaper when transaction timeouts are enabled.
+/// On each pass it reaps transactions idle past `transaction_timeout_secs` —
+/// releasing their pinned snapshots so GC can progress — and refreshes the MVCC
+/// pressure gauges.
+fn spawn_txn_reaper(ctx: ServerContext) -> Option<tokio::task::JoinHandle<()>> {
+    if ctx.config.mvcc.transaction_timeout_secs == 0 {
+        return None;
+    }
+    let interval_secs = ctx.config.mvcc.abandoned_transaction_reaper_secs.max(1);
+    Some(tokio::spawn(async move {
+        let mut tick = tokio::time::interval(Duration::from_secs(interval_secs));
+        loop {
+            tick.tick().await;
+            let reaped = ctx.engine.reap_transactions();
+            if reaped > 0 {
+                tracing::warn!(
+                    reaped,
+                    timeout_secs = ctx.config.mvcc.transaction_timeout_secs,
+                    "reaped abandoned transactions past their idle timeout"
+                );
+            }
+            refresh_mvcc_metrics(&ctx);
+        }
+    }))
+}
+
+/// Refresh the MVCC pressure gauges and the cumulative timeout counter from the
+/// engine's current statistics.
+fn refresh_mvcc_metrics(ctx: &ServerContext) {
+    let stats = ctx.engine.stats();
+    Metrics::gauge_set(
+        &ctx.metrics.mvcc_active_transactions,
+        stats.active_transactions as u64,
+    );
+    Metrics::gauge_set(
+        &ctx.metrics.mvcc_oldest_snapshot_age_seconds,
+        stats.oldest_transaction_age_secs.unwrap_or(0),
+    );
+    Metrics::gauge_set(&ctx.metrics.mvcc_retained_versions, stats.versions as u64);
+    Metrics::gauge_set(
+        &ctx.metrics.mvcc_transaction_timeouts_total,
+        stats.transaction_timeouts_total,
+    );
 }
 
 async fn handle_connection<S>(ctx: ServerContext, socket: S) -> Result<()>
@@ -188,7 +251,12 @@ where
 {
     let (mut reader, mut writer) = tokio::io::split(socket);
     Metrics::gauge_inc(&ctx.metrics.active_connections);
-    let mut session = Session::default();
+    let mut session = Session {
+        connection_id: ctx
+            .connection_counter
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed),
+        ..Session::default()
+    };
     let max_payload = ctx.config.max_payload_bytes;
 
     let result = loop {

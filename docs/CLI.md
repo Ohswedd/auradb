@@ -37,11 +37,13 @@ protocol version, collection count, and whether TLS was used).
 Opens the engine and verifies on-disk index consistency, validating and
 preserving persisted index snapshots.
 
-### `auradb gc [--data-dir <dir>]`
+### `auradb gc [--data-dir <dir>] [--dry-run] [--json]`
 Runs version garbage collection over the MVCC version chains. It reclaims versions
 no active transaction can observe and drops fully-deleted records, always
 retaining the latest version and at least `min_retained_versions`, and reports the
-versions and records reclaimed. See [STORAGE_ENGINE.md](STORAGE_ENGINE.md).
+versions and records reclaimed plus the bytes reclaimed. `--dry-run` reports what
+would be reclaimed without modifying any data; `--json` emits a machine-readable
+report. See [STORAGE_ENGINE.md](STORAGE_ENGINE.md) and [OPERATIONS.md](OPERATIONS.md).
 
 ### `auradb stats analyze [--data-dir <dir>]`
 Recomputes planner statistics (row counts, per-field cardinality, vector counts,
@@ -72,6 +74,19 @@ document-path lookup, full-text lookup, exact vector nearest, cursor paging,
 frame encode/decode, and a dump/restore round trip). `--json` emits a full
 report; `--output` writes the JSON report to a file (and implies `--json`).
 Numbers are measured, never fabricated. See [BENCHMARKS.md](BENCHMARKS.md).
+
+### `auradb bench compare --baseline <file> --current <file> [--fail-threshold-percent <p>]`
+Compares two benchmark reports and prints the per-benchmark percent change,
+marking regressions (slower throughput, or higher latency/wall time). By default
+it only warns and exits 0; pass `--fail-threshold-percent` to exit non-zero when
+any benchmark regresses by more than that percentage (for intentional CI gating).
+Benchmarks are hardware- and load-sensitive — compare only reports produced on the
+same quiescent machine.
+
+The `auradb status` and `auradb doctor` commands additionally report an MVCC
+section (active transactions, oldest snapshot age, retained versions, timeouts,
+GC state) and, for `doctor`, operational warnings. See
+[OBSERVABILITY.md](OBSERVABILITY.md) and [OPERATIONS.md](OPERATIONS.md).
 
 ### `auradb auth hash-token [--token <t>]`
 Generates an Argon2id token hash for the `[auth]` config block. Omit `--token` to

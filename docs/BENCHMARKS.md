@@ -62,3 +62,21 @@ CI compiles all benchmarks (`cargo bench --workspace --benches --no-run`) so a
 benchmark that fails to build is caught, without spending CI time on full
 measured runs. The committed baseline under `benches/baseline/` is updated
 deliberately as part of a release.
+
+## Regression comparison (v0.3.1)
+
+`auradb bench compare --baseline benches/baseline/v0.3.0.json --current benches/baseline/v0.3.1.json`
+compares two committed baselines and prints the per-benchmark percent change. A
+benchmark "regresses" when it moves in the worse direction (slower throughput, or
+higher latency/wall time). By default the command only warns and exits 0; pass
+`--fail-threshold-percent <p>` to make it exit non-zero when any benchmark
+regresses by more than `p` percent — use this only where a threshold is
+intentionally set and stable, never as a default hard gate.
+
+**Benchmarks are hardware- and load-sensitive.** A baseline is only meaningful
+compared against another run on the *same, quiescent* machine; numbers captured
+while the machine is compiling or otherwise busy are not comparable. The committed
+`v0.3.1.json` baseline was captured with the release profile
+(`cargo run --release -p auradb-cli -- bench --json --output …`) so it is
+methodologically comparable to `v0.3.0.json`. Regenerate it on your own hardware
+before using it as a local reference.

@@ -84,9 +84,11 @@ cargo build --workspace --all-features
   Connector scenario list run over the wire protocol. In addition to the Rust and
   standard-library Python harnesses, the published Aura Connector drives the
   server through `run_connector_smoke.py` and `run_connector_conformance.py`. For
-  the v0.2.1 release these were validated locally with `aura-connector` 0.3.0
-  (from PyPI) in plaintext, auth, and TLS-plus-auth modes, with no secret in the
-  server logs. See [CONFORMANCE.md](CONFORMANCE.md).
+  the v0.3.1 release these were validated locally with `aura-connector` 0.3.0
+  (from PyPI) in plaintext, auth, and TLS-plus-auth modes — the connector smoke
+  passing 11/11 and the standard-library wire conformance 17/17 over TLS plus
+  auth — with no token, token hash, or private key in the server logs. See
+  [CONFORMANCE.md](CONFORMANCE.md).
 - **Secure deployment** (`docker-compose.secure.yml`): the secure Compose example
   was validated at runtime with development certificates and a generated token
   hash. The container reports healthy over TLS with authentication, a plaintext
@@ -101,3 +103,22 @@ A repository scan greps the source tree for incomplete-code macros and
 unfinished-work vocabulary to ensure no unfinished behavior is presented as
 working. Unsupported operations must instead return a structured
 `Error::Unsupported`.
+
+## MVCC stabilization suites (v0.3.1)
+
+- `crates/auradb/tests/transaction_lifecycle.rs` — the active transaction
+  registry, transaction timeout, abandoned-transaction reaper, GC-progresses-
+  after-timeout, status, and metrics. A controllable `WallClock` drives timeouts
+  deterministically; there are no sleep-based tests.
+- `crates/auradb/tests/gc_validation.rs` — GC idempotence, snapshot-reader
+  retention, removal after release, tombstone visibility, after-restart, index and
+  planner-stats consistency, and the reclaimed versions/bytes report.
+- `crates/auradb/tests/upgrade_to_v0_3_1.rs` — opens genuine v0.1.0/v0.2.0/v0.2.1/
+  v0.3.0 release fixtures with the v0.3.1 engine and runs the full upgrade
+  checklist, including rejection of an unknown future format.
+- `crates/auradb/tests/planner_regression.rs` and
+  `crates/auradb/tests/explain_analyze_fields.rs` — planner access-path selection,
+  correctness under stale stats, and the `EXPLAIN ANALYZE` shape.
+- `crates/auradb-cli/tests/backup_restore.rs` — backup/restore combined with GC
+  (latest-state semantics, no resurrection of reclaimed versions).
+- `cmd_bench_compare` unit tests cover the benchmark regression comparison logic.

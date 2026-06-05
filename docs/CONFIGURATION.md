@@ -125,3 +125,24 @@ that binds `0.0.0.0:7171` inside the container and mounts `/data` as a volume.
 For a deployment, use `docker-compose.secure.yml`, which enables auth and TLS,
 mounts a config and a certificate directory, and injects the token hash from the
 environment so no secret is committed. See [DEPLOYMENT.md](DEPLOYMENT.md).
+
+## MVCC and transaction lifecycle (`[mvcc]`)
+
+```toml
+[mvcc]
+gc_enabled = true                       # run background version GC
+gc_interval_secs = 300                  # seconds between GC passes
+min_retained_versions = 1               # versions of each live record GC always keeps
+transaction_timeout_secs = 300          # reap a transaction idle longer than this (0 = off)
+abandoned_transaction_reaper_secs = 30  # how often the reaper runs
+```
+
+A transaction idle for longer than `transaction_timeout_secs` is reaped: it is
+marked aborted, its MVCC snapshot is released so GC can progress, and any further
+operation on it fails with a structured `transaction_timeout` error. The reaper
+also releases transactions whose handle was dropped or whose connection vanished.
+
+Setting `transaction_timeout_secs = 0` disables timeouts; this is not recommended,
+because an abandoned transaction then pins versions indefinitely. Validation
+rejects `abandoned_transaction_reaper_secs = 0` while timeouts are enabled. See
+[OPERATIONS.md](OPERATIONS.md) and [TRANSACTIONS.md](TRANSACTIONS.md).

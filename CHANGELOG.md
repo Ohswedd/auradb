@@ -4,6 +4,59 @@ All notable changes to AuraDB are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and the project uses
 [Semantic Versioning](https://semver.org/).
 
+## [0.3.1] - 2026-06-05
+
+MVCC stabilization, upgrade confidence, and operational guardrails. A
+stabilization release before replication and Raft work: it hardens the MVCC
+transaction lifecycle so a long-lived or abandoned transaction can no longer pin
+versions forever without visibility, adds transaction timeouts and an
+abandoned-transaction reaper, strengthens GC validation, and surfaces MVCC
+pressure through metrics, status, and `doctor` warnings. All v0.3.0 behavior is
+preserved and Aura Connector 0.3.x remains compatible (no connector release is
+required). This release still implements snapshot isolation, **not** serializable
+isolation, and adds no clustering, replication, or Raft.
+
+### Added
+
+- Transaction timeout and abandoned transaction cleanup: an idle transaction past
+  `[mvcc] transaction_timeout_secs` is reaped by the abandoned-transaction reaper,
+  its snapshot released and further operations rejected with a structured
+  `transaction_timeout` error.
+- Active transaction registry tracking id, read timestamp, start time, last
+  activity, connection id, and state; GC reclaims from this registry, never stale
+  leaked state.
+- MVCC pressure metrics: `auradb_mvcc_active_transactions`,
+  `auradb_mvcc_oldest_snapshot_age_seconds`, `auradb_mvcc_retained_versions`,
+  `auradb_mvcc_gc_runs_total`, `auradb_mvcc_gc_reclaimed_versions_total`,
+  `auradb_mvcc_gc_reclaimed_bytes_total`, `auradb_mvcc_transaction_timeouts_total`,
+  and `auradb_mvcc_conflicts_total`.
+- Operational warnings in `auradb doctor` for long-lived snapshots, version
+  pressure, disabled GC, disabled transaction timeouts, and stale statistics.
+- Stronger MVCC garbage collection validation, plus `auradb gc --dry-run` and
+  `auradb gc --json`, and `bytes_reclaimed` in the GC report.
+- Additional upgrade safety tests across genuine v0.1.0, v0.2.0, v0.2.1, and
+  v0.3.0 release fixtures into v0.3.1.
+- Query planner regression tests and backup/restore-with-GC tests.
+- Benchmark regression baseline comparison: `auradb bench compare --baseline … --current …`
+  with an optional `--fail-threshold-percent` for CI.
+- Improved `EXPLAIN ANALYZE` output: estimated-vs-actual rows, planner-stats
+  version, selected-index reason, MVCC snapshot timestamp, and a stale-statistics
+  warning (all additive JSON fields).
+
+### Changed
+
+- Improved cleanup behavior for dropped or disconnected transactions: a
+  connection's transactions are rolled back on disconnect, and the reaper releases
+  any that are abandoned.
+- Health and `status` now report active snapshots and MVCC pressure (additive
+  `mvcc` section in the health report).
+- Improved documentation for snapshot isolation and version retention.
+
+### Fixed
+
+- An abandoned transaction handle (dropped without commit or rollback) no longer
+  pins MVCC versions indefinitely: the abandoned-transaction reaper releases it.
+
 ## [0.3.0] - 2026-06-05
 
 MVCC and query planner foundations. AuraDB now stores multiple committed

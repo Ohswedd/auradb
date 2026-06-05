@@ -143,3 +143,24 @@ staged write is never missed and a staged delete is never returned. Correctness
 is prioritized over performance: the overlay index is rebuilt per transactional
 query (see [TRANSACTIONS.md](TRANSACTIONS.md)). Reads without a transaction id are
 unchanged.
+
+## EXPLAIN ANALYZE diagnostics (v0.3.1)
+
+`EXPLAIN ANALYZE` reports measured execution alongside the plan. In addition to
+the v0.3.0 fields (scanned/matched/returned rows, planning and execution time, and
+the MVCC snapshot timestamp inside a transaction), v0.3.1 adds, as **additive JSON
+fields**:
+
+- `estimated_rows` — the planner's estimate, carried beside the measured actuals;
+- `planner_stats_version` — the persisted statistics format version used;
+- `selected_index_reason` — a short human-readable reason for the chosen access
+  path (e.g. "equality lookup seeded by index `status`");
+- `stale_stats` — true when statistics were absent or had no per-field cardinality,
+  so the planner used default selectivity (the result is still correct; the cost
+  choice may not be optimal — run `auradb stats analyze`).
+
+All additions are additive and optional, so Aura Connector 0.3.x continues to
+deserialize the v0.3.0 shape. Planner regression coverage lives in
+`crates/auradb/tests/planner_regression.rs` and the ANALYZE shape in
+`crates/auradb/tests/explain_analyze_fields.rs`; whatever access path the planner
+chooses, the rows returned are correct.

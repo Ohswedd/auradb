@@ -118,6 +118,34 @@ pub struct HealthReport {
     pub version: String,
     /// Number of collections currently registered.
     pub collections: usize,
+    /// MVCC health and pressure summary. Additive in AWP 0.3.1: older clients
+    /// that do not model this field ignore it, and a server that omits it (the
+    /// field defaults to `None`) stays compatible with newer clients.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mvcc: Option<MvccHealth>,
+}
+
+/// MVCC health and version-pressure summary carried in [`HealthReport`].
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct MvccHealth {
+    /// Transactions currently holding a pinned snapshot.
+    pub active_transactions: usize,
+    /// Registered transactions that have timed out but not yet been cleaned up.
+    pub timed_out_transactions: usize,
+    /// The oldest read timestamp pinned by an active transaction, if any.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub oldest_active_read_ts: Option<u64>,
+    /// Age in seconds of the oldest active transaction, if any.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub oldest_transaction_age_secs: Option<u64>,
+    /// Total stored MVCC versions retained (including superseded and tombstones).
+    pub retained_versions: usize,
+    /// Cumulative transactions reaped for exceeding the idle timeout.
+    pub transaction_timeouts_total: u64,
+    /// Configured transaction idle timeout in seconds (`0` = disabled).
+    pub transaction_timeout_secs: u64,
+    /// Whether background version GC is enabled.
+    pub gc_enabled: bool,
 }
 
 #[cfg(test)]
