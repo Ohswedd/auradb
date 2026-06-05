@@ -1,10 +1,19 @@
+<div align="center">
+
 # AuraDB
+
+**A single-node, Rust-native multi-model database server for the Aura ecosystem.**
 
 [![CI](https://github.com/Ohswedd/auradb/actions/workflows/ci.yml/badge.svg)](https://github.com/Ohswedd/auradb/actions/workflows/ci.yml)
 [![Security](https://github.com/Ohswedd/auradb/actions/workflows/security.yml/badge.svg)](https://github.com/Ohswedd/auradb/actions/workflows/security.yml)
+[![Docker](https://github.com/Ohswedd/auradb/actions/workflows/docker.yml/badge.svg)](https://github.com/Ohswedd/auradb/actions/workflows/docker.yml)
+[![Release](https://img.shields.io/badge/release-v0.2.1-green.svg)](CHANGELOG.md)
 [![Rust](https://img.shields.io/badge/rust-1.85%2B-orange.svg)](https://www.rust-lang.org)
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
-[![Release](https://img.shields.io/badge/release-v0.2.1-green.svg)](CHANGELOG.md)
+
+</div>
+
+**Client library:** [Aura Connector](https://github.com/Ohswedd/aura-connector) (Python).
 
 AuraDB is a single-node, Rust-native database server for the Aura ecosystem. It
 speaks the Aura Wire Protocol, persists data locally, and provides typed schema,
@@ -45,8 +54,9 @@ transactional store. The forward direction is captured in the
 
 ## How it relates to Aura Connector
 
-Aura Connector is the client; AuraDB is the server. AuraDB implements the Aura
-Wire Protocol (AWP) and an Aura-Connector-compatible Query IR. The conformance
+[Aura Connector](https://github.com/Ohswedd/aura-connector) is the client; AuraDB
+is the server. AuraDB implements the Aura Wire Protocol (AWP) and an
+Aura-Connector-compatible Query IR. The conformance
 suite ([`crates/auradb-conformance`](crates/auradb-conformance)) exercises every
 capability over the wire, and a Python harness lives in
 [`tests/conformance/python`](tests/conformance/python). The published Aura
