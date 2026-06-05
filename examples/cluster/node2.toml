@@ -1,0 +1,38 @@
+# AuraDB three-node preview cluster — node 2 (loopback, local only).
+# See examples/cluster/node1.toml and docs/CLUSTERING.md for details.
+# EXPERIMENTAL multi-node preview; single-node mode is the recommended path.
+
+bind = "127.0.0.1"
+port = 7181
+data_dir = ".local/cluster/node2"
+max_payload_bytes = 16777216
+log_level = "info"
+log_json = false
+cursor_timeout_secs = 300
+page_size = 100
+sync_on_commit = true
+metrics_enabled = true
+
+[tls]
+enabled = false
+
+[auth]
+enabled = false
+
+[mvcc]
+gc_enabled = true
+gc_interval_secs = 300
+min_retained_versions = 1
+
+[cluster]
+enabled = true
+experimental_multi_node = true
+cluster_id = "0000000000000000000000000000a1a2"
+node_id = "00000000000000a2"
+listen_addr = "127.0.0.1:7182"
+advertise_addr = "127.0.0.1:7182"
+bootstrap = true
+peers = [
+  { node_id = "00000000000000a1", addr = "127.0.0.1:7172" },
+  { node_id = "00000000000000a3", addr = "127.0.0.1:7192" },
+]

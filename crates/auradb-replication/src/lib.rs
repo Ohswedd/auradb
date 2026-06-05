@@ -28,11 +28,14 @@
 mod apply;
 mod command;
 mod error;
+mod multi;
 mod node;
 mod snapshot;
+mod transport;
 
 pub use apply::apply_command;
 pub use command::{ReplicatedCommand, SchemaCommand, ENVELOPE_VERSION};
 pub use error::{ReplicationError, Result};
+pub use multi::{PeerCluster, PeerMetrics, PeerStatus};
 pub use node::{ClusterNode, CompactionReport, ReplicationMetrics};
 pub use snapshot::{RestoreOptions, SnapshotManifest, SnapshotMeta, SNAPSHOT_FORMAT_VERSION};

@@ -2,8 +2,10 @@
 
 Running AuraDB in production: MVCC version pressure, transaction lifecycle,
 garbage collection, backup, and the signals that tell you the store is healthy.
-This is single-node operations; AuraDB has no clustering, replication, or
-failover.
+This is single-node operations, which is the **recommended production mode**.
+AuraDB v0.5.0 adds a controlled, experimental multi-node server preview (see
+[Multi-node preview operations](#multi-node-preview-operations-v050)); it is off
+by default and not a production path.
 
 ## MVCC version pressure
 
@@ -129,9 +131,52 @@ startup.
 The durable Raft log grows over time; compact it (after the engine has applied the
 prefix) with `auradb cluster compact-log [--dry-run] [--json]`. Capture and inspect
 portable snapshots with `auradb snapshot create|inspect|restore`. For diagnosing
-`not_leader`, peer rejection, corrupt cluster metadata, or recovery from backup,
+`not_leader`, peer state, corrupt cluster metadata, or recovery from backup,
 see [CLUSTER_TROUBLESHOOTING.md](CLUSTER_TROUBLESHOOTING.md). See also
 [CLUSTERING.md](CLUSTERING.md) and [CLI.md](CLI.md).
+
+## Multi-node preview operations (v0.5.0)
+
+> **AuraDB v0.5.0 introduces a controlled, experimental multi-node server
+> preview. Single-node mode remains the recommended production mode.**
+
+The preview lets real server processes form a cross-process cluster, elect a
+leader, and replicate writes through Raft. It is **off by default** and requires
+two explicit `[cluster]` opt-ins (`enabled = true` and `experimental_multi_node =
+true`). The validated path is the three-node loopback example at
+`examples/cluster/node{1,2,3}.toml`:
+
+```bash
+# Three processes (three terminals):
+auradb server --config examples/cluster/node1.toml
+auradb server --config examples/cluster/node2.toml
+auradb server --config examples/cluster/node3.toml
+
+# Wait for readiness/election and inspect per-peer state.
+auradb cluster wait-ready  --addr 127.0.0.1:7171 --timeout-secs 30
+auradb cluster wait-leader --addr 127.0.0.1:7171 --timeout-secs 30
+auradb cluster leader      --addr 127.0.0.1:7171 --json
+auradb status              --addr 127.0.0.1:7171 --json
+```
+
+Operating notes:
+
+- **Route writes to the leader.** Followers reject writes with `not_leader` (and
+  reject reads). The write path blocks until a majority commits; a minority
+  cannot commit, so keep a majority of nodes running.
+- **Follower restart.** A restarted follower replays its durable log and the
+  leader brings it current; watch `match_index` in `auradb status --json`.
+- **Public (non-loopback) clusters fail closed** unless
+  `allow_experimental_public_cluster = true`, which additionally requires peer
+  TLS (`[cluster.tls]`) and a `peer_auth_token`. The Docker Compose preview under
+  `examples/cluster/docker/` shows this path.
+- **Watch quorum.** `auradb_cluster_quorum_available` and the
+  `quorum_available` status field tell you whether a majority is connected.
+
+Single-node mode remains the recommended production path; use the preview for
+local testing and early validation only. See [CLUSTERING.md](CLUSTERING.md),
+[OBSERVABILITY.md](OBSERVABILITY.md), and
+[CLUSTER_TROUBLESHOOTING.md](CLUSTER_TROUBLESHOOTING.md).
 
 ## Upgrading
 

@@ -301,29 +301,17 @@ impl Config {
         if !self.cluster.enabled {
             return Ok(());
         }
+        // All cluster guardrails live in `ClusterConfig::validate`:
+        //   - a non-empty peer set requires `experimental_multi_node = true`
+        //     (otherwise it fails closed exactly as in v0.4.1);
+        //   - any non-loopback cluster address requires
+        //     `allow_experimental_public_cluster = true`, which in turn requires
+        //     peer TLS and a peer authentication token.
+        // Multi-node mode is the controlled, experimental preview; single-node
+        // mode remains the recommended production path.
         self.cluster
             .validate()
             .map_err(|e| Error::Config(e.to_string()))?;
-        // Multi-node server deployment is experimental and not enabled in this
-        // release: fail closed rather than appearing to form a cluster.
-        if self.cluster.is_multi_node() {
-            return Err(Error::Config(
-                "multi-node cluster deployment is experimental and not enabled in this release; \
-                 run a single-node cluster (no peers) or disable [cluster]. The Raft and \
-                 replication core is validated by in-process tests; see docs/CLUSTERING.md"
-                    .into(),
-            ));
-        }
-        // Cluster traffic has no authentication story yet: refuse a non-loopback
-        // cluster bind unless the operator explicitly accepts the risk.
-        if !self.cluster.is_loopback() && !self.allow_insecure_bind {
-            return Err(Error::Config(format!(
-                "refusing to bind cluster listen_addr {} to a non-loopback interface: cluster \
-                 transport authentication is not available in this release; bind loopback or pass \
-                 --allow-insecure-bind to override",
-                self.cluster.listen_addr
-            )));
-        }
         Ok(())
     }
 
@@ -500,61 +488,61 @@ token_hash_algorithm = "argon2id"
         c.validate().unwrap();
     }
 
+    fn peer(node_id: &str, addr: &str) -> auradb_cluster::PeerConfig {
+        auradb_cluster::PeerConfig {
+            node_id: node_id.to_string(),
+            addr: addr.to_string(),
+        }
+    }
+
     #[test]
-    fn multi_node_cluster_fails_closed() {
+    fn multi_node_without_preview_flag_fails_closed() {
+        // A configured peer set without experimental_multi_node fails closed,
+        // exactly as in v0.4.1.
         let mut cluster = auradb_cluster::ClusterConfig::single_node();
-        cluster.peers = vec!["10.0.0.2:7172".into()];
+        cluster.peers = vec![peer("00000000000000a2", "127.0.0.1:7272")];
         let c = Config {
             cluster,
             ..Config::default()
         };
         let err = c.validate().unwrap_err();
-        assert!(err.to_string().contains("experimental"));
+        assert!(err.to_string().contains("experimental_multi_node"), "{err}");
     }
 
     #[test]
-    fn public_cluster_bind_requires_override() {
+    fn loopback_multi_node_preview_validates() {
+        // The explicit two-flag opt-in with loopback peers is accepted.
         let mut cluster = auradb_cluster::ClusterConfig::single_node();
+        cluster.experimental_multi_node = true;
+        cluster.peers = vec![
+            peer("00000000000000a2", "127.0.0.1:7272"),
+            peer("00000000000000a3", "127.0.0.1:7372"),
+        ];
+        let c = Config {
+            cluster,
+            ..Config::default()
+        };
+        c.validate().unwrap();
+    }
+
+    #[test]
+    fn public_cluster_requires_explicit_public_flag() {
+        // A non-loopback cluster bind fails closed unless the public-cluster
+        // opt-in is set (which itself requires TLS and a peer auth token).
+        let mut cluster = auradb_cluster::ClusterConfig::single_node();
+        cluster.experimental_multi_node = true;
         cluster.listen_addr = "0.0.0.0:7172".into();
         cluster.advertise_addr = "0.0.0.0:7172".into();
         let c = Config {
-            cluster: cluster.clone(),
-            ..Config::default()
-        };
-        assert!(c.validate().is_err());
-        let ok = Config {
-            cluster,
-            allow_insecure_bind: true,
-            ..Config::default()
-        };
-        ok.validate().unwrap();
-    }
-
-    #[test]
-    fn cluster_peers_rejected_in_v041() {
-        // Any non-empty peers list is rejected at startup: cross-process
-        // multi-node deployment is experimental and not enabled in this release.
-        let mut cluster = auradb_cluster::ClusterConfig::single_node();
-        cluster.peers = vec!["10.0.0.2:7172".into()];
-        let c = Config {
             cluster,
             ..Config::default()
         };
-        assert!(c.validate().is_err());
-    }
-
-    #[test]
-    fn cluster_non_loopback_peer_rejected_without_override() {
-        // A non-loopback cluster bind requires an explicit insecure-bind override
-        // because cluster transport authentication is not available yet.
-        let mut cluster = auradb_cluster::ClusterConfig::single_node();
-        cluster.listen_addr = "10.0.0.1:7172".into();
-        cluster.advertise_addr = "10.0.0.1:7172".into();
-        let c = Config {
-            cluster,
-            ..Config::default()
-        };
-        assert!(c.validate().is_err());
+        let err = c.validate().unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("allow_experimental_public_cluster"),
+            "{err}"
+        );
     }
 
     #[test]

@@ -121,3 +121,22 @@ hard CI gate.
 
 Benchmark numbers are hardware- and load-sensitive; regenerate the baseline on your
 own quiescent machine before using it as a local reference.
+
+## Peer-transport and multi-node replication benchmarks (v0.5.0)
+
+> **AuraDB v0.5.0 introduces a controlled, experimental multi-node server
+> preview. Single-node mode remains the recommended production mode.**
+
+v0.5.0 adds benchmarks for the new cross-process path: the peer-transport frame
+codec (encode/decode of magic-tagged, CRC32-checksummed frames) and the
+multi-node replication write path (the cost of replicating and committing on a
+majority versus the single-node Raft-backed path). These establish a **v0.5.0
+baseline** alongside the existing engine categories:
+
+```bash
+cargo run --release -p auradb-cli -- bench --json --output benches/baseline/v0.5.0.json
+auradb bench compare --baseline benches/baseline/v0.4.1.json --current benches/baseline/v0.5.0.json
+```
+
+As with every benchmark here, the numbers are machine-specific and used only for
+same-machine regression tracking — never as a universal performance claim.

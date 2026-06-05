@@ -31,9 +31,10 @@ pub struct ServerContext {
     /// Monotonic source of per-connection ids, recorded against transactions
     /// for observability and connection-scoped cleanup.
     pub connection_counter: Arc<std::sync::atomic::AtomicU64>,
-    /// The single-node cluster coordinator, present only when cluster mode is
-    /// enabled. Drives the Raft write path and reports cluster status.
-    pub cluster: Option<Arc<auradb_replication::ClusterNode>>,
+    /// The active cluster runtime (single-node or the multi-node preview),
+    /// present only when cluster mode is enabled. Drives the Raft write path and
+    /// reports cluster status.
+    pub cluster: Option<Arc<crate::cluster_runtime::ClusterRuntime>>,
 }
 
 impl ServerContext {
@@ -65,6 +66,18 @@ impl ServerContext {
             m.append_entries_received,
             m.apply_errors,
         );
+        // Multi-node preview peer/Raft counters (no-op for single-node).
+        if let Some(pm) = node.peer_metrics() {
+            self.metrics.set_peer_metrics(
+                pm.peers_connected,
+                status.replication_lag_entries(),
+                pm.elections,
+                pm.election_timeouts,
+                pm.append_entries_failures,
+                pm.heartbeat_latency_ms,
+                pm.quorum_available,
+            );
+        }
     }
 }
 
@@ -73,6 +86,17 @@ impl ServerContext {
 pub fn cluster_health(ctx: &ServerContext) -> Option<auradb_protocol::ClusterHealth> {
     let node = ctx.cluster.as_ref()?;
     let status = node.status();
+    let peers = node
+        .peer_status()
+        .into_iter()
+        .map(|p| auradb_protocol::ClusterPeerHealth {
+            node_id: p.node_id,
+            addr: p.addr,
+            connected: p.connected,
+            match_index: p.match_index,
+            next_index: p.next_index,
+        })
+        .collect();
     Some(auradb_protocol::ClusterHealth {
         enabled: status.enabled,
         node_id: status.node_id.map(|id| id.to_string()),
@@ -86,6 +110,9 @@ pub fn cluster_health(ctx: &ServerContext) -> Option<auradb_protocol::ClusterHea
         peer_count: status.peer_count,
         single_node: status.single_node,
         replication_lag_entries: status.replication_lag_entries(),
+        preview_multi_node: node.is_multi_node(),
+        quorum_available: node.quorum_available(),
+        peers,
     })
 }
 

@@ -66,6 +66,34 @@ cluster path works without changing the non-cluster guarantees:
 These run as part of the conformance suite. See [CLUSTERING.md](CLUSTERING.md) and
 [REPLICATION.md](REPLICATION.md).
 
+### Three-node preview scenarios (0.5.0)
+
+> **AuraDB v0.5.0 introduces a controlled, experimental multi-node server
+> preview. Single-node mode remains the recommended production mode.**
+
+The v0.5.0 multi-node preview is exercised across real server processes over real
+TCP sockets (the loopback three-node configuration). The scenarios confirm the
+cross-process cluster behaves as described:
+
+- **Detect leader** — after the cluster elects, a leader is reported (via
+  `auradb cluster leader` / the `cluster` status section).
+- **Write to leader** — a write sent to the leader's client address is accepted,
+  replicated, and committed on a majority.
+- **Follower returns `not_leader`** — a write sent to a follower returns the
+  structured `not_leader` error with a leader hint.
+- **Follower health / status** — a follower stays healthy and reports per-peer
+  cluster state (`preview_multi_node`, `quorum_available`, and the `peers` array)
+  in `auradb status --json`.
+- **Stop + restart follower catch-up** — a stopped follower, after restart,
+  replays its durable log and is brought current by the leader.
+
+The Aura Connector validates against the **leader's** client address; a write
+routed to a follower surfaces `not_leader`, which a 0.3.x connector handles
+additively. For v0.5.0 the published `aura-connector` 0.3.0 smoke suite was run
+against the elected leader of a loopback three-node cluster (12/12 checks passed);
+the auth/TLS connector matrix and full conformance suite run in `conformance.yml`.
+See [CLUSTERING.md](CLUSTERING.md) and [TESTING.md](TESTING.md).
+
 ## Running
 
 Rust (no server needed - the test spawns one):

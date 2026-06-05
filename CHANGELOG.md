@@ -4,6 +4,69 @@ All notable changes to AuraDB are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and the project uses
 [Semantic Versioning](https://semver.org/).
 
+## [0.5.0] - 2026-06-05
+
+Controlled multi-node server preview. The first release in which AuraDB server
+processes can form a real cross-process cluster, electing a leader and
+replicating writes over a dedicated peer transport. This is an explicit,
+experimental preview intended for local testing and early validation only;
+single-node mode remains the recommended production path. Cross-process peer
+networking is disabled by default and must be turned on with both
+`[cluster] enabled = true` and `[cluster] experimental_multi_node = true`. All
+v0.4.1 behavior, storage format, and the Aura Wire Protocol are preserved, and
+Aura Connector 0.3.x remains compatible.
+
+### Added
+- Experimental cross-process peer networking: a dedicated, length-delimited,
+  CRC32-checksummed peer transport with a versioned `PeerHello` handshake that
+  verifies protocol version, cluster id, and node id, carries a shared peer
+  authentication token, supports TLS, and returns structured `PeerError` and
+  `Unsupported` responses (snapshot install is not implemented and is reported as
+  unsupported rather than silently ignored).
+- Static multi-node cluster preview: a fixed peer set declared in configuration
+  (`[[cluster.peers]]` with `node_id` and `addr`). No join, leave, or dynamic
+  membership.
+- Secure peer transport baseline: loopback-only peer networking may run without
+  TLS for local preview; any non-loopback peer address fails closed unless
+  `allow_experimental_public_cluster = true`, which additionally requires TLS and
+  a peer authentication token.
+- Three-node local cluster example (`examples/cluster/`, `docker-compose.cluster.yml`)
+  with per-node configs, persistent volumes, separate client and cluster ports,
+  and health checks.
+- Real server-process leader election over the peer transport, driven by a real
+  clock in a background task.
+- Real server-process replicated writes: the leader appends to its Raft log,
+  replicates via AppendEntries, commits on majority, and followers apply
+  committed entries.
+- Follower catch-up after restart: a restarted follower replays its durable log
+  and is brought current by the leader.
+- Cluster status across peers: live `auradb cluster status|peers|leader` against a
+  running server, including per-peer connection state, match/next index, and
+  replication lag.
+- Multi-node integration tests that spawn real server tasks bound to real TCP
+  sockets with readiness checks and bounded polling (no fixed sleeps).
+- Connector validation against the elected leader.
+- Cluster troubleshooting improvements for the multi-node preview.
+- New cluster CLI commands: `auradb cluster leader`, `auradb cluster wait-ready`,
+  and `auradb cluster wait-leader` (with `--timeout-secs`, `--json`, and auth/TLS
+  flags).
+- New peer and Raft metrics (`auradb_peer_connected`,
+  `auradb_peer_replication_lag_entries`, `auradb_raft_elections_total`,
+  `auradb_raft_election_timeouts_total`, `auradb_raft_append_entries_failures_total`,
+  `auradb_raft_heartbeat_latency_ms`, `auradb_cluster_quorum_available`).
+
+### Changed
+- Cluster mode can now run with static peers when explicitly enabled via
+  `experimental_multi_node = true`; without that flag, a non-empty peer set still
+  fails closed exactly as in v0.4.1.
+- Cluster diagnostics include peer reachability and replication state, and the
+  cluster doctor warns about preview mode, public-cluster mode, missing leader or
+  quorum, lagging or unreachable peers, and unsupported snapshot install.
+
+### Fixed
+- Cluster networking, Raft, replication, catch-up, and status bugs found during
+  multi-node validation.
+
 ## [0.4.1] - 2026-06-05
 
 Raft durability and cluster-mode hardening. A patch release that strengthens the

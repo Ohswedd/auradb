@@ -123,22 +123,41 @@ the environment so no secret is committed. See [DEPLOYMENT.md](DEPLOYMENT.md).
   `--allow-insecure-bind` is passed to `auradb server`. This prevents
   accidentally exposing an unauthenticated server on a public interface.
 
-## Cluster transport (v0.4.0)
+## Cluster (peer) transport (v0.4.0, multi-node preview in v0.5.0)
 
-Cluster (Raft) mode is disabled by default. When it is enabled, its security
-posture is deliberately conservative in this release:
+> **AuraDB v0.5.0 introduces a controlled, experimental multi-node server
+> preview. Single-node mode remains the recommended production mode.**
 
-- **Loopback-only.** The cluster transport is unauthenticated in this release, so
-  a non-loopback cluster `listen_addr` is **rejected at startup** unless
-  `--allow-insecure-bind` is explicitly passed. The default `listen_addr` is
-  `127.0.0.1:7172`.
-- **Multi-node deployment is disabled.** Configuring any `peers` in `[cluster]` is
-  **rejected at server startup (fail closed)**, so the server never forms or joins
-  a multi-node cluster over an unauthenticated channel.
-- **Single-node cluster only.** With cluster mode enabled and no peers, the node
-  is a single-node cluster bound to loopback — it talks to no other process.
+Cluster (Raft) mode is disabled by default. v0.5.0 adds a real cross-process peer
+transport, gated by a conservative, fail-closed security baseline:
 
-See [CLUSTERING.md](CLUSTERING.md).
+- **Two opt-ins gate the preview.** A real cluster forms only with both `[cluster]
+  enabled = true` and `experimental_multi_node = true`. A non-empty `peers` list
+  without the second opt-in is rejected at startup (the v0.4.1 behavior).
+- **Loopback is allowed without TLS for the local preview.** A loopback-only
+  three-process cluster needs no peer TLS or token — this is the validated local
+  path. The default `listen_addr` is `127.0.0.1:7172`.
+- **Public clusters fail closed.** Any non-loopback cluster address (listen,
+  advertise, or peer) is **rejected at startup** unless
+  `allow_experimental_public_cluster = true`, which **additionally requires** peer
+  TLS (`[cluster.tls]` with `cert_path` / `key_path` / `ca_path`) and a shared
+  `peer_auth_token`.
+- **Authenticated, identity-checked handshake.** Each peer connection opens with a
+  `PeerHello` that verifies the protocol version, the cluster id, the peer's node
+  id (against the static membership), and a shared token. A wrong-cluster,
+  unknown-node, duplicate-node, or bad-token peer is rejected with a structured
+  `PeerError`.
+- **Frame hardening.** Each peer frame is magic-tagged (`APR1`),
+  protocol-version-tagged (v1), length-delimited, and CRC32-checksummed, with a
+  16 MiB payload-size limit; a frame failing any check is rejected.
+- **Snapshot install is not implemented** and is answered with a structured
+  *unsupported* response rather than being silently ignored.
+- **Token redaction.** The `peer_auth_token` is treated like other AuraDB
+  secrets: it is never printed by `doctor`/`status` output or logged.
+- **Static membership only.** No join/leave/dynamic membership; a duplicate, a
+  self-peer, or a malformed peer address is rejected.
+
+See [CLUSTERING.md](CLUSTERING.md) and [CONFIGURATION.md](CONFIGURATION.md).
 
 ## Redaction
 
@@ -175,11 +194,12 @@ or certificate or key material in their output.
 AuraDB is single node. The following are not implemented in `0.2.1`:
 role-based access control (RBAC/ABAC), tenant isolation, field-level read/write
 policies, field-level encryption, encryption at rest, and audit logging. The
-recommended production deployment remains single-node. v0.4.0 adds an optional,
-loopback-only single-node cluster mode and the Raft/replication groundwork, but
-multi-node deployment is experimental and disabled (configuring peers is rejected
-at startup), there is no authenticated cluster transport, and there is no
-sharding. The roadmap is in [ROADMAP](ROADMAP.md).
+recommended production deployment remains single-node. v0.5.0 adds a controlled,
+experimental multi-node server preview (off by default, gated by two opt-ins,
+with the peer-transport baseline described above), but it is not production-grade
+peer networking: there is no automatic failover, no dynamic membership, no
+streaming snapshot install, and no sharding. The roadmap is in
+[ROADMAP](ROADMAP.md).
 
 ## Operational guidance
 

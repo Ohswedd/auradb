@@ -1,5 +1,44 @@
 # Upgrading
 
+## From v0.4.1 to v0.5.0
+
+> **AuraDB v0.5.0 introduces a controlled, experimental multi-node server
+> preview. Single-node mode remains the recommended production mode.**
+
+v0.5.0 is a drop-in binary replacement and changes **no on-disk format**: storage
+stays at v2, cluster metadata at v1, the Raft log and hard state are unchanged,
+and the snapshot manifest stays at v1. A v0.4.x data directory — including a
+v0.4.x single-node cluster directory with its `cluster/` identity, `raft-log.bin`,
+`raft-state.json`, `raft-compaction.json`, and `commit-base.json` — opens directly
+with no migration. Stop the old binary, swap in the new one, and start it.
+
+If you do nothing, behavior is unchanged: cluster mode stays off by default and
+the single-node path is byte-for-byte the same.
+
+What is new and how it affects an upgrade:
+
+- The `[cluster]` table gains v0.5.0 fields: `experimental_multi_node`,
+  `allow_experimental_public_cluster`, structured `{ node_id, addr }` `peers`, a
+  `peer_auth_token`, and a `[cluster.tls]` block. All default to the safe,
+  disabled state, so an existing config keeps its meaning.
+- **Enabling the multi-node preview on upgraded data works.** With both opt-ins
+  (`enabled = true` and `experimental_multi_node = true`) and a static `peers`
+  list, an upgraded node joins a real cross-process cluster; existing data and
+  cluster identity are read normally and the Raft log continues from where it was.
+  A non-empty `peers` list **without** `experimental_multi_node = true` is rejected
+  at startup (the v0.4.1 behavior), and any non-loopback cluster address fails
+  closed unless `allow_experimental_public_cluster = true` (which additionally
+  requires peer TLS and a token).
+- The health report and `auradb status` gain additive cluster fields
+  (`preview_multi_node`, `quorum_available`, and a per-peer `peers` array). The
+  Aura Wire Protocol is unchanged at AWP 1, so Aura Connector 0.3.x stays
+  compatible — no connector release is required.
+
+**Downgrade.** v0.4.x and v0.5.0 share the same on-disk formats, so a v0.5.0 data
+directory can be reopened by v0.4.1 (a v0.5.0-only `[cluster]` field is simply not
+acted on by the older binary). As always, back up the data directory before
+changing versions. See [CLUSTERING.md](CLUSTERING.md).
+
 ## From v0.4.0 to v0.4.1
 
 v0.4.1 is a patch release and a drop-in binary replacement. It changes **no

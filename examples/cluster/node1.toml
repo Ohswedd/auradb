@@ -1,0 +1,53 @@
+# AuraDB three-node preview cluster — node 1 (loopback, local only).
+#
+# EXPERIMENTAL multi-node preview. This is for local testing and early
+# validation only; single-node mode remains the recommended production path.
+# See docs/CLUSTERING.md.
+#
+# Run three local processes (in three terminals), one per config:
+#   auradb server --config examples/cluster/node1.toml
+#   auradb server --config examples/cluster/node2.toml
+#   auradb server --config examples/cluster/node3.toml
+#
+# All addresses are loopback, so no peer TLS or token is required for this local
+# preview. Exposing the cluster transport beyond loopback additionally requires
+# allow_experimental_public_cluster = true, peer TLS, and a peer auth token.
+
+bind = "127.0.0.1"
+port = 7171
+data_dir = ".local/cluster/node1"
+max_payload_bytes = 16777216
+log_level = "info"
+log_json = false
+cursor_timeout_secs = 300
+page_size = 100
+sync_on_commit = true
+metrics_enabled = true
+
+[tls]
+enabled = false
+
+[auth]
+enabled = false
+
+[mvcc]
+gc_enabled = true
+gc_interval_secs = 300
+min_retained_versions = 1
+
+[cluster]
+enabled = true
+# Both opt-ins are required to form a real cross-process cluster.
+experimental_multi_node = true
+# Shared cluster id (identical on every node); distinct node id per node.
+cluster_id = "0000000000000000000000000000a1a2"
+node_id = "00000000000000a1"
+# Dedicated cluster (Raft) transport, loopback only.
+listen_addr = "127.0.0.1:7172"
+advertise_addr = "127.0.0.1:7172"
+bootstrap = true
+# Static membership: every other node, by id and cluster address.
+peers = [
+  { node_id = "00000000000000a2", addr = "127.0.0.1:7182" },
+  { node_id = "00000000000000a3", addr = "127.0.0.1:7192" },
+]

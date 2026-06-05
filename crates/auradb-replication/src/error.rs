@@ -20,6 +20,10 @@ pub enum ReplicationError {
     #[error(transparent)]
     Raft(#[from] auradb_raft::RaftError),
 
+    /// The peer transport reported an error (binding, TLS material, framing).
+    #[error("peer transport error: {0}")]
+    Transport(String),
+
     /// The engine reported an error while applying a committed command.
     #[error("engine apply error: {0}")]
     Apply(#[from] auradb_core::Error),

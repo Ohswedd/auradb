@@ -990,6 +990,103 @@ pub async fn cmd_status_json(
     serde_json::to_string_pretty(&report).context("serializing status report")
 }
 
+/// `auradb cluster leader` — report the leader recognized by a running server.
+pub async fn cmd_cluster_leader(
+    addr: &str,
+    token: Option<String>,
+    tls_ca: Option<PathBuf>,
+    server_name: &str,
+    json: bool,
+) -> Result<String> {
+    let report = status_report(addr, token, tls_ca, server_name).await?;
+    let cluster = report
+        .cluster
+        .ok_or_else(|| anyhow::anyhow!("server at {addr} is not running in cluster mode"))?;
+    if json {
+        return serde_json::to_string_pretty(&serde_json::json!({
+            "addr": addr,
+            "node_id": cluster.node_id,
+            "role": cluster.role,
+            "term": cluster.term,
+            "leader_id": cluster.leader_id,
+        }))
+        .context("serializing leader report");
+    }
+    match &cluster.leader_id {
+        Some(id) => Ok(format!(
+            "leader: {id}\nterm: {}\nrole: {}",
+            cluster.term, cluster.role
+        )),
+        None => anyhow::bail!("no leader is currently known by the server at {addr}"),
+    }
+}
+
+/// `auradb cluster wait-leader` — poll until the server reports a leader.
+pub async fn cmd_cluster_wait_leader(
+    addr: &str,
+    timeout_secs: u64,
+    token: Option<String>,
+    tls_ca: Option<PathBuf>,
+    server_name: &str,
+    json: bool,
+) -> Result<String> {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(timeout_secs);
+    loop {
+        if let Ok(report) = status_report(addr, token.clone(), tls_ca.clone(), server_name).await {
+            if let Some(cluster) = &report.cluster {
+                if let Some(id) = &cluster.leader_id {
+                    if json {
+                        return serde_json::to_string_pretty(&serde_json::json!({
+                            "leader_id": id,
+                            "term": cluster.term,
+                            "role": cluster.role,
+                        }))
+                        .context("serializing wait-leader report");
+                    }
+                    return Ok(format!("leader: {id}\nterm: {}", cluster.term));
+                }
+            } else {
+                anyhow::bail!("server at {addr} is not running in cluster mode");
+            }
+        }
+        if std::time::Instant::now() >= deadline {
+            anyhow::bail!("timed out after {timeout_secs}s waiting for a leader at {addr}");
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(250)).await;
+    }
+}
+
+/// `auradb cluster wait-ready` — poll until the server is reachable and ready.
+pub async fn cmd_cluster_wait_ready(
+    addr: &str,
+    timeout_secs: u64,
+    token: Option<String>,
+    tls_ca: Option<PathBuf>,
+    server_name: &str,
+    json: bool,
+) -> Result<String> {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(timeout_secs);
+    loop {
+        if let Ok(report) = status_report(addr, token.clone(), tls_ca.clone(), server_name).await {
+            if report.ready {
+                if json {
+                    return serde_json::to_string_pretty(&serde_json::json!({
+                        "addr": addr,
+                        "ready": true,
+                        "version": report.server_version,
+                    }))
+                    .context("serializing wait-ready report");
+                }
+                return Ok(format!("ready: true\nversion: {}", report.server_version));
+            }
+        }
+        if std::time::Instant::now() >= deadline {
+            anyhow::bail!("timed out after {timeout_secs}s waiting for {addr} to become ready");
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(250)).await;
+    }
+}
+
 /// Connect to a server, ping it, fetch its health frame, and assemble a
 /// [`StatusReport`].
 async fn status_report(

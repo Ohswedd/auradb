@@ -260,7 +260,7 @@ impl ReplicatedLog for RaftWriteLog {
 /// commit watermark on first enable and persist it. A fresh data directory pins
 /// `0` (commit ts == log index); a directory with pre-existing MVCC versions
 /// pins their watermark so cluster writes stay strictly newer.
-fn load_or_init_commit_base(raft_dir: &std::path::Path, engine: &Engine) -> Result<u64> {
+pub(crate) fn load_or_init_commit_base(raft_dir: &std::path::Path, engine: &Engine) -> Result<u64> {
     let path = raft_dir.join(COMMIT_BASE_FILE);
     if let Ok(text) = std::fs::read_to_string(&path) {
         let base: CommitBase = serde_json::from_str(&text)

@@ -1,0 +1,47 @@
+# AuraDB three-node preview cluster — Docker node 2.
+# See examples/cluster/docker/node1.toml and examples/cluster/README.md.
+# EXPERIMENTAL multi-node preview; single-node mode is the recommended path.
+
+bind = "0.0.0.0"
+port = 7171
+data_dir = "/data"
+max_payload_bytes = 16777216
+log_level = "info"
+log_json = true
+cursor_timeout_secs = 300
+page_size = 100
+sync_on_commit = true
+metrics_enabled = true
+allow_insecure_bind = true
+
+[tls]
+enabled = false
+
+[auth]
+enabled = false
+
+[mvcc]
+gc_enabled = true
+gc_interval_secs = 300
+min_retained_versions = 1
+
+[cluster]
+enabled = true
+experimental_multi_node = true
+allow_experimental_public_cluster = true
+cluster_id = "0000000000000000000000000000a1a2"
+node_id = "00000000000000a2"
+listen_addr = "0.0.0.0:7172"
+advertise_addr = "node2:7172"
+bootstrap = true
+peer_auth_token = "change-me-preview-cluster-token"
+peers = [
+  { node_id = "00000000000000a1", addr = "node1:7172" },
+  { node_id = "00000000000000a3", addr = "node3:7172" },
+]
+
+[cluster.tls]
+enabled = true
+cert_path = "/certs/peer.crt"
+key_path = "/certs/peer.key"
+ca_path = "/certs/ca.crt"

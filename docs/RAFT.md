@@ -1,10 +1,11 @@
 # Raft Consensus Core
 
-> **AuraDB v0.4.1 hardens the Raft groundwork introduced in v0.4.0. Multi-node
-> server deployment remains experimental and disabled by default. Single-node
-> mode remains the recommended production mode.** v0.4.1 adds log compaction
-> boundaries (see below), stronger durability checks, and deterministic
-> multi-node partition tests.
+> **AuraDB v0.5.0 introduces a controlled, experimental multi-node server
+> preview. Single-node mode remains the recommended production mode.** Building
+> on the v0.4.x Raft groundwork (log compaction boundaries, durability checks,
+> deterministic multi-node partition tests), v0.5.0 runs Raft over a real
+> cross-process peer transport so server processes can elect a leader and
+> replicate to one another. The preview is off by default.
 
 AuraDB's Raft log and consensus core is a minimal, deterministic implementation
 that underpins cluster mode. This document describes the log model, the durable
@@ -158,18 +159,45 @@ quiescence. It supports partitioning and healing nodes. This harness is the
 substrate for the multi-node consensus tests and the replication crate's
 end-to-end apply tests. See [TESTING.md](TESTING.md).
 
+## Cross-process peer transport (v0.5.0)
+
+v0.5.0 carries the same Raft messages between **separate server processes** over
+a dedicated cluster socket, so the deterministic state machine above now drives a
+real cross-process cluster:
+
+- **Framing.** Each frame is magic-tagged (`APR1`), protocol-version-tagged
+  (v1), length-delimited, and CRC32-checksummed, with a 16 MiB payload-size
+  limit. A frame that fails any of these checks is rejected rather than read.
+- **Handshake.** A connection opens with a `PeerHello` that verifies the protocol
+  version, the cluster id, the peer's node id (against the static membership),
+  and a shared authentication token. A wrong-cluster, unknown-node,
+  duplicate-node, or bad-token peer is rejected with a structured `PeerError`.
+- **Replication over the wire.** Real cross-process leader election,
+  AppendEntries replication, majority commit, follower apply, and follower
+  catch-up after restart all run over this transport. The leader write path
+  blocks until a majority commits; a minority cannot commit. `commit_ts =
+  commit_ts_base + raft_log_index`, unchanged from v0.4.x.
+- **Connection management.** Reconnect uses bounded backoff (50 ms .. 2 s);
+  shutdown is graceful.
+- **Snapshot install is not implemented.** A snapshot-install request is answered
+  with a structured *unsupported* response rather than being silently ignored.
+
+The transport is gated behind the two `[cluster]` opt-ins (`enabled = true` and
+`experimental_multi_node = true`) and fails closed on a non-loopback address
+unless `allow_experimental_public_cluster = true` (which then requires peer TLS
+and a token). See [CLUSTERING.md](CLUSTERING.md) and [SECURITY.md](SECURITY.md).
+
 ## What this release does not do
 
 The consensus algorithm here is implemented and tested for leader election, log
-replication, log repair, and commit advancement, in single-node mode (in the
-server) and multi-node mode (through the in-memory simulation). It deliberately
-does **not** include:
+replication, log repair, and commit advancement — in single-node mode, through
+the in-memory simulation, and (in the v0.5.0 preview) across real server
+processes over the peer transport. It deliberately does **not** include:
 
 - **Membership changes / joint consensus.** The voter set is fixed; there is no
-  `join`, `leave`, or `step-down`.
-- **Log snapshots / compaction** beyond the snapshot boundary defined in the
-  replication layer (see [REPLICATION.md](REPLICATION.md)).
-- **Real network transport.** Multi-node consensus runs only through the
-  deterministic in-memory harness; cross-process transport is not part of this
-  release, and multi-node server deployment is rejected at startup. See
-  [CLUSTERING.md](CLUSTERING.md).
+  `join`, `leave`, or `step-down`. Membership is static.
+- **Streaming snapshot install over the wire.** A snapshot-install request is
+  answered as unsupported; only the snapshot boundary defined in the replication
+  layer is present (see [REPLICATION.md](REPLICATION.md)).
+- **Production-grade peer networking or automatic failover.** The cross-process
+  transport is an experimental preview. See [CLUSTERING.md](CLUSTERING.md).

@@ -383,15 +383,19 @@ fn single_node_cluster_server_commits_and_reports() {
     assert!(metrics.raft_commit_index >= 2);
 }
 
-/// Configuring peers is rejected at startup: multi-node deployment is
-/// experimental and fails closed in this release.
+/// Configuring peers without the experimental_multi_node opt-in is rejected at
+/// startup: the cross-process multi-node preview must be enabled explicitly, so
+/// an accidental peer list fails closed exactly as in v0.4.1.
 #[test]
-fn multi_node_cluster_server_fails_closed() {
-    use auradb_cluster::ClusterConfig;
+fn multi_node_cluster_without_preview_flag_fails_closed() {
+    use auradb_cluster::{ClusterConfig, PeerConfig};
 
     let dir = tempfile::tempdir().unwrap();
     let mut cluster = ClusterConfig::single_node();
-    cluster.peers = vec!["10.0.0.2:7172".into()];
+    cluster.peers = vec![PeerConfig {
+        node_id: "00000000000000a2".into(),
+        addr: "127.0.0.1:7272".into(),
+    }];
     let result = Server::open(Config {
         data_dir: dir.path().to_path_buf(),
         cluster,
@@ -399,6 +403,6 @@ fn multi_node_cluster_server_fails_closed() {
     });
     assert!(
         result.is_err(),
-        "multi-node server startup must fail closed"
+        "multi-node server startup must fail closed without experimental_multi_node"
     );
 }

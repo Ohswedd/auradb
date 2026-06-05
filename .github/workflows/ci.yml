@@ -46,7 +46,11 @@ jobs:
         # snapshot, and single-node cluster-mode suites; and the v0.4.1 Raft
         # log-compaction, snapshot-restore-edge-case, apply-idempotency,
         # cluster-metadata-corruption, peer-validation, deterministic partition,
-        # and `not_leader` over-the-wire suites.
+        # and `not_leader` over-the-wire suites; and the v0.5.0 multi-node preview
+        # suites: peer-transport framing/handshake, the cross-process Raft and
+        # replication tests over real TCP sockets, the server-level multi-node AWP
+        # routing tests, and the live cluster CLI tests. A dedicated cluster.yml
+        # workflow runs the multi-node integration suites in isolation as well.
         run: cargo test --workspace --all-features
 
       - name: Build

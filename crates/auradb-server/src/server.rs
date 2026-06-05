@@ -14,6 +14,7 @@ use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::net::TcpListener;
 use tokio_rustls::TlsAcceptor;
 
+use crate::cluster_runtime::ClusterRuntime;
 use crate::config::Config;
 use crate::cursor::CursorRegistry;
 use crate::dispatch::{respond, ServerContext, Session};
@@ -167,10 +168,7 @@ impl Server {
 /// engine's writes through it. Identity is created on first run and reused
 /// afterwards; a config-pinned id that conflicts with persisted identity fails
 /// closed.
-fn build_cluster_node(
-    engine: &Engine,
-    config: &Config,
-) -> Result<Arc<auradb_replication::ClusterNode>> {
+fn build_cluster_node(engine: &Engine, config: &Config) -> Result<Arc<ClusterRuntime>> {
     use auradb_core::Error;
 
     let version = env!("CARGO_PKG_VERSION");
@@ -181,6 +179,29 @@ fn build_cluster_node(
     let identity = store
         .init(pinned_node, pinned_cluster, version)
         .map_err(|e| Error::Config(e.to_string()))?;
+
+    // The multi-node preview is gated by both the experimental flag and a static
+    // peer set; config validation has already enforced the guardrails. Otherwise
+    // this is a durable single-node cluster (the recommended cluster mode).
+    if config.cluster.experimental_multi_node && !config.cluster.peers.is_empty() {
+        let node = auradb_replication::PeerCluster::spawn(
+            engine.clone(),
+            identity,
+            config.cluster.clone(),
+            store.dir(),
+        )
+        .map_err(|e| Error::Internal(format!("multi-node cluster start failed: {e}")))?;
+        engine.attach_replicated_log(node.write_log());
+        tracing::warn!(
+            node_id = %node.identity().node_id(),
+            cluster_id = %node.identity().cluster_id(),
+            peers = config.cluster.peers.len(),
+            "EXPERIMENTAL multi-node cluster preview enabled; this is not a production \
+             deployment. Single-node mode remains the recommended production path."
+        );
+        return Ok(Arc::new(ClusterRuntime::Multi(node)));
+    }
+
     let node = auradb_replication::ClusterNode::bootstrap(
         engine.clone(),
         identity,
@@ -194,7 +215,7 @@ fn build_cluster_node(
         cluster_id = %node.identity().cluster_id(),
         "single-node cluster mode enabled; writes are routed through the Raft log"
     );
-    Ok(Arc::new(node))
+    Ok(Arc::new(ClusterRuntime::Single(Arc::new(node))))
 }
 
 fn parse_opt<T: std::str::FromStr>(value: &str, field: &str) -> Result<Option<T>>
@@ -329,7 +350,13 @@ where
         match read_frame(&mut reader, max_payload).await {
             Ok(Some(frame)) => {
                 Metrics::add(&ctx.metrics.bytes_read, frame.encoded_len() as u64);
-                let response = respond(&ctx, &mut session, frame);
+                // Dispatch is synchronous and, in the multi-node preview, a write
+                // blocks until a majority commits it. Use `block_in_place` on a
+                // multi-threaded runtime so Tokio relocates other tasks (notably
+                // the Raft driver that makes the commit happen) to another worker
+                // rather than starving them. On a current-thread runtime we fall
+                // back to a direct call.
+                let response = dispatch_request(&ctx, &mut session, frame);
                 let written = write_frame(&mut writer, &response).await?;
                 Metrics::add(&ctx.metrics.bytes_written, written as u64);
             }
@@ -347,4 +374,22 @@ where
     session.cleanup(&ctx);
     Metrics::gauge_dec(&ctx.metrics.active_connections);
     result
+}
+
+/// Run synchronous request dispatch, yielding the current worker via
+/// `block_in_place` when on a multi-threaded runtime so a blocking write (which
+/// waits for a Raft majority in the multi-node preview) cannot starve the
+/// background driver and timer tasks.
+fn dispatch_request(
+    ctx: &ServerContext,
+    session: &mut Session,
+    frame: auradb_protocol::Frame,
+) -> auradb_protocol::Frame {
+    use tokio::runtime::{Handle, RuntimeFlavor};
+    match Handle::try_current().map(|h| h.runtime_flavor()) {
+        Ok(RuntimeFlavor::MultiThread) => {
+            tokio::task::block_in_place(|| respond(ctx, session, frame))
+        }
+        _ => respond(ctx, session, frame),
+    }
 }

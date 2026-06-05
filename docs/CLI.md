@@ -149,9 +149,23 @@ stand up a running node.
   Compaction never runs ahead of the committed/applied prefix. Requires an
   initialized single-node cluster.
 
+### `auradb cluster leader|wait-leader|wait-ready` (v0.5.0)
+
+These are **live** commands: unlike the offline `--data-dir` subcommands above,
+they query a **running** server over its client address. Each accepts `--json`,
+`--token`, `--tls-ca`, and `--server-name`.
+
+- `auradb cluster leader --addr <client-addr>` — report the leader the running
+  server currently recognizes (or that none is known yet).
+- `auradb cluster wait-leader --addr <client-addr> --timeout-secs N` — block until
+  the server reports a recognized leader, or the timeout elapses.
+- `auradb cluster wait-ready --addr <client-addr> --timeout-secs N` — block until
+  the server reports ready, or the timeout elapses.
+
 `join`, `leave`, and `step-down` are **not provided**, because membership changes
 are not implemented in this release. `auradb status --json` and `auradb doctor`
-also include the cluster fields. See [CLUSTERING.md](CLUSTERING.md) and
+also include the cluster fields (including the v0.5.0 per-peer state). See
+[CLUSTERING.md](CLUSTERING.md) and
 [CLUSTER_TROUBLESHOOTING.md](CLUSTER_TROUBLESHOOTING.md).
 
 ### `auradb snapshot ...` (v0.4.1)

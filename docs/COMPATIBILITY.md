@@ -1,15 +1,17 @@
 # AuraDB Compatibility Matrix
 
-This document records what AuraDB v0.4.1 implements and how it interoperates with
-the Aura Connector client library and the Aura Wire Protocol (AWP). v0.4.1 is a
-patch release that hardens the replication and Raft groundwork from v0.4.0
-(optional cluster mode, off by default). It keeps **AWP 1** unchanged and makes no
-incompatible protocol change: the health report's additive `cluster` section and
-the `not_leader` error code are unchanged, so no connector release is required and
-Aura Connector 0.3.x remains fully compatible.
+This document records what AuraDB v0.5.0 implements and how it interoperates with
+the Aura Connector client library and the Aura Wire Protocol (AWP). v0.5.0 adds a
+controlled, experimental multi-node server preview (off by default); single-node
+mode remains the recommended production mode. It keeps **AWP 1** unchanged and
+makes no incompatible protocol change: the health report's `cluster` section
+gains additive per-peer fields and the `not_leader` error code is unchanged, so
+no connector release is required and Aura Connector 0.3.x remains fully
+compatible. The on-disk **storage format is unchanged** from v0.4.x.
 
 | AuraDB | Aura Connector | Protocol | Status |
 | ------ | -------------- | -------- | ------ |
+| 0.5.0  | 0.3.x          | AWP 1    | Supported (native AuraDB backend; cluster fields additive; multi-node preview) |
 | 0.4.1  | 0.3.x          | AWP 1    | Supported (native AuraDB backend; cluster fields additive) |
 | 0.4.0  | 0.3.x          | AWP 1    | Supported (native AuraDB backend; cluster fields additive) |
 | 0.3.1  | 0.3.x          | AWP 1    | Supported (native AuraDB backend) |
@@ -28,16 +30,18 @@ and TLS). Use Aura Connector 0.3.x to connect to an AuraDB 0.2.x server. See
 
 ## Versions
 
-- **AuraDB:** 0.4.1
-- **Storage format:** v2 (commit-timestamped MVCC version chains), unchanged in
-  v0.4.1. A v1 (≤ 0.2.x) data directory is migrated to v2 transparently on first
+- **AuraDB:** 0.5.0
+- **Storage format:** v2 (commit-timestamped MVCC version chains), unchanged from
+  v0.4.x. A v1 (≤ 0.2.x) data directory is migrated to v2 transparently on first
   open; an unknown future format is rejected. See [UPGRADING.md](UPGRADING.md).
 - **Aura Wire Protocol:** AWP 1 (44-byte framed header, CRC32-checked, JSON
-  payloads), unchanged in v0.4.1. The cluster health section and `not_leader` error
-  code are additive. See [PROTOCOL.md](PROTOCOL.md).
+  payloads), unchanged in v0.5.0. The cluster health section (with additive
+  per-peer fields) and the `not_leader` error code are additive. See
+  [PROTOCOL.md](PROTOCOL.md).
 - **Aura Connector (tested):** 0.3.x
-- **Cluster mode:** optional, off by default (v0.4.1). Single-node cluster only;
-  multi-node deployment is experimental and rejected at startup. See
+- **Cluster mode:** optional, off by default. Single-node cluster, plus a
+  controlled, **experimental multi-node server preview (v0.5.0)** gated by two
+  opt-ins; single-node mode remains the recommended production path. See
   [CLUSTERING.md](CLUSTERING.md).
 
 ## Required connector features
@@ -106,7 +110,10 @@ and TLS). Use Aura Connector 0.3.x to connect to an AuraDB 0.2.x server. See
 
 ## Known limitations
 
-- Single node only. No clustering, replication, sharding, or Raft.
+- Single-node mode is the recommended production path. v0.5.0 adds a controlled,
+  experimental multi-node server preview (off by default, gated by two opt-ins);
+  it is not production multi-node clustering, has no automatic failover, no
+  dynamic membership, and no sharding.
 - AuraDB v0.3.0 implements single-node snapshot isolation with optimistic write
   conflict detection. It is not serializable isolation (it does not prevent
   write-skew).
