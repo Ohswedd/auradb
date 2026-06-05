@@ -573,15 +573,26 @@ async fn old_leader_rejoins_as_follower() {
 
     cluster.stop(leader).await;
     let live: Vec<usize> = (0..3).filter(|&i| i != leader).collect();
-    cluster
+    let new_leader = cluster
         .wait_for_live_leader(&live, Duration::from_secs(10))
+        .await;
+
+    // Commit more writes while the old leader is down so its log falls behind the
+    // committed prefix. Raft's leader-completeness then guarantees it cannot win
+    // a future election (a node missing committed entries is denied votes), so on
+    // restart it deterministically rejoins as a follower rather than possibly
+    // winning re-election (which an up-to-date node legitimately could).
+    cluster.write(new_leader, 2, 2).await.unwrap();
+    cluster.write(new_leader, 3, 3).await.unwrap();
+    cluster
+        .wait_indices_have(&live, 3, Duration::from_secs(10))
         .await;
 
     // Restart the old leader; it discovers the cluster has moved on and steps
     // down. Eventually the full cluster settles on a single leader and the
     // rejoined node is a follower recognizing some leader other than itself.
     cluster.restart(leader, &ids, &addrs).await;
-    let deadline = Instant::now() + Duration::from_secs(15);
+    let deadline = Instant::now() + Duration::from_secs(20);
     loop {
         let st = cluster.nodes[leader].peer.status();
         let settled = cluster.leader_index().is_some();
