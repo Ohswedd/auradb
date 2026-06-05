@@ -1,0 +1,11 @@
+{
+  "format_version": 2,
+  "segments": [
+    {
+      "id": 1
+    }
+  ],
+  "next_segment_id": 2,
+  "last_txn_id": 0,
+  "last_commit_ts": 0
+}

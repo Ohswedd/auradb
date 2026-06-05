@@ -451,6 +451,7 @@ impl Storage {
     /// persisted before returning.
     pub fn gc(&mut self, cutoff: u64, min_retained_versions: usize) -> Result<GcReport> {
         let keep = min_retained_versions.max(1);
+        let bytes_before = self.segment_bytes();
         let mut versions_reclaimed = 0usize;
         let mut records_removed = 0usize;
         for chains in self.records.values_mut() {
@@ -478,11 +479,54 @@ impl Storage {
             });
         }
         self.rewrite_segment()?;
+        let bytes_after = self.segment_bytes();
         Ok(GcReport {
             versions_reclaimed,
             records_removed,
             versions_after: self.total_versions(),
+            bytes_reclaimed: bytes_before.saturating_sub(bytes_after),
         })
+    }
+
+    /// Compute what a [`gc`](Self::gc) at `cutoff` would reclaim, without
+    /// modifying any data. The byte estimate is not computed (it requires the
+    /// rewrite) and is reported as zero; version and record counts are exact.
+    pub fn gc_preview(&self, cutoff: u64, min_retained_versions: usize) -> GcReport {
+        let keep = min_retained_versions.max(1);
+        let mut versions_reclaimed = 0usize;
+        let mut records_removed = 0usize;
+        for chains in self.records.values() {
+            for chain in chains.values() {
+                if let Some(last) = chain.last() {
+                    if last.value.is_none() && last.commit_ts <= cutoff {
+                        versions_reclaimed += chain.len();
+                        records_removed += 1;
+                        continue;
+                    }
+                }
+                if let Some(floor) = chain.iter().rposition(|v| v.commit_ts <= cutoff) {
+                    let max_removable = chain.len().saturating_sub(keep);
+                    versions_reclaimed += floor.min(max_removable);
+                }
+            }
+        }
+        GcReport {
+            versions_reclaimed,
+            records_removed,
+            versions_after: self.total_versions().saturating_sub(versions_reclaimed),
+            bytes_reclaimed: 0,
+        }
+    }
+
+    /// Sum of the on-disk byte sizes of all live segment files. Used to measure
+    /// the bytes reclaimed across a GC rewrite.
+    fn segment_bytes(&self) -> u64 {
+        self.manifest
+            .segments
+            .iter()
+            .filter_map(|seg| fs::metadata(self.dir.join(seg.file_name())).ok())
+            .map(|m| m.len())
+            .sum()
     }
 
     /// Persist the current in-memory version chains into a single fresh segment,
@@ -566,6 +610,9 @@ pub struct GcReport {
     pub records_removed: usize,
     /// Total versions remaining after GC.
     pub versions_after: usize,
+    /// On-disk bytes reclaimed by the GC rewrite (segment size before minus
+    /// after). An estimate of the space freed; depends on encoding overhead.
+    pub bytes_reclaimed: u64,
 }
 
 fn apply_batch(records: &mut RecordMap, batch: Batch) {

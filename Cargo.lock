@@ -96,7 +96,7 @@ dependencies = [
 
 [[package]]
 name = "auradb"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "auradb-core",
  "auradb-index",
@@ -105,13 +105,14 @@ dependencies = [
  "auradb-txn",
  "criterion",
  "rand 0.8.6",
+ "serde",
  "serde_json",
  "tempfile",
 ]
 
 [[package]]
 name = "auradb-cli"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "anyhow",
  "auradb",
@@ -132,7 +133,7 @@ dependencies = [
 
 [[package]]
 name = "auradb-conformance"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "auradb",
  "auradb-core",
@@ -150,7 +151,7 @@ dependencies = [
 
 [[package]]
 name = "auradb-core"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "serde",
  "serde_json",
@@ -159,7 +160,7 @@ dependencies = [
 
 [[package]]
 name = "auradb-index"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "auradb-core",
  "crc32fast",
@@ -170,7 +171,7 @@ dependencies = [
 
 [[package]]
 name = "auradb-observability"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "serde",
  "serde_json",
@@ -180,7 +181,7 @@ dependencies = [
 
 [[package]]
 name = "auradb-protocol"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "auradb-core",
  "crc32fast",
@@ -192,7 +193,7 @@ dependencies = [
 
 [[package]]
 name = "auradb-query"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "auradb-core",
  "auradb-index",
@@ -204,7 +205,7 @@ dependencies = [
 
 [[package]]
 name = "auradb-server"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "argon2",
  "auradb",
@@ -227,7 +228,7 @@ dependencies = [
 
 [[package]]
 name = "auradb-storage"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "auradb-core",
  "crc32fast",
@@ -239,7 +240,7 @@ dependencies = [
 
 [[package]]
 name = "auradb-txn"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "auradb-core",
  "auradb-storage",

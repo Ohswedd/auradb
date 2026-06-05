@@ -31,10 +31,14 @@
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]
 
+mod clock;
 mod engine;
 mod idgen;
 
-pub use engine::{Engine, EngineOptions, EngineStats, IndexLoadReport};
+pub use clock::WallClock;
+pub use engine::{
+    ActiveTransaction, Engine, EngineOptions, EngineStats, IndexLoadReport, TxnState,
+};
 
 /// Re-export of core types.
 pub mod core {

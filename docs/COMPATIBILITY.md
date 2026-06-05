@@ -1,12 +1,15 @@
 # AuraDB Compatibility Matrix
 
-This document records what AuraDB v0.3.0 implements and how it interoperates with
-the Aura Connector client library and the Aura Wire Protocol (AWP). v0.3.0 adds
-MVCC and a cost-based query planner; it preserves all v0.2.1 wire behavior for
-non-transactional reads and requires no connector release.
+This document records what AuraDB v0.3.1 implements and how it interoperates with
+the Aura Connector client library and the Aura Wire Protocol (AWP). v0.3.1 is a
+stabilization release for the MVCC and planner behavior introduced in v0.3.0: it
+preserves all v0.3.0 wire behavior, keeps AWP 1 (the health report gains an
+additive `mvcc` section and `EXPLAIN ANALYZE` gains additive fields), and
+requires no connector release.
 
 | AuraDB | Aura Connector | Protocol | Status |
 | ------ | -------------- | -------- | ------ |
+| 0.3.1  | 0.3.x          | AWP 1    | Supported (native AuraDB backend) |
 | 0.3.0  | 0.3.x          | AWP 1    | Supported (native AuraDB backend) |
 | 0.2.1  | 0.3.x          | AWP 1    | Supported (native AuraDB backend) |
 | 0.2.0  | 0.3.x          | AWP 1    | Supported (native AuraDB backend) |
@@ -22,7 +25,7 @@ and TLS). Use Aura Connector 0.3.x to connect to an AuraDB 0.2.x server. See
 
 ## Versions
 
-- **AuraDB:** 0.3.0
+- **AuraDB:** 0.3.1
 - **Storage format:** v2 (commit-timestamped MVCC version chains). A v1 (≤ 0.2.x)
   data directory is migrated to v2 transparently on first open; an unknown future
   format is rejected. See [UPGRADING.md](UPGRADING.md).

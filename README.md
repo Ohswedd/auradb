@@ -7,7 +7,7 @@
 [![CI](https://github.com/Ohswedd/auradb/actions/workflows/ci.yml/badge.svg)](https://github.com/Ohswedd/auradb/actions/workflows/ci.yml)
 [![Security](https://github.com/Ohswedd/auradb/actions/workflows/security.yml/badge.svg)](https://github.com/Ohswedd/auradb/actions/workflows/security.yml)
 [![Docker](https://github.com/Ohswedd/auradb/actions/workflows/docker.yml/badge.svg)](https://github.com/Ohswedd/auradb/actions/workflows/docker.yml)
-[![Release](https://img.shields.io/badge/release-v0.3.0-green.svg)](CHANGELOG.md)
+[![Release](https://img.shields.io/badge/release-v0.3.1-green.svg)](CHANGELOG.md)
 [![Rust](https://img.shields.io/badge/rust-1.85%2B-orange.svg)](https://www.rust-lang.org)
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
 
@@ -30,11 +30,15 @@ demo.
 
 ## Scope and honesty
 
-AuraDB 0.3.0 builds on the 0.2.x single-node release with MVCC storage and query
-planner foundations: each record keeps a chain of committed versions, transactions
-read from a snapshot pinned at `begin`, and read queries route through a cost-based
-planner with `EXPLAIN ANALYZE`. It preserves all v0.2.1 behavior for
-non-transactional reads. AuraDB v0.3.0 implements single-node snapshot isolation
+AuraDB 0.3.1 is a stabilization release on top of the 0.3.0 MVCC and query-planner
+foundations: each record keeps a chain of committed versions, transactions read
+from a snapshot pinned at `begin`, and read queries route through a cost-based
+planner with `EXPLAIN ANALYZE`. v0.3.1 hardens the transaction lifecycle (a
+transaction timeout and an abandoned-transaction reaper so a long-lived or
+abandoned transaction can no longer pin versions forever without visibility),
+strengthens version garbage collection, and surfaces MVCC pressure through metrics,
+`status`, and `doctor` warnings. It preserves all v0.3.0 behavior for
+non-transactional reads. AuraDB implements single-node snapshot isolation
 with optimistic write conflict detection. It is not serializable isolation. It is
 a complete single-node server, and it is honest about its boundaries. The
 following are not implemented and not claimed: distributed clustering, replication,
@@ -234,7 +238,7 @@ auradb check --data-dir .local/auradb
 auradb gc --data-dir .local/auradb
 auradb stats analyze --data-dir .local/auradb
 auradb stats show --data-dir .local/auradb --json
-auradb bench --json --output benches/baseline/v0.3.0.json
+auradb bench --json --output benches/baseline/v0.3.1.json
 auradb status --addr 127.0.0.1:7171 --json
 auradb auth hash-token --token "your-secret"
 auradb auth rotate-token --config AuraDB.toml --token "new-secret" --backup
@@ -333,7 +337,7 @@ are exposed. No external collector is required to run the server. See
 A published image is available on the GitHub Container Registry:
 
 ```bash
-docker run --rm -p 7171:7171 -v auradb-data:/data ghcr.io/ohswedd/auradb:0.3.0
+docker run --rm -p 7171:7171 -v auradb-data:/data ghcr.io/ohswedd/auradb:0.3.1
 ```
 
 The image runs as a non-root user, exposes `7171`, stores data in the `/data`
@@ -389,7 +393,7 @@ and `EXPLAIN ANALYZE`.
 The CLI also runs a baseline suite and writes a JSON snapshot:
 
 ```bash
-auradb bench --json --output benches/baseline/v0.3.0.json
+auradb bench --json --output benches/baseline/v0.3.1.json
 ```
 
 Benchmarks are hardware-dependent and exist to catch regressions on the same

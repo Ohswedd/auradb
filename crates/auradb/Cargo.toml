@@ -14,6 +14,7 @@ auradb-storage = { workspace = true }
 auradb-index = { workspace = true }
 auradb-txn = { workspace = true }
 auradb-query = { workspace = true }
+serde = { workspace = true }
 serde_json = { workspace = true }
 
 [dev-dependencies]

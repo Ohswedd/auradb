@@ -459,6 +459,7 @@ impl Client {
 fn error_from_payload(p: ErrorPayload) -> Error {
     match p.code {
         ErrorCode::Conflict => Error::Conflict(p.message),
+        ErrorCode::TransactionTimeout => Error::TransactionTimeout(p.message),
         ErrorCode::UniqueViolation => Error::UniqueViolation(p.message),
         ErrorCode::NotFound => Error::NotFound(p.message),
         ErrorCode::SchemaViolation => Error::SchemaViolation(p.message),

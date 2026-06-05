@@ -5,11 +5,11 @@ use std::path::PathBuf;
 
 use anyhow::Result;
 use auradb_cli::{
-    build_config, cmd_auth_hash_token, cmd_auth_rotate_token, cmd_bench, cmd_bench_json,
-    cmd_cert_generate_dev, cmd_check, cmd_compact, cmd_compatibility, cmd_config_validate,
-    cmd_doctor, cmd_doctor_json, cmd_dump, cmd_gc, cmd_index_check, cmd_index_rebuild, cmd_init,
-    cmd_restore, cmd_server, cmd_stats_analyze, cmd_stats_show, cmd_status, cmd_status_json,
-    cmd_version,
+    build_config, cmd_auth_hash_token, cmd_auth_rotate_token, cmd_bench, cmd_bench_compare,
+    cmd_bench_json, cmd_cert_generate_dev, cmd_check, cmd_compact, cmd_compatibility,
+    cmd_config_validate, cmd_doctor, cmd_doctor_json, cmd_dump, cmd_gc, cmd_index_check,
+    cmd_index_rebuild, cmd_init, cmd_restore, cmd_server, cmd_stats_analyze, cmd_stats_show,
+    cmd_status, cmd_status_json, cmd_version,
 };
 use clap::{Parser, Subcommand};
 
@@ -101,6 +101,12 @@ enum Command {
     Gc {
         #[arg(long, default_value = ".local/auradb")]
         data_dir: PathBuf,
+        /// Report what would be reclaimed without modifying any data.
+        #[arg(long)]
+        dry_run: bool,
+        /// Emit the report as JSON.
+        #[arg(long)]
+        json: bool,
     },
     /// Planner statistics (analyze / show).
     Stats {
@@ -123,8 +129,11 @@ enum Command {
         #[arg(long, name = "in", visible_alias = "input")]
         input: PathBuf,
     },
-    /// Run the local benchmark suite.
+    /// Run the local benchmark suite, or compare two baselines (`bench compare`).
     Bench {
+        /// Optional subcommand (`compare`); omit to run the suite.
+        #[command(subcommand)]
+        command: Option<BenchCommand>,
         #[arg(long, default_value = ".local/auradb-bench")]
         data_dir: PathBuf,
         /// Number of records to insert.
@@ -151,6 +160,23 @@ enum Command {
     Index {
         #[command(subcommand)]
         command: IndexCommand,
+    },
+}
+
+#[derive(Subcommand)]
+enum BenchCommand {
+    /// Compare two benchmark baseline JSON files and report per-benchmark change.
+    Compare {
+        /// Baseline report (the reference, e.g. the previous release).
+        #[arg(long)]
+        baseline: PathBuf,
+        /// Current report to compare against the baseline.
+        #[arg(long)]
+        current: PathBuf,
+        /// Exit non-zero if any benchmark regresses by more than this percent.
+        /// Omit to only warn (the default; safe for normal CI).
+        #[arg(long)]
+        fail_threshold_percent: Option<f64>,
     },
 }
 
@@ -294,7 +320,11 @@ async fn main() -> Result<()> {
         }
         Command::Check { data_dir } => println!("{}", cmd_check(&data_dir)?),
         Command::Compact { data_dir } => println!("{}", cmd_compact(&data_dir)?),
-        Command::Gc { data_dir } => println!("{}", cmd_gc(&data_dir)?),
+        Command::Gc {
+            data_dir,
+            dry_run,
+            json,
+        } => println!("{}", cmd_gc(&data_dir, dry_run, json)?),
         Command::Stats { command } => match command {
             StatsCommand::Analyze { data_dir } => println!("{}", cmd_stats_analyze(&data_dir)?),
             StatsCommand::Show { data_dir, json } => {
@@ -310,23 +340,38 @@ async fn main() -> Result<()> {
             println!("restored {n} record(s)");
         }
         Command::Bench {
+            command,
             data_dir,
             records,
             json,
             output,
-        } => {
-            if json || output.is_some() {
-                let commit = current_commit();
-                let out = cmd_bench_json(&data_dir, records, commit, output.as_deref())?;
-                if let Some(path) = output.as_deref() {
-                    println!("wrote benchmark report to {}", path.display());
-                } else {
-                    println!("{out}");
+        } => match command {
+            Some(BenchCommand::Compare {
+                baseline,
+                current,
+                fail_threshold_percent,
+            }) => {
+                let (out, regressed) =
+                    cmd_bench_compare(&baseline, &current, fail_threshold_percent)?;
+                println!("{out}");
+                if regressed {
+                    std::process::exit(1);
                 }
-            } else {
-                println!("{}", cmd_bench(&data_dir, records)?);
             }
-        }
+            None => {
+                if json || output.is_some() {
+                    let commit = current_commit();
+                    let out = cmd_bench_json(&data_dir, records, commit, output.as_deref())?;
+                    if let Some(path) = output.as_deref() {
+                        println!("wrote benchmark report to {}", path.display());
+                    } else {
+                        println!("{out}");
+                    }
+                } else {
+                    println!("{}", cmd_bench(&data_dir, records)?);
+                }
+            }
+        },
         Command::Auth { command } => match command {
             AuthCommand::HashToken { token } => println!("{}", cmd_auth_hash_token(token)?),
             AuthCommand::RotateToken {

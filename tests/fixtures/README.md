@@ -44,3 +44,38 @@ records become the first committed version on their chains and planner statistic
 are initialized), after which the catalog and records load, lookups work, and
 `auradb check` passes. As with the v0.1.0 fixture, a manifest carrying an unknown
 future `format_version` is rejected rather than silently opened.
+
+## `v0_3_0_data/`
+
+A small AuraDB **v0.3.0** data directory used by the upgrade test
+(`crates/auradb/tests/upgrade_to_v0_3_1.rs`). It carries the real v0.3.0 on-disk
+layout: storage **format v2** (MVCC; manifest `format_version: 2`), a schema
+catalog, and one segment holding 5 `Doc` records (scalar, int, and full-text
+fields). v0.3.0 and v0.3.1 share the storage format, so this upgrade is a
+compatibility-validation path rather than a data migration.
+
+### How it was generated
+
+From a checkout of the `v0.3.0` tag, the v0.3.0 release binary restored a logical
+JSONL dump (schema + records) into the fixture path:
+
+```bash
+git worktree add /tmp/auradb-v030 v0.3.0
+cargo build -p auradb-cli            # build the v0.3.0 binary
+./target/debug/auradb restore --data-dir tests/fixtures/v0_3_0_data \
+    --input dump.jsonl               # written by the real v0.3.0 storage engine
+```
+
+The directory is therefore written by the genuine v0.3.0 engine, not a
+current-version directory relabelled as v0.3.0. v0.3.0 `restore` does not persist
+index snapshots, so the directory has no `indexes/`; opening it rebuilds every
+index from storage.
+
+## Upgrade coverage into v0.3.1
+
+`crates/auradb/tests/upgrade_to_v0_3_1.rs` opens all four fixtures with the
+current engine and runs a full checklist: data and schema open, indexes load or
+rebuild, planner statistics initialize, the MVCC format is v2, transactions begin
+and read a snapshot, the transaction-timeout reaper works, GC runs, and a
+backup/restore round-trips. It also asserts that an unknown future
+`format_version` is rejected (no silent downgrade).

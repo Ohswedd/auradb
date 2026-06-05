@@ -10,7 +10,7 @@ use auradb_core::{Error, Result, ServerCapabilities};
 use auradb_observability::Metrics;
 use auradb_protocol::{
     AuthRequest, AuthResult, CursorCloseRequest, CursorFetchRequest, ErrorPayload, Frame,
-    HealthReport, HealthStatus, HelloAck, HelloRequest, Opcode, PROTOCOL_VERSION,
+    HealthReport, HealthStatus, HelloAck, HelloRequest, MvccHealth, Opcode, PROTOCOL_VERSION,
 };
 use serde::{Deserialize, Serialize};
 
@@ -28,11 +28,16 @@ pub struct ServerContext {
     pub cursors: Arc<CursorRegistry>,
     /// Server configuration.
     pub config: Arc<Config>,
+    /// Monotonic source of per-connection ids, recorded against transactions
+    /// for observability and connection-scoped cleanup.
+    pub connection_counter: Arc<std::sync::atomic::AtomicU64>,
 }
 
 /// Per-connection mutable state.
 #[derive(Default)]
 pub struct Session {
+    /// The connection id, assigned when the connection is accepted.
+    pub connection_id: u64,
     /// Negotiated protocol version (0 until HELLO).
     pub negotiated_version: u8,
     /// Whether this connection has authenticated (always true when auth is off).
@@ -97,6 +102,15 @@ pub fn respond(ctx: &ServerContext, session: &mut Session, frame: Frame) -> Fram
         Ok(response) => response,
         Err(err) => {
             Metrics::incr(&ctx.metrics.errors_total);
+            match err.code() {
+                auradb_core::ErrorCode::Conflict => {
+                    Metrics::incr(&ctx.metrics.mvcc_conflicts_total)
+                }
+                auradb_core::ErrorCode::TransactionTimeout => {
+                    Metrics::incr(&ctx.metrics.mvcc_transaction_timeouts_total)
+                }
+                _ => {}
+            }
             tracing::warn!(request_id = frame.request_id.0, code = %err.code(), error = %err, "request failed");
             ErrorPayload::from_error(&err).to_frame(frame.request_id, frame.txn_id)
         }
@@ -188,6 +202,16 @@ fn handle(ctx: &ServerContext, session: &mut Session, frame: &Frame) -> Result<F
                 ready: true,
                 version: env!("CARGO_PKG_VERSION").to_string(),
                 collections: stats.collections,
+                mvcc: Some(MvccHealth {
+                    active_transactions: stats.active_transactions,
+                    timed_out_transactions: stats.timed_out_transactions,
+                    oldest_active_read_ts: stats.oldest_active_read_ts,
+                    oldest_transaction_age_secs: stats.oldest_transaction_age_secs,
+                    retained_versions: stats.versions,
+                    transaction_timeouts_total: stats.transaction_timeouts_total,
+                    transaction_timeout_secs: ctx.config.mvcc.transaction_timeout_secs,
+                    gc_enabled: ctx.config.mvcc.gc_enabled,
+                }),
             };
             Frame::json(Opcode::HealthResult, frame.request_id, 0, &report)
         }
@@ -290,7 +314,9 @@ fn handle(ctx: &ServerContext, session: &mut Session, frame: &Frame) -> Result<F
             Frame::json(Opcode::Ok, frame.request_id, 0, &estimate)
         }
         Opcode::TxnBegin => {
-            let txn = ctx.engine.begin();
+            let txn = ctx
+                .engine
+                .begin_with_connection(Some(session.connection_id));
             let id = txn.id().get();
             session.transactions.insert(id, txn);
             Metrics::gauge_set(

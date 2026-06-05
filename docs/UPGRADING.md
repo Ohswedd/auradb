@@ -1,5 +1,29 @@
 # Upgrading
 
+## From v0.3.0 to v0.3.1
+
+v0.3.1 is a drop-in binary replacement. The on-disk **storage format is unchanged
+at v2**, so a v0.3.0 data directory opens directly with no migration. Stop the old
+server, install v0.3.1, and start it against the same data directory.
+
+What is new and how it affects an upgrade:
+
+- New `[mvcc]` settings `transaction_timeout_secs` (default 300) and
+  `abandoned_transaction_reaper_secs` (default 30) take safe defaults if absent. An
+  idle transaction is now reaped after the timeout; set `transaction_timeout_secs = 0`
+  to preserve the old never-timeout behavior (not recommended).
+- The health report and `auradb status` gain an additive `mvcc` section, and
+  `EXPLAIN ANALYZE` gains additive diagnostic fields. Aura Connector 0.3.x ignores
+  both and stays compatible — no connector release is required.
+- A new `transaction_timeout` error code is additive; a connector that does not
+  model it falls back to a generic server error.
+
+**Downgrade restriction.** Because v0.3.0 and v0.3.1 share storage format v2, a
+v0.3.1 data directory can be reopened by v0.3.0. However, AuraDB never silently
+downgrades a storage format, and a directory written by a *newer* format than a
+binary understands is rejected on open rather than opened. Always back up the data
+directory before changing versions.
+
 ## From v0.1.0, v0.2.0, or v0.2.1 to v0.3.0
 
 AuraDB 0.3.0 introduces MVCC, which moves the on-disk storage format from **v1 to

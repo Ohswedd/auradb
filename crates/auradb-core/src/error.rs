@@ -25,6 +25,8 @@ pub enum ErrorCode {
     Corruption,
     /// A transaction could not be committed because of a conflict.
     Conflict,
+    /// A transaction exceeded its idle timeout and was aborted.
+    TransactionTimeout,
     /// A schema constraint was violated.
     SchemaViolation,
     /// A uniqueness constraint was violated.
@@ -56,6 +58,7 @@ impl ErrorCode {
             ErrorCode::Storage => "storage",
             ErrorCode::Corruption => "corruption",
             ErrorCode::Conflict => "conflict",
+            ErrorCode::TransactionTimeout => "transaction_timeout",
             ErrorCode::SchemaViolation => "schema_violation",
             ErrorCode::UniqueViolation => "unique_violation",
             ErrorCode::NotFound => "not_found",
@@ -98,6 +101,11 @@ pub enum Error {
     /// A transaction conflict prevented commit.
     #[error("transaction conflict: {0}")]
     Conflict(String),
+
+    /// A transaction exceeded its idle timeout and was aborted; its snapshot has
+    /// been released and no further operations on it will be accepted.
+    #[error("transaction timed out: {0}")]
+    TransactionTimeout(String),
 
     /// A schema constraint was violated.
     #[error("schema violation: {0}")]
@@ -159,6 +167,7 @@ impl Error {
             Error::Storage(_) => ErrorCode::Storage,
             Error::Corruption(_) => ErrorCode::Corruption,
             Error::Conflict(_) => ErrorCode::Conflict,
+            Error::TransactionTimeout(_) => ErrorCode::TransactionTimeout,
             Error::SchemaViolation(_) => ErrorCode::SchemaViolation,
             Error::UniqueViolation(_) => ErrorCode::UniqueViolation,
             Error::NotFound(_) => ErrorCode::NotFound,

@@ -86,6 +86,22 @@ pub struct Metrics {
     pub active_transactions: AtomicU64,
     /// Currently open cursors (gauge).
     pub active_cursors: AtomicU64,
+    /// MVCC: transactions currently holding a pinned snapshot (gauge).
+    pub mvcc_active_transactions: AtomicU64,
+    /// MVCC: age in seconds of the oldest pinned snapshot (gauge).
+    pub mvcc_oldest_snapshot_age_seconds: AtomicU64,
+    /// MVCC: estimate of retained stored versions (gauge).
+    pub mvcc_retained_versions: AtomicU64,
+    /// MVCC: total garbage-collection passes run (counter).
+    pub mvcc_gc_runs_total: AtomicU64,
+    /// MVCC: total versions reclaimed by GC (counter).
+    pub mvcc_gc_reclaimed_versions_total: AtomicU64,
+    /// MVCC: total bytes reclaimed by GC (counter).
+    pub mvcc_gc_reclaimed_bytes_total: AtomicU64,
+    /// MVCC: total transactions reaped for exceeding the idle timeout (counter).
+    pub mvcc_transaction_timeouts_total: AtomicU64,
+    /// MVCC: total transaction commit conflicts (counter).
+    pub mvcc_conflicts_total: AtomicU64,
     /// Per-request latency.
     pub request_latency: Histogram,
     /// Query execution latency.
@@ -140,6 +156,22 @@ impl Metrics {
             active_connections: self.active_connections.load(Ordering::Relaxed),
             active_transactions: self.active_transactions.load(Ordering::Relaxed),
             active_cursors: self.active_cursors.load(Ordering::Relaxed),
+            mvcc_active_transactions: self.mvcc_active_transactions.load(Ordering::Relaxed),
+            mvcc_oldest_snapshot_age_seconds: self
+                .mvcc_oldest_snapshot_age_seconds
+                .load(Ordering::Relaxed),
+            mvcc_retained_versions: self.mvcc_retained_versions.load(Ordering::Relaxed),
+            mvcc_gc_runs_total: self.mvcc_gc_runs_total.load(Ordering::Relaxed),
+            mvcc_gc_reclaimed_versions_total: self
+                .mvcc_gc_reclaimed_versions_total
+                .load(Ordering::Relaxed),
+            mvcc_gc_reclaimed_bytes_total: self
+                .mvcc_gc_reclaimed_bytes_total
+                .load(Ordering::Relaxed),
+            mvcc_transaction_timeouts_total: self
+                .mvcc_transaction_timeouts_total
+                .load(Ordering::Relaxed),
+            mvcc_conflicts_total: self.mvcc_conflicts_total.load(Ordering::Relaxed),
             request_latency: self.request_latency.snapshot(),
             query_latency: self.query_latency.snapshot(),
             storage_latency: self.storage_latency.snapshot(),
@@ -170,6 +202,22 @@ pub struct MetricsSnapshot {
     pub active_transactions: u64,
     /// Active cursors.
     pub active_cursors: u64,
+    /// MVCC: transactions currently holding a pinned snapshot.
+    pub mvcc_active_transactions: u64,
+    /// MVCC: age in seconds of the oldest pinned snapshot.
+    pub mvcc_oldest_snapshot_age_seconds: u64,
+    /// MVCC: estimate of retained stored versions.
+    pub mvcc_retained_versions: u64,
+    /// MVCC: total garbage-collection passes run.
+    pub mvcc_gc_runs_total: u64,
+    /// MVCC: total versions reclaimed by GC.
+    pub mvcc_gc_reclaimed_versions_total: u64,
+    /// MVCC: total bytes reclaimed by GC.
+    pub mvcc_gc_reclaimed_bytes_total: u64,
+    /// MVCC: total transactions reaped for exceeding the idle timeout.
+    pub mvcc_transaction_timeouts_total: u64,
+    /// MVCC: total transaction commit conflicts.
+    pub mvcc_conflicts_total: u64,
     /// Request latency histogram.
     pub request_latency: HistogramSnapshot,
     /// Query latency histogram.
@@ -192,12 +240,35 @@ impl MetricsSnapshot {
         counter("auradb_auth_failures_total", self.auth_failures_total);
         counter("auradb_bytes_read_total", self.bytes_read);
         counter("auradb_bytes_written_total", self.bytes_written);
+        counter("auradb_mvcc_gc_runs_total", self.mvcc_gc_runs_total);
+        counter(
+            "auradb_mvcc_gc_reclaimed_versions_total",
+            self.mvcc_gc_reclaimed_versions_total,
+        );
+        counter(
+            "auradb_mvcc_gc_reclaimed_bytes_total",
+            self.mvcc_gc_reclaimed_bytes_total,
+        );
+        counter(
+            "auradb_mvcc_transaction_timeouts_total",
+            self.mvcc_transaction_timeouts_total,
+        );
+        counter("auradb_mvcc_conflicts_total", self.mvcc_conflicts_total);
         let mut gauge = |name: &str, value: u64| {
             out.push_str(&format!("# TYPE {name} gauge\n{name} {value}\n"));
         };
         gauge("auradb_active_connections", self.active_connections);
         gauge("auradb_active_transactions", self.active_transactions);
         gauge("auradb_active_cursors", self.active_cursors);
+        gauge(
+            "auradb_mvcc_active_transactions",
+            self.mvcc_active_transactions,
+        );
+        gauge(
+            "auradb_mvcc_oldest_snapshot_age_seconds",
+            self.mvcc_oldest_snapshot_age_seconds,
+        );
+        gauge("auradb_mvcc_retained_versions", self.mvcc_retained_versions);
         for (label, h) in [
             ("request", &self.request_latency),
             ("query", &self.query_latency),
@@ -259,5 +330,32 @@ mod tests {
         let snap = m.snapshot();
         assert!(snap.render_prometheus().contains("auradb_requests_total 1"));
         assert!(snap.to_json().contains("requests_total"));
+    }
+
+    #[test]
+    fn metrics_export_includes_mvcc_metrics() {
+        let m = Metrics::new();
+        Metrics::gauge_set(&m.mvcc_active_transactions, 3);
+        Metrics::add(&m.mvcc_gc_reclaimed_versions_total, 42);
+        Metrics::incr(&m.mvcc_transaction_timeouts_total);
+        Metrics::incr(&m.mvcc_conflicts_total);
+        let snap = m.snapshot();
+        let prom = snap.render_prometheus();
+        for name in [
+            "auradb_mvcc_active_transactions",
+            "auradb_mvcc_oldest_snapshot_age_seconds",
+            "auradb_mvcc_retained_versions",
+            "auradb_mvcc_gc_runs_total",
+            "auradb_mvcc_gc_reclaimed_versions_total",
+            "auradb_mvcc_gc_reclaimed_bytes_total",
+            "auradb_mvcc_transaction_timeouts_total",
+            "auradb_mvcc_conflicts_total",
+        ] {
+            assert!(prom.contains(name), "missing metric {name}");
+        }
+        assert!(prom.contains("auradb_mvcc_active_transactions 3"));
+        assert!(prom.contains("auradb_mvcc_gc_reclaimed_versions_total 42"));
+        let json = snap.to_json();
+        assert!(json.contains("mvcc_conflicts_total"));
     }
 }

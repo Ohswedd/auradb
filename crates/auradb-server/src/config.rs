@@ -119,6 +119,14 @@ pub struct MvccConfig {
     /// Minimum number of most-recent versions of each live record GC retains.
     #[serde(default = "default_min_retained_versions")]
     pub min_retained_versions: usize,
+    /// Idle timeout after which an unfinished transaction is reaped: its
+    /// snapshot is released so GC can progress and further operations on it are
+    /// rejected with a transaction-timeout error. `0` disables timeouts.
+    #[serde(default = "default_transaction_timeout_secs")]
+    pub transaction_timeout_secs: u64,
+    /// Interval between abandoned-transaction reaper passes, in seconds.
+    #[serde(default = "default_abandoned_transaction_reaper_secs")]
+    pub abandoned_transaction_reaper_secs: u64,
 }
 
 fn default_gc_enabled() -> bool {
@@ -130,6 +138,12 @@ fn default_gc_interval_secs() -> u64 {
 fn default_min_retained_versions() -> usize {
     1
 }
+fn default_transaction_timeout_secs() -> u64 {
+    300
+}
+fn default_abandoned_transaction_reaper_secs() -> u64 {
+    30
+}
 
 impl Default for MvccConfig {
     fn default() -> Self {
@@ -137,6 +151,8 @@ impl Default for MvccConfig {
             gc_enabled: default_gc_enabled(),
             gc_interval_secs: default_gc_interval_secs(),
             min_retained_versions: default_min_retained_versions(),
+            transaction_timeout_secs: default_transaction_timeout_secs(),
+            abandoned_transaction_reaper_secs: default_abandoned_transaction_reaper_secs(),
         }
     }
 }
@@ -230,6 +246,15 @@ impl Config {
         if self.mvcc.gc_enabled && self.mvcc.gc_interval_secs == 0 {
             return Err(Error::Config(
                 "mvcc.gc_interval_secs must be non-zero when gc_enabled".into(),
+            ));
+        }
+        if self.mvcc.transaction_timeout_secs > 0
+            && self.mvcc.abandoned_transaction_reaper_secs == 0
+        {
+            return Err(Error::Config(
+                "mvcc.abandoned_transaction_reaper_secs must be non-zero when \
+                 transaction_timeout_secs is set"
+                    .into(),
             ));
         }
 

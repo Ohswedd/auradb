@@ -4,7 +4,30 @@ This roadmap describes where AuraDB is headed beyond the first single-node
 release. It is a statement of direction, not a delivery commitment. Items are
 grouped by theme and listed roughly in the order we expect to approach them.
 
-## Current release: 0.3.0
+## Current release: 0.3.1
+
+AuraDB 0.3.1 is a stabilization release for the MVCC and planner behavior shipped
+in 0.3.0. It hardens the transaction lifecycle (an active transaction registry,
+transaction timeouts, and an abandoned-transaction reaper so a long-lived or
+abandoned transaction can no longer pin versions forever without visibility),
+strengthens garbage-collection validation, and surfaces MVCC pressure through
+metrics, `status`, and `doctor` warnings. It preserves all 0.3.0 behavior, remains
+compatible with Aura Connector 0.3.x, and prepares — but does not implement — the
+codebase for future replication and Raft work.
+
+## Delivered in 0.3.1
+
+- Active transaction registry; transaction timeout and abandoned-transaction
+  reaper with a structured `transaction_timeout` error.
+- Stronger MVCC GC validation; `auradb gc --dry-run` / `--json` and a
+  `bytes_reclaimed` GC report field.
+- MVCC pressure metrics, an `mvcc` section in health/`status`, and `doctor`
+  operational warnings.
+- Upgrade safety tests across genuine v0.1.0/v0.2.0/v0.2.1/v0.3.0 fixtures, planner
+  regression tests, backup/restore-with-GC tests, and `auradb bench compare`.
+- Richer `EXPLAIN ANALYZE` diagnostics (additive JSON fields).
+
+## Previous release: 0.3.0
 
 AuraDB 0.3.0 adds MVCC and query planner foundations on top of the 0.2.x
 single-node release: each record keeps a chain of committed versions, transactions

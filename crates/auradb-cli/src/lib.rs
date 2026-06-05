@@ -182,6 +182,27 @@ pub fn cmd_doctor(data_dir: &Path, config: &Config) -> Result<String> {
     report.push_str(&format!(
         "index_consistency: ok ({checked} records verified)\n"
     ));
+    let stale = planner_stats_stale(&engine, &stats);
+    let (mvcc, warnings) = mvcc_doctor(&stats, config, true, stale);
+    report.push_str(&format!(
+        "mvcc: {} active txn(s), {} timed out, {} retained version(s), gc {}, timeout {}s\n",
+        mvcc.active_transactions,
+        mvcc.timed_out_transactions,
+        mvcc.retained_versions,
+        if mvcc.gc_enabled {
+            "enabled"
+        } else {
+            "disabled"
+        },
+        mvcc.transaction_timeout_secs,
+    ));
+    if warnings.is_empty() {
+        report.push_str("warnings: none\n");
+    } else {
+        for w in &warnings {
+            report.push_str(&format!("warning: {w}\n"));
+        }
+    }
     report.push_str(&security_summary(config));
     Ok(report)
 }
@@ -299,8 +320,113 @@ pub struct DoctorReport {
     pub index_consistency_ok: bool,
     /// The number of records verified by the consistency check.
     pub records_verified: usize,
+    /// MVCC health and pressure summary.
+    pub mvcc: MvccDoctor,
+    /// Operational warnings (MVCC pressure, GC disabled, stale stats, etc.).
+    pub warnings: Vec<String>,
     /// The redacted security summary.
     pub security: SecurityReport,
+}
+
+/// MVCC health fields included in the doctor report.
+#[derive(Debug, Serialize)]
+pub struct MvccDoctor {
+    /// Transactions currently holding a pinned snapshot.
+    pub active_transactions: usize,
+    /// Registered transactions that have timed out but not been cleaned up.
+    pub timed_out_transactions: usize,
+    /// Age in seconds of the oldest active transaction, if any.
+    pub oldest_transaction_age_secs: Option<u64>,
+    /// Total stored MVCC versions retained.
+    pub retained_versions: usize,
+    /// Cumulative transactions reaped for exceeding the idle timeout.
+    pub transaction_timeouts_total: u64,
+    /// Whether background version GC is enabled in the configuration.
+    pub gc_enabled: bool,
+    /// Configured transaction idle timeout in seconds (`0` = disabled).
+    pub transaction_timeout_secs: u64,
+}
+
+/// Thresholds above which the doctor raises an MVCC pressure warning.
+const DOCTOR_MANY_ACTIVE_TRANSACTIONS: usize = 100;
+const DOCTOR_OLD_SNAPSHOT_AGE_SECS: u64 = 3600;
+const DOCTOR_HIGH_VERSION_RATIO: usize = 4;
+
+/// Build the doctor's MVCC summary and operational warnings from engine stats
+/// and configuration. Warnings flag long-lived snapshots, version pressure, a
+/// disabled GC, stale planner statistics, and a needed index check.
+fn mvcc_doctor(
+    stats: &auradb::EngineStats,
+    config: &Config,
+    index_consistency_ok: bool,
+    stats_stale: bool,
+) -> (MvccDoctor, Vec<String>) {
+    let mut warnings = Vec::new();
+    if stats.active_transactions > DOCTOR_MANY_ACTIVE_TRANSACTIONS {
+        warnings.push(format!(
+            "{} active transactions hold pinned snapshots; long-lived transactions delay version GC",
+            stats.active_transactions
+        ));
+    }
+    if let Some(age) = stats.oldest_transaction_age_secs {
+        if age > DOCTOR_OLD_SNAPSHOT_AGE_SECS {
+            warnings.push(format!(
+                "oldest active snapshot is {age}s old; it pins versions and blocks GC below its read timestamp"
+            ));
+        }
+    }
+    if stats.timed_out_transactions > 0 {
+        warnings.push(format!(
+            "{} timed-out transaction(s) await cleanup",
+            stats.timed_out_transactions
+        ));
+    }
+    if stats.records > 0 && stats.versions > stats.records.saturating_mul(DOCTOR_HIGH_VERSION_RATIO)
+    {
+        warnings.push(format!(
+            "{} retained versions for {} live records; run `auradb gc` to reclaim superseded versions",
+            stats.versions, stats.records
+        ));
+    }
+    if !config.mvcc.gc_enabled {
+        warnings.push(
+            "background version GC is disabled (mvcc.gc_enabled = false); versions are not reclaimed automatically".into(),
+        );
+    }
+    if config.mvcc.transaction_timeout_secs == 0 {
+        warnings.push(
+            "transaction timeouts are disabled (mvcc.transaction_timeout_secs = 0); abandoned transactions pin versions indefinitely".into(),
+        );
+    }
+    if stats_stale {
+        warnings.push(
+            "planner statistics look stale; run `auradb stats analyze` to refresh them".into(),
+        );
+    }
+    if !index_consistency_ok {
+        warnings.push("index consistency check failed; run `auradb index rebuild`".into());
+    }
+    let mvcc = MvccDoctor {
+        active_transactions: stats.active_transactions,
+        timed_out_transactions: stats.timed_out_transactions,
+        oldest_transaction_age_secs: stats.oldest_transaction_age_secs,
+        retained_versions: stats.versions,
+        transaction_timeouts_total: stats.transaction_timeouts_total,
+        gc_enabled: config.mvcc.gc_enabled,
+        transaction_timeout_secs: config.mvcc.transaction_timeout_secs,
+    };
+    (mvcc, warnings)
+}
+
+/// Whether the persisted planner row counts look stale relative to the engine's
+/// live record total. A coarse heuristic: stale if the totals disagree.
+fn planner_stats_stale(engine: &Engine, stats: &auradb::EngineStats) -> bool {
+    let planner = engine.planner_stats();
+    if planner.collections.is_empty() && stats.records > 0 {
+        return true;
+    }
+    let counted: usize = planner.collections.values().map(|c| c.row_count).sum();
+    counted != stats.records
 }
 
 /// `auradb doctor --json` - the same checks as `auradb doctor`, emitted as JSON.
@@ -310,6 +436,8 @@ pub fn cmd_doctor_json(data_dir: &Path, config: &Config) -> Result<String> {
     let stats = engine.stats();
     let load = engine.index_load_report();
     let checked = engine.check_consistency().context("consistency check")?;
+    let stale = planner_stats_stale(&engine, &stats);
+    let (mvcc, warnings) = mvcc_doctor(&stats, config, true, stale);
     let report = DoctorReport {
         auradb_version: VERSION.to_string(),
         protocol_version: PROTOCOL_VERSION,
@@ -323,6 +451,8 @@ pub fn cmd_doctor_json(data_dir: &Path, config: &Config) -> Result<String> {
         indexes_rebuilt: load.rebuilt,
         index_consistency_ok: true,
         records_verified: checked,
+        mvcc,
+        warnings,
         security: SecurityReport::from_config(config),
     };
     serde_json::to_string_pretty(&report).context("serializing doctor report")
@@ -349,6 +479,9 @@ pub struct StatusReport {
     pub collections: usize,
     /// Whether the connection used TLS.
     pub tls: bool,
+    /// MVCC health and version-pressure summary, when the server reports it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub mvcc: Option<auradb_protocol::MvccHealth>,
 }
 
 /// `auradb config validate` - load and validate a config file, failing on any
@@ -449,14 +582,51 @@ pub fn cmd_compact(data_dir: &Path) -> Result<String> {
     ))
 }
 
+/// A machine-readable garbage-collection result for `auradb gc --json`.
+#[derive(Debug, Serialize)]
+pub struct GcCliReport {
+    /// Whether this was a dry run (no data was modified).
+    pub dry_run: bool,
+    /// Superseded/tombstone versions reclaimed (or that would be reclaimed).
+    pub versions_reclaimed: usize,
+    /// Record ids removed entirely (fully-dead tombstone chains).
+    pub records_removed: usize,
+    /// Total versions remaining after GC.
+    pub versions_after: usize,
+    /// On-disk bytes reclaimed. Not estimated for a dry run (reported as 0).
+    pub bytes_reclaimed: u64,
+}
+
 /// `auradb gc` - reclaim old MVCC versions no active transaction can observe.
-pub fn cmd_gc(data_dir: &Path) -> Result<String> {
+/// With `--dry-run`, report what would be reclaimed without modifying data.
+pub fn cmd_gc(data_dir: &Path, dry_run: bool, json: bool) -> Result<String> {
     let engine = Engine::open(data_dir)?;
-    let report = engine.gc()?;
-    Ok(format!(
-        "garbage collection reclaimed {} version(s) and removed {} deleted record(s); {} version(s) retained",
-        report.versions_reclaimed, report.records_removed, report.versions_after
-    ))
+    let report = if dry_run {
+        engine.gc_dry_run()
+    } else {
+        engine.gc()?
+    };
+    if json {
+        let cli = GcCliReport {
+            dry_run,
+            versions_reclaimed: report.versions_reclaimed,
+            records_removed: report.records_removed,
+            versions_after: report.versions_after,
+            bytes_reclaimed: report.bytes_reclaimed,
+        };
+        return Ok(serde_json::to_string_pretty(&cli)?);
+    }
+    if dry_run {
+        Ok(format!(
+            "dry run: would reclaim {} version(s) and remove {} deleted record(s); {} version(s) would remain (no data modified)",
+            report.versions_reclaimed, report.records_removed, report.versions_after
+        ))
+    } else {
+        Ok(format!(
+            "garbage collection reclaimed {} version(s) and removed {} deleted record(s); {} version(s) retained, {} byte(s) reclaimed",
+            report.versions_reclaimed, report.records_removed, report.versions_after, report.bytes_reclaimed
+        ))
+    }
 }
 
 /// `auradb stats analyze` - recompute and persist planner statistics.
@@ -641,10 +811,25 @@ pub async fn cmd_status(
     server_name: &str,
 ) -> Result<String> {
     let report = status_report(addr, token, tls_ca, server_name).await?;
-    Ok(format!(
+    let mut out = format!(
         "status: {}\nready: {}\nversion: {}\ncollections: {}",
         report.status, report.ready, report.server_version, report.collections
-    ))
+    );
+    if let Some(m) = &report.mvcc {
+        out.push_str(&format!(
+            "\nactive_transactions: {}\ntimed_out_transactions: {}\noldest_snapshot_age_secs: {}\nretained_versions: {}\ntransaction_timeouts_total: {}\ntransaction_timeout_secs: {}\ngc_enabled: {}",
+            m.active_transactions,
+            m.timed_out_transactions,
+            m.oldest_transaction_age_secs
+                .map(|s| s.to_string())
+                .unwrap_or_else(|| "n/a".into()),
+            m.retained_versions,
+            m.transaction_timeouts_total,
+            m.transaction_timeout_secs,
+            m.gc_enabled,
+        ));
+    }
+    Ok(out)
 }
 
 /// `auradb status --json` - the same probe as `auradb status`, emitted as JSON.
@@ -689,6 +874,7 @@ async fn status_report(
         protocol_version: PROTOCOL_VERSION,
         collections: health.collections,
         tls,
+        mvcc: health.mvcc,
     })
 }
 
@@ -766,7 +952,7 @@ fn restrict_key_permissions(path: &Path) {
 fn restrict_key_permissions(_path: &Path) {}
 
 /// One measured benchmark result.
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct BenchMeasurement {
     /// The benchmark name.
     pub name: String,
@@ -782,7 +968,7 @@ pub struct BenchMeasurement {
 /// Machine information recorded alongside a benchmark run. Benchmarks are
 /// hardware-dependent; this records the environment so a baseline is only ever
 /// compared against itself.
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct MachineInfo {
     /// The target operating system.
     pub os: String,
@@ -793,7 +979,7 @@ pub struct MachineInfo {
 }
 
 /// A full benchmark report, suitable for a committed baseline snapshot.
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct BenchReport {
     /// The AuraDB version that produced the report.
     pub auradb_version: String,
@@ -1118,6 +1304,107 @@ pub fn cmd_bench_json(
     Ok(json)
 }
 
+/// Whether higher values of a unit are better (throughput) or worse (latency,
+/// wall time). Determines the sign of a regression for that unit.
+fn higher_is_better(unit: &str) -> bool {
+    matches!(unit, "ops_per_sec")
+}
+
+/// Compare two benchmark baseline reports and render a per-benchmark summary.
+///
+/// Returns `(report, regressed)`. A benchmark "regresses" when it moves in the
+/// worse direction (slower throughput, or higher latency / wall time). When
+/// `fail_threshold_percent` is set, `regressed` is true if any benchmark
+/// regresses by more than that percentage; otherwise `regressed` is always
+/// false (the default — large regressions are reported as warnings but do not
+/// fail). Benchmarks are hardware-sensitive: only compare reports produced on
+/// the same machine.
+pub fn cmd_bench_compare(
+    baseline: &Path,
+    current: &Path,
+    fail_threshold_percent: Option<f64>,
+) -> Result<(String, bool)> {
+    let base: BenchReport = serde_json::from_str(
+        &std::fs::read_to_string(baseline)
+            .with_context(|| format!("reading baseline {}", baseline.display()))?,
+    )
+    .with_context(|| format!("parsing baseline {}", baseline.display()))?;
+    let cur: BenchReport = serde_json::from_str(
+        &std::fs::read_to_string(current)
+            .with_context(|| format!("reading current {}", current.display()))?,
+    )
+    .with_context(|| format!("parsing current {}", current.display()))?;
+
+    let base_by_name: std::collections::HashMap<&str, &BenchMeasurement> = base
+        .measurements
+        .iter()
+        .map(|m| (m.name.as_str(), m))
+        .collect();
+
+    let mut out = format!(
+        "benchmark comparison: {} ({}) -> {} ({})\n",
+        base.auradb_version,
+        base.commit.as_deref().unwrap_or("?"),
+        cur.auradb_version,
+        cur.commit.as_deref().unwrap_or("?"),
+    );
+    if base.machine.os != cur.machine.os || base.machine.arch != cur.machine.arch {
+        out.push_str(
+            "warning: reports were produced on different machines; comparison is unreliable\n",
+        );
+    }
+    out.push_str("hardware-sensitive: compare only reports from the same machine.\n");
+
+    let mut worst_regression = 0.0_f64;
+    for m in &cur.measurements {
+        let Some(b) = base_by_name.get(m.name.as_str()) else {
+            out.push_str(&format!("  {}: new (no baseline)\n", m.name));
+            continue;
+        };
+        // Percent change in the value, then translate into a "better/worse"
+        // delta accounting for the metric direction.
+        let pct = if b.value.abs() < f64::EPSILON {
+            0.0
+        } else {
+            (m.value - b.value) / b.value * 100.0
+        };
+        let regression_pct = if higher_is_better(&m.unit) { -pct } else { pct };
+        let marker = if regression_pct > 0.0 {
+            " REGRESSION"
+        } else {
+            ""
+        };
+        if regression_pct > worst_regression {
+            worst_regression = regression_pct;
+        }
+        out.push_str(&format!(
+            "  {}: {:.2} -> {:.2} {} ({:+.1}%){}\n",
+            m.name, b.value, m.value, m.unit, pct, marker
+        ));
+    }
+
+    let regressed = match fail_threshold_percent {
+        Some(threshold) => {
+            let fail = worst_regression > threshold;
+            out.push_str(&format!(
+                "worst regression: {:.1}% (fail threshold {:.1}%) -> {}",
+                worst_regression,
+                threshold,
+                if fail { "FAIL" } else { "ok" }
+            ));
+            fail
+        }
+        None => {
+            out.push_str(&format!(
+                "worst regression: {:.1}% (no fail threshold set; warnings only)",
+                worst_regression
+            ));
+            false
+        }
+    };
+    Ok((out, regressed))
+}
+
 /// Build a [`Config`] from an optional file plus CLI overrides.
 pub fn build_config(
     config_path: Option<&Path>,
@@ -1247,8 +1534,111 @@ mod tests {
         assert!(show.contains("C: 5 rows"), "{show}");
         let json = cmd_stats_show(&data, true).unwrap();
         assert!(json.contains("\"row_count\": 5"), "{json}");
-        // gc runs cleanly.
-        assert!(cmd_gc(&data).unwrap().contains("garbage collection"));
+        // gc runs cleanly, and a dry run reports without modifying data.
+        let dry = cmd_gc(&data, true, false).unwrap();
+        assert!(dry.contains("dry run"), "{dry}");
+        assert!(cmd_gc(&data, false, false)
+            .unwrap()
+            .contains("garbage collection"));
+        let json = cmd_gc(&data, false, true).unwrap();
+        assert!(json.contains("\"versions_reclaimed\""), "{json}");
+    }
+
+    fn stats_with(
+        active: usize,
+        oldest_age: Option<u64>,
+        records: usize,
+        versions: usize,
+    ) -> auradb::EngineStats {
+        auradb::EngineStats {
+            collections: 1,
+            records,
+            versions,
+            active_transactions: active,
+            timed_out_transactions: 0,
+            oldest_active_read_ts: oldest_age.map(|_| 1),
+            oldest_transaction_age_secs: oldest_age,
+            transaction_timeouts_total: 0,
+            schema_version: 1,
+        }
+    }
+
+    #[test]
+    fn doctor_warns_when_gc_disabled() {
+        let mut config = Config::default();
+        config.mvcc.gc_enabled = false;
+        let (mvcc, warnings) = mvcc_doctor(&stats_with(0, None, 0, 0), &config, true, false);
+        assert!(!mvcc.gc_enabled);
+        assert!(
+            warnings.iter().any(|w| w.contains("GC is disabled")),
+            "{warnings:?}"
+        );
+    }
+
+    #[test]
+    fn doctor_warns_on_long_lived_snapshot() {
+        let config = Config::default();
+        let (_mvcc, warnings) = mvcc_doctor(&stats_with(1, Some(7200), 1, 1), &config, true, false);
+        assert!(
+            warnings
+                .iter()
+                .any(|w| w.contains("oldest active snapshot")),
+            "{warnings:?}"
+        );
+    }
+
+    #[test]
+    fn doctor_warns_on_version_pressure_and_stale_stats() {
+        let config = Config::default();
+        let (_mvcc, warnings) = mvcc_doctor(&stats_with(0, None, 10, 1000), &config, true, true);
+        assert!(warnings.iter().any(|w| w.contains("retained versions")));
+        assert!(warnings.iter().any(|w| w.contains("stale")));
+    }
+
+    #[test]
+    fn secrets_still_redacted() {
+        let dir = tempfile::tempdir().unwrap();
+        let data = dir.path().join("data");
+        cmd_init(&data, &dir.path().join("AuraDB.toml")).unwrap();
+        let hash = auradb_server::auth::hash_token("super-secret-token").unwrap();
+        let mut config = Config {
+            data_dir: data.clone(),
+            ..Config::default()
+        };
+        config.auth.enabled = true;
+        config.auth.token_hash = Some(hash.clone());
+        let json = cmd_doctor_json(&data, &config).unwrap();
+        assert!(!json.contains(&hash), "doctor JSON leaked the token hash");
+        assert!(json.contains("auth_token_hash_configured"));
+        let text = cmd_doctor(&data, &config).unwrap();
+        assert!(!text.contains(&hash), "doctor text leaked the token hash");
+    }
+
+    #[test]
+    fn bench_compare_flags_throughput_regression() {
+        let dir = tempfile::tempdir().unwrap();
+        let base = dir.path().join("base.json");
+        let cur = dir.path().join("cur.json");
+        let report = |insert: f64| {
+            format!(
+                r#"{{"auradb_version":"0.3.1","records":10,"command":"bench","commit":null,
+                "machine":{{"os":"{os}","arch":"{arch}","cpus":null}},
+                "measurements":[{{"name":"insert","unit":"ops_per_sec","value":{insert},"iterations":10}}]}}"#,
+                os = std::env::consts::OS,
+                arch = std::env::consts::ARCH,
+            )
+        };
+        std::fs::write(&base, report(1000.0)).unwrap();
+        std::fs::write(&cur, report(500.0)).unwrap(); // 50% slower throughput
+        let (out, regressed) = cmd_bench_compare(&base, &cur, None).unwrap();
+        assert!(out.contains("REGRESSION"), "{out}");
+        assert!(!regressed, "no fail threshold set -> warnings only");
+        let (_out, regressed) = cmd_bench_compare(&base, &cur, Some(10.0)).unwrap();
+        assert!(regressed, "50% regression exceeds the 10% fail threshold");
+        // An improvement is never a regression.
+        std::fs::write(&cur, report(2000.0)).unwrap();
+        let (_out, regressed) = cmd_bench_compare(&base, &cur, Some(10.0)).unwrap();
+        assert!(!regressed);
     }
 
     #[test]

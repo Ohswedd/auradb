@@ -103,10 +103,23 @@ Because each record keeps a version chain, old versions are reclaimed by
   entirely.
 
 The engine drives GC with a horizon derived from the oldest active transaction
-snapshot (or the commit watermark when no transaction is active), so a version a
-live transaction can still see is never reclaimed. GC runs via `auradb gc` or
-optional background GC configured under `[mvcc]`. See
-[CONFIGURATION.md](CONFIGURATION.md) and [TRANSACTIONS.md](TRANSACTIONS.md).
+snapshot in the active transaction registry (or the commit watermark when no
+transaction is active), so a version a live transaction can still see is never
+reclaimed. A timed-out transaction is excluded from the horizon, so reaping an
+abandoned transaction lets GC reclaim the versions it had pinned. GC runs via
+`auradb gc` or optional background GC configured under `[mvcc]`. The `GcReport`
+includes versions reclaimed, records removed, versions retained, and
+`bytes_reclaimed` (the segment-size delta across the rewrite); `Storage::gc_preview`
+backs `auradb gc --dry-run`, computing the counts without modifying data. See
+[CONFIGURATION.md](CONFIGURATION.md), [TRANSACTIONS.md](TRANSACTIONS.md), and
+[OPERATIONS.md](OPERATIONS.md).
+
+### Backup semantics
+
+The logical dump (`auradb dump`/`restore`) exports the **latest committed visible
+state**, not the full version history. A restore therefore starts each record with
+a single fresh version and never resurrects a version GC reclaimed. This is a
+logical latest-state backup; there is no full-history dump.
 
 ## Persisted index snapshots
 

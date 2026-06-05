@@ -16,7 +16,12 @@ The `Metrics` registry tracks:
 
 - **Counters** - `requests_total`, `errors_total`, `queries_total`,
   `mutations_total`, `bytes_read`, `bytes_written`.
+- **MVCC counters** - `auradb_mvcc_gc_runs_total`,
+  `auradb_mvcc_gc_reclaimed_versions_total`, `auradb_mvcc_gc_reclaimed_bytes_total`,
+  `auradb_mvcc_transaction_timeouts_total`, `auradb_mvcc_conflicts_total`.
 - **Gauges** - `active_connections`, `active_transactions`, `active_cursors`.
+- **MVCC gauges** - `auradb_mvcc_active_transactions`,
+  `auradb_mvcc_oldest_snapshot_age_seconds`, `auradb_mvcc_retained_versions`.
 - **Histograms** - `request_latency`, `query_latency`, `storage_latency`
   (fixed microsecond buckets with sum and count).
 
@@ -40,8 +45,18 @@ section of [CONFIGURATION.md](CONFIGURATION.md).
 ## Health and readiness
 
 The `Health` opcode returns a `HealthReport { status, ready, version,
-collections }`. The CLI `status` command uses it. Readiness is true once the
-engine has opened successfully.
+collections, mvcc }`. The CLI `status` command uses it. Readiness is true once the
+engine has opened successfully. The additive `mvcc` section (AWP 1, optional)
+reports active transactions, timed-out transactions, the oldest active read
+timestamp and snapshot age, retained versions, cumulative transaction timeouts,
+the configured transaction timeout, and whether GC is enabled — so an operator can
+watch version pressure without scraping Prometheus. Older clients ignore the
+field.
+
+`auradb doctor` raises operational **warnings** when the active transaction count
+is high, the oldest snapshot is too old, retained versions exceed a threshold, GC
+is disabled, transaction timeouts are disabled, statistics are stale, or the index
+consistency check fails. See [OPERATIONS.md](OPERATIONS.md).
 
 ### JSON output
 

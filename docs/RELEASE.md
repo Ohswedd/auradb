@@ -1,7 +1,7 @@
 # Release guide
 
 This guide describes how a maintainer cuts an AuraDB release. The current release
-is `0.3.0`.
+is `0.3.1`.
 
 ## Pre-release checklist
 
