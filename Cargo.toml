@@ -18,7 +18,7 @@ members = [
 ]
 
 [workspace.package]
-version = "0.5.1"
+version = "0.5.2"
 edition = "2021"
 rust-version = "1.85"
 license = "Apache-2.0"
@@ -27,19 +27,19 @@ authors = ["AuraDB Contributors"]
 description = "A single-node, Rust-native multi-model database server for the Aura ecosystem."
 
 [workspace.dependencies]
-auradb-core = { path = "crates/auradb-core", version = "0.5.1" }
-auradb-protocol = { path = "crates/auradb-protocol", version = "0.5.1" }
-auradb-storage = { path = "crates/auradb-storage", version = "0.5.1" }
-auradb-index = { path = "crates/auradb-index", version = "0.5.1" }
-auradb-txn = { path = "crates/auradb-txn", version = "0.5.1" }
-auradb-query = { path = "crates/auradb-query", version = "0.5.1" }
-auradb = { path = "crates/auradb", version = "0.5.1" }
-auradb-observability = { path = "crates/auradb-observability", version = "0.5.1" }
-auradb-cluster = { path = "crates/auradb-cluster", version = "0.5.1" }
-auradb-raft = { path = "crates/auradb-raft", version = "0.5.1" }
-auradb-replication = { path = "crates/auradb-replication", version = "0.5.1" }
-auradb-server = { path = "crates/auradb-server", version = "0.5.1" }
-auradb-conformance = { path = "crates/auradb-conformance", version = "0.5.1" }
+auradb-core = { path = "crates/auradb-core", version = "0.5.2" }
+auradb-protocol = { path = "crates/auradb-protocol", version = "0.5.2" }
+auradb-storage = { path = "crates/auradb-storage", version = "0.5.2" }
+auradb-index = { path = "crates/auradb-index", version = "0.5.2" }
+auradb-txn = { path = "crates/auradb-txn", version = "0.5.2" }
+auradb-query = { path = "crates/auradb-query", version = "0.5.2" }
+auradb = { path = "crates/auradb", version = "0.5.2" }
+auradb-observability = { path = "crates/auradb-observability", version = "0.5.2" }
+auradb-cluster = { path = "crates/auradb-cluster", version = "0.5.2" }
+auradb-raft = { path = "crates/auradb-raft", version = "0.5.2" }
+auradb-replication = { path = "crates/auradb-replication", version = "0.5.2" }
+auradb-server = { path = "crates/auradb-server", version = "0.5.2" }
+auradb-conformance = { path = "crates/auradb-conformance", version = "0.5.2" }
 
 tokio = { version = "1", features = ["full"] }
 bytes = "1"

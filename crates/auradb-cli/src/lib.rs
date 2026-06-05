@@ -1297,7 +1297,14 @@ pub fn cmd_cert_generate_dev(
         KeyUsagePurpose::DigitalSignature,
         KeyUsagePurpose::KeyEncipherment,
     ];
-    srv_params.extended_key_usages = vec![ExtendedKeyUsagePurpose::ServerAuth];
+    // Both server and client auth: the peer (cluster) transport uses mutual TLS,
+    // so a node presents this same certificate as a client certificate when it
+    // dials a peer. A server-only EKU is rejected by the peer's client-cert
+    // verifier ("does not allow extended key usage for client authentication").
+    srv_params.extended_key_usages = vec![
+        ExtendedKeyUsagePurpose::ServerAuth,
+        ExtendedKeyUsagePurpose::ClientAuth,
+    ];
     let mut srv_dn = DistinguishedName::new();
     srv_dn.push(DnType::CommonName, common_name.clone());
     srv_params.distinguished_name = srv_dn;

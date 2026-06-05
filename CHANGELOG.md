@@ -4,6 +4,33 @@ All notable changes to AuraDB are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and the project uses
 [Semantic Versioning](https://semver.org/).
 
+## [0.5.2] - 2026-06-05
+
+Multi-node preview hardening, follow-up fix. A patch release that fixes the
+development certificates generated for the multi-node preview so the peer
+(cluster) transport's **mutual TLS** actually works. No format or wire change;
+single-node mode remains the recommended production mode.
+
+### Fixed
+- `auradb cert generate-dev` certificates were issued with a server-only Extended
+  Key Usage, so a node presenting its certificate as a *client* certificate when
+  dialing a peer was rejected by the peer's client-cert verifier
+  ("certificate does not allow extended key usage for client authentication") and
+  the multi-node TLS cluster (e.g. the Docker Compose preview) never formed a
+  quorum. Generated certificates now allow **both server and client
+  authentication**, which the peer transport's mutual TLS requires. Client-facing
+  server TLS is unaffected. This regressed only the v0.5.1 generated-certificate
+  Docker cluster path; loopback (plaintext) preview clusters were never affected.
+
+### Changed
+- The peer dialer now logs a failed connect/handshake at debug level instead of
+  silently swallowing the error, so peer TLS and handshake failures are
+  diagnosable.
+
+### Added
+- A regression test that forms a real two-node TLS cluster using the actual
+  `auradb cert generate-dev` output, so a server-only-EKU regression is caught.
+
 ## [0.5.1] - 2026-06-05
 
 Multi-node preview hardening. A patch release that makes the v0.5.0 controlled

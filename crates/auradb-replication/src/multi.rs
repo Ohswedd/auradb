@@ -818,8 +818,9 @@ async fn dialer_task(
                 }
                 connected.store(false, Ordering::Relaxed);
             }
-            Err(_) => {
+            Err(e) => {
                 connected.store(false, Ordering::Relaxed);
+                tracing::debug!(peer = %peer, addr = %addr, error = %e, "peer dial/handshake failed");
             }
         }
         // Bounded backoff before reconnecting; wake early on shutdown.
