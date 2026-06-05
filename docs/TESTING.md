@@ -121,4 +121,35 @@ working. Unsupported operations must instead return a structured
   correctness under stale stats, and the `EXPLAIN ANALYZE` shape.
 - `crates/auradb-cli/tests/backup_restore.rs` — backup/restore combined with GC
   (latest-state semantics, no resurrection of reclaimed versions).
+
+## Cluster and replication suites (v0.4.0)
+
+These suites cover the Raft and replication groundwork. The consensus tests are
+deterministic — they are driven by a logical clock and an in-memory message bus,
+never wall-clock timing — so they are reproducible and never flaky.
+
+- **Cluster metadata** (`auradb-cluster`) — node/cluster id generation, hex
+  display and round-trip, durable identity init/load/reopen, idempotent init,
+  pinned-id mismatch rejection, rejection of an unknown future `format_version`,
+  malformed/partial identity rejection, and `[cluster]` config validation.
+- **Raft log** (`auradb-raft`) — append with the no-gap and no-term-regression
+  invariants, suffix truncation, the in-memory and file backends, durable
+  persistence across reopen, hard-state persistence, checksum-corruption detection
+  (fail closed), and torn-trailing-frame truncation on open.
+- **Raft consensus / state machine** (`auradb-raft`) — leader election, log
+  replication, log repair, and commit advancement, run multi-node through the
+  deterministic in-process simulation harness (with partition/heal), plus
+  single-node election.
+- **Replicated apply** (`auradb-replication`) — the replicated command model and
+  versioned encoding (rejecting a newer envelope), the idempotent apply path
+  (commit timestamp equals log index), and follower-write `not_leader` rejection.
+- **Snapshot** (`auradb-replication`) — snapshot create/restore round-trip,
+  version and digest verification, and rejection of an unknown future snapshot
+  format.
+- **Single-node cluster mode** — a durable single-node cluster orders writes
+  through the Raft log, elects itself leader, and replays committed-but-unapplied
+  entries on restart.
+
+See [CLUSTERING.md](CLUSTERING.md), [RAFT.md](RAFT.md), and
+[REPLICATION.md](REPLICATION.md).
 - `cmd_bench_compare` unit tests cover the benchmark regression comparison logic.

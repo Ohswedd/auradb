@@ -42,6 +42,30 @@ forces cursor streaming via a small page size.
 
 These run as part of the conformance suite alongside the scenarios above.
 
+### Cluster scenarios (0.4.0)
+
+These scenarios exercise single-node cluster mode end to end. They confirm the
+cluster path works without changing the non-cluster guarantees:
+
+- **`single_node_cluster_connect`** - a server started with `[cluster] enabled =
+  true` and no peers accepts connections and serves requests normally.
+- **`cluster_status_and_capability`** - the health report includes the additive
+  `cluster` section (node id, cluster id, role `leader`, term, commit/applied
+  indices, `single_node = true`, replication lag) and the wire protocol version is
+  unchanged.
+- **`leader_accepts_writes`** - the single node is the leader and accepts writes;
+  there is no `not_leader` rejection in single-node mode.
+- **`raft_backed_write_survives_restart`** - a write committed through the Raft log
+  is present after the server restarts (committed-but-unapplied entries replay).
+- **`snapshot_create_restore`** - a snapshot captures schemas and current records
+  and restores them into a fresh engine with identical visible state.
+- **`non_cluster_mode_unchanged`** - with cluster mode disabled (the default),
+  every scenario above and every prior scenario still passes, confirming the
+  default path is unchanged.
+
+These run as part of the conformance suite. See [CLUSTERING.md](CLUSTERING.md) and
+[REPLICATION.md](REPLICATION.md).
+
 ## Running
 
 Rust (no server needed - the test spawns one):

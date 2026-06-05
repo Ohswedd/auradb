@@ -4,6 +4,56 @@ All notable changes to AuraDB are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and the project uses
 [Semantic Versioning](https://semver.org/).
 
+## [0.4.0] - 2026-06-05
+
+The replication and Raft foundation for future clustered deployments. This
+release introduces a correct, durable, testable cluster foundation. **Single-node
+mode remains the recommended production path.** Multi-node clustering is
+experimental: the Raft and replication core is validated by deterministic
+in-process tests, but cross-process multi-node server deployment is not enabled
+(configuring peers is rejected at startup). When cluster mode is disabled — the
+default — all v0.3.1 behavior is preserved byte-for-byte.
+
+### Added
+- Stable node identity (`NodeId`) and cluster identity (`ClusterId`), persisted
+  under `<data_dir>/cluster/` and created by `auradb init`.
+- Cluster metadata and configuration (the `[cluster]` config table), validated
+  at startup; unknown future metadata formats are rejected (fail closed).
+- A durable, checksummed Raft log abstraction with corruption detection and
+  crash-safe recovery (`auradb-raft`).
+- A minimal, deterministic Raft state machine: follower/candidate/leader roles,
+  elections, `RequestVote`, `AppendEntries`, heartbeats, log repair, and commit
+  advancement, driven by a logical test clock.
+- Single-node Raft mode: when cluster mode is enabled with no peers, every write
+  is ordered through a durable local Raft log and replayed on restart.
+- A leader-and-follower role model with a leader-only write path; followers
+  reject writes with a structured `not_leader` error and a leader hint.
+- A replicated command model and an idempotent replicated apply path; the MVCC
+  commit timestamp is the Raft log index, so replicas derive identical ordering.
+- A versioned snapshot boundary (`SnapshotManifest`) for future state transfer,
+  with local create and restore.
+- Cluster status and diagnostics: `auradb cluster init|status|peers|doctor|
+  bootstrap`, plus cluster fields in `auradb status --json`, `auradb doctor`,
+  and the server health report.
+- Replication and Raft metrics (term, commit/applied/last-log index, leader
+  changes, votes, AppendEntries counters, replication lag, apply errors, apply
+  latency).
+- Deterministic Raft and replication tests, including in-process multi-node
+  consensus and replicated-apply tests, plus a single-node cluster example
+  config (`examples/auradb.cluster.local.toml`).
+
+### Changed
+- The internal write path can be routed through the replication layer when
+  cluster mode is enabled; the default (cluster-disabled) path is unchanged.
+- Server health and status include an additive `cluster` section. The Aura Wire
+  Protocol version is unchanged; Aura Connector 0.3.x remains fully compatible.
+
+### Fixed
+- Replication, recovery, and cluster-mode correctness issues found during
+  validation (idempotent apply on restart; commit-order preservation through the
+  Raft log; fail-closed handling of unknown future cluster, Raft, and snapshot
+  formats).
+
 ## [0.3.1] - 2026-06-05
 
 MVCC stabilization, upgrade confidence, and operational guardrails. A

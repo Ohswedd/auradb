@@ -1,0 +1,56 @@
+# AuraDB single-node cluster (Raft) configuration — local development only.
+#
+# This enables cluster mode with a single node: every write is ordered through a
+# durable Raft log and replayed on restart. It is a faithful exercise of the
+# replication path, but a single-node cluster provides no fault tolerance — it is
+# the same availability as non-cluster single-node mode, with extra write-path
+# overhead. For production, single-node (non-cluster) mode remains the
+# recommended path; see docs/CLUSTERING.md.
+#
+# Multi-node cluster deployment is experimental and intentionally NOT enabled in
+# this release: configuring `peers` is rejected at startup (fail closed).
+#
+# Validate with:
+#   auradb config validate --config examples/auradb.cluster.local.toml
+
+bind = "127.0.0.1"
+port = 7171
+
+data_dir = ".local/auradb-cluster"
+
+max_payload_bytes = 16777216
+log_level = "info"
+log_json = false
+cursor_timeout_secs = 300
+page_size = 100
+sync_on_commit = true
+metrics_enabled = true
+
+[tls]
+enabled = false
+
+[auth]
+enabled = false
+mode = "static-token"
+token_hash_algorithm = "argon2id"
+
+[mvcc]
+gc_enabled = true
+gc_interval_secs = 300
+min_retained_versions = 1
+
+[cluster]
+# Cluster (Raft) mode enabled. With no peers this is a single-node cluster.
+enabled = true
+# Leave empty to use the node/cluster id created by `auradb init` (or generate
+# one on first start). Pin them only to enforce a specific identity.
+cluster_id = ""
+node_id = ""
+# Dedicated cluster transport address (loopback only in this release).
+listen_addr = "127.0.0.1:7172"
+advertise_addr = "127.0.0.1:7172"
+# Bootstrap a brand-new single-node cluster.
+bootstrap = true
+# Multi-node deployment is experimental; configuring peers is rejected at
+# startup in this release.
+peers = []

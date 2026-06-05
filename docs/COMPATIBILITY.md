@@ -1,14 +1,15 @@
 # AuraDB Compatibility Matrix
 
-This document records what AuraDB v0.3.1 implements and how it interoperates with
-the Aura Connector client library and the Aura Wire Protocol (AWP). v0.3.1 is a
-stabilization release for the MVCC and planner behavior introduced in v0.3.0: it
-preserves all v0.3.0 wire behavior, keeps AWP 1 (the health report gains an
-additive `mvcc` section and `EXPLAIN ANALYZE` gains additive fields), and
-requires no connector release.
+This document records what AuraDB v0.4.0 implements and how it interoperates with
+the Aura Connector client library and the Aura Wire Protocol (AWP). v0.4.0 adds the
+replication and Raft groundwork (optional cluster mode, off by default). It keeps
+**AWP 1** unchanged: the health report gains an additive `cluster` section and a
+new `not_leader` error code is additive, so no connector release is required and
+Aura Connector 0.3.x remains fully compatible.
 
 | AuraDB | Aura Connector | Protocol | Status |
 | ------ | -------------- | -------- | ------ |
+| 0.4.0  | 0.3.x          | AWP 1    | Supported (native AuraDB backend; cluster fields additive) |
 | 0.3.1  | 0.3.x          | AWP 1    | Supported (native AuraDB backend) |
 | 0.3.0  | 0.3.x          | AWP 1    | Supported (native AuraDB backend) |
 | 0.2.1  | 0.3.x          | AWP 1    | Supported (native AuraDB backend) |
@@ -25,13 +26,17 @@ and TLS). Use Aura Connector 0.3.x to connect to an AuraDB 0.2.x server. See
 
 ## Versions
 
-- **AuraDB:** 0.3.1
-- **Storage format:** v2 (commit-timestamped MVCC version chains). A v1 (≤ 0.2.x)
-  data directory is migrated to v2 transparently on first open; an unknown future
-  format is rejected. See [UPGRADING.md](UPGRADING.md).
+- **AuraDB:** 0.4.0
+- **Storage format:** v2 (commit-timestamped MVCC version chains), unchanged in
+  v0.4.0. A v1 (≤ 0.2.x) data directory is migrated to v2 transparently on first
+  open; an unknown future format is rejected. See [UPGRADING.md](UPGRADING.md).
 - **Aura Wire Protocol:** AWP 1 (44-byte framed header, CRC32-checked, JSON
-  payloads). See [PROTOCOL.md](PROTOCOL.md).
+  payloads), unchanged in v0.4.0. The cluster health section and `not_leader` error
+  code are additive. See [PROTOCOL.md](PROTOCOL.md).
 - **Aura Connector (tested):** 0.3.x
+- **Cluster mode:** optional, off by default (v0.4.0). Single-node cluster only;
+  multi-node deployment is experimental and rejected at startup. See
+  [CLUSTERING.md](CLUSTERING.md).
 
 ## Required connector features
 

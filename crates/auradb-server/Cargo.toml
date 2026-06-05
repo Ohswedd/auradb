@@ -13,6 +13,9 @@ auradb-core = { workspace = true }
 auradb-protocol = { workspace = true }
 auradb-observability = { workspace = true }
 auradb = { workspace = true }
+auradb-cluster = { workspace = true }
+auradb-raft = { workspace = true }
+auradb-replication = { workspace = true }
 tokio = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }

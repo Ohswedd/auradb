@@ -105,6 +105,10 @@ pub struct Config {
     /// MVCC / version garbage-collection configuration.
     #[serde(default)]
     pub mvcc: MvccConfig,
+    /// Cluster (Raft) configuration. Disabled by default; when disabled the
+    /// server behaves exactly as the single-node engine.
+    #[serde(default)]
+    pub cluster: auradb_cluster::ClusterConfig,
 }
 
 /// MVCC version garbage-collection configuration (`[mvcc]`).
@@ -178,6 +182,7 @@ impl Default for Config {
             tls: TlsConfig::default(),
             auth: AuthConfig::default(),
             mvcc: MvccConfig::default(),
+            cluster: auradb_cluster::ClusterConfig::default(),
         }
     }
 }
@@ -260,6 +265,7 @@ impl Config {
 
         self.validate_auth()?;
         self.validate_tls(check_files)?;
+        self.validate_cluster()?;
 
         if self.is_public_bind() && !self.auth.enabled && !self.allow_insecure_bind {
             return Err(Error::Config(format!(
@@ -287,6 +293,37 @@ impl Config {
             )
         })?;
         crate::auth::validate_hash(hash)?;
+        Ok(())
+    }
+
+    fn validate_cluster(&self) -> Result<()> {
+        // A disabled cluster section is inert; never affects single-node behavior.
+        if !self.cluster.enabled {
+            return Ok(());
+        }
+        self.cluster
+            .validate()
+            .map_err(|e| Error::Config(e.to_string()))?;
+        // Multi-node server deployment is experimental and not enabled in this
+        // release: fail closed rather than appearing to form a cluster.
+        if self.cluster.is_multi_node() {
+            return Err(Error::Config(
+                "multi-node cluster deployment is experimental and not enabled in this release; \
+                 run a single-node cluster (no peers) or disable [cluster]. The Raft and \
+                 replication core is validated by in-process tests; see docs/CLUSTERING.md"
+                    .into(),
+            ));
+        }
+        // Cluster traffic has no authentication story yet: refuse a non-loopback
+        // cluster bind unless the operator explicitly accepts the risk.
+        if !self.cluster.is_loopback() && !self.allow_insecure_bind {
+            return Err(Error::Config(format!(
+                "refusing to bind cluster listen_addr {} to a non-loopback interface: cluster \
+                 transport authentication is not available in this release; bind loopback or pass \
+                 --allow-insecure-bind to override",
+                self.cluster.listen_addr
+            )));
+        }
         Ok(())
     }
 
@@ -445,6 +482,52 @@ token_hash_algorithm = "argon2id"
             ..Config::default()
         };
         c.validate().unwrap();
+    }
+
+    #[test]
+    fn cluster_disabled_by_default() {
+        let c = Config::default();
+        assert!(!c.cluster.enabled);
+        c.validate().unwrap();
+    }
+
+    #[test]
+    fn single_node_cluster_validates() {
+        let c = Config {
+            cluster: auradb_cluster::ClusterConfig::single_node(),
+            ..Config::default()
+        };
+        c.validate().unwrap();
+    }
+
+    #[test]
+    fn multi_node_cluster_fails_closed() {
+        let mut cluster = auradb_cluster::ClusterConfig::single_node();
+        cluster.peers = vec!["10.0.0.2:7172".into()];
+        let c = Config {
+            cluster,
+            ..Config::default()
+        };
+        let err = c.validate().unwrap_err();
+        assert!(err.to_string().contains("experimental"));
+    }
+
+    #[test]
+    fn public_cluster_bind_requires_override() {
+        let mut cluster = auradb_cluster::ClusterConfig::single_node();
+        cluster.listen_addr = "0.0.0.0:7172".into();
+        cluster.advertise_addr = "0.0.0.0:7172".into();
+        let c = Config {
+            cluster: cluster.clone(),
+            ..Config::default()
+        };
+        assert!(c.validate().is_err());
+        let ok = Config {
+            cluster,
+            allow_insecure_bind: true,
+            ..Config::default()
+        };
+        ok.validate().unwrap();
     }
 
     #[test]

@@ -464,6 +464,7 @@ fn error_from_payload(p: ErrorPayload) -> Error {
         ErrorCode::NotFound => Error::NotFound(p.message),
         ErrorCode::SchemaViolation => Error::SchemaViolation(p.message),
         ErrorCode::Unsupported => Error::unsupported(p.message),
+        ErrorCode::NotLeader => Error::NotLeader(p.message),
         ErrorCode::Unauthenticated => Error::Unauthenticated(p.message),
         ErrorCode::InvalidCredentials => Error::InvalidCredentials,
         ErrorCode::InvalidRequest => Error::InvalidRequest(p.message),

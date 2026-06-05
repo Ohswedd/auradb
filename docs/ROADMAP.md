@@ -4,7 +4,48 @@ This roadmap describes where AuraDB is headed beyond the first single-node
 release. It is a statement of direction, not a delivery commitment. Items are
 grouped by theme and listed roughly in the order we expect to approach them.
 
-## Current release: 0.3.1
+## Current release: 0.4.0
+
+AuraDB 0.4.0 adds the **Replication and Raft groundwork**: an optional cluster
+mode built on a durable, deterministic Raft consensus core, a replicated command
+model that orders commits through the Raft log, and a versioned snapshot boundary.
+The recommended production path remains **single-node, non-cluster mode**, which
+is the default and is byte-for-byte unchanged from v0.3.1. When cluster mode is
+enabled with no peers, the node runs as a real, durable single-node cluster (which
+provides no fault tolerance). Multi-node server deployment is **experimental and
+not enabled** in this release — configuring peers is rejected at startup, and the
+consensus core is validated through deterministic in-process tests. The Aura Wire
+Protocol is unchanged at AWP 1 (the cluster health field and `not_leader` error
+code are additive), so Aura Connector 0.3.x remains fully compatible.
+
+## Delivered in 0.4.0
+
+- `auradb-cluster`: durable node/cluster identity (`node.json` / `cluster.json`,
+  versioned and fail-closed on unknown future formats), the `[cluster]` config
+  table, node role, and cluster status.
+- `auradb-raft`: a durable, CRC32-checksummed Raft log (no-gap / no-term-regression
+  invariants, torn-tail truncation, fail-closed on corruption) and a tick-driven,
+  deterministic consensus state machine (election, replication, log repair, commit
+  advancement) with a deterministic in-process multi-node simulation harness.
+- `auradb-replication`: the `ReplicatedCommand` model and its versioned encoding,
+  an idempotent apply path (the MVCC commit timestamp equals the Raft log index),
+  restart replay of committed-but-unapplied entries, and a versioned snapshot
+  boundary (create/restore of a portable logical dump).
+- Engine integration: an optional replicated log attached in cluster mode; the
+  default (disabled) write path is unchanged. Leader-only writes with an additive
+  `not_leader` error code.
+- Server: a `[cluster]` config table (disabled by default; single-node cluster when
+  enabled with no peers; peers rejected at startup; non-loopback cluster bind
+  rejected without `--allow-insecure-bind`) and an additive `cluster` health
+  section.
+- CLI: `auradb cluster init|status|peers|doctor|bootstrap`, plus cluster fields in
+  `auradb status --json` and `auradb doctor`.
+- Prometheus Raft/replication metrics.
+
+See [CLUSTERING.md](CLUSTERING.md), [RAFT.md](RAFT.md), and
+[REPLICATION.md](REPLICATION.md).
+
+## Previous release: 0.3.1
 
 AuraDB 0.3.1 is a stabilization release for the MVCC and planner behavior shipped
 in 0.3.0. It hardens the transaction lifecycle (an active transaction registry,
@@ -117,12 +158,21 @@ Enforced TLS and enforced static-token authentication ship in 0.2.0.
 
 ## Distribution
 
-- Replication and failover.
-- Clustering and sharding with a consensus protocol such as Raft.
-- Multi-region deployment.
+The Raft and replication **groundwork** ships in 0.4.0 (see *Delivered in 0.4.0*):
+a durable consensus core, a replicated commit path, single-node cluster mode, and
+a snapshot boundary. The following remain **future** and are not present in 0.4.0:
 
-These distributed capabilities are explicitly not present in any 0.2.x or 0.3.x
-release, have not been started, and are not implied by any current documentation.
+- Multi-node server deployment with an authenticated cluster transport (configuring
+  peers is rejected at startup in 0.4.0).
+- Automatic failover.
+- Cluster membership changes / joint consensus (`join` / `leave` / `step-down`).
+- Streaming snapshot shipping between nodes (only the snapshot boundary is defined
+  in 0.4.0).
+- Linearizable reads and follower reads.
+- Sharding and multi-region deployment.
+
+These multi-node distributed capabilities are explicitly not present in any 0.2.x,
+0.3.x, or 0.4.0 release and are not implied by any current documentation.
 
 ## Data services
 

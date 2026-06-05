@@ -80,3 +80,21 @@ while the machine is compiling or otherwise busy are not comparable. The committ
 (`cargo run --release -p auradb-cli -- bench --json --output …`) so it is
 methodologically comparable to `v0.3.0.json`. Regenerate it on your own hardware
 before using it as a local reference.
+
+## Cluster and replication benchmarks (v0.4.0)
+
+v0.4.0 adds benchmarks for the new groundwork: the Raft log append/commit path,
+the replicated write path, and cluster-status reporting. These measure the
+write-path overhead that single-node cluster mode adds over the default direct
+path, and they establish a **v0.4.0 baseline** alongside the existing categories.
+The default (non-cluster) write path is unchanged from v0.3.1.
+
+Capture and compare a v0.4.0 baseline the same way as prior releases:
+
+```bash
+cargo run --release -p auradb-cli -- bench --json --output benches/baseline/v0.4.0.json
+auradb bench compare --baseline benches/baseline/v0.3.1.json --current benches/baseline/v0.4.0.json
+```
+
+Benchmark numbers are hardware- and load-sensitive; regenerate the baseline on your
+own quiescent machine before using it as a local reference.

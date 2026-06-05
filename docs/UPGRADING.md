@@ -1,5 +1,37 @@
 # Upgrading
 
+## From v0.3.1 to v0.4.0
+
+v0.4.0 is a drop-in binary replacement. The on-disk **storage format is unchanged
+at v2**, so a v0.3.1 data directory opens directly with no migration. Stop the old
+server, install v0.4.0, and start it against the same data directory.
+
+v0.4.0 adds optional **cluster (Raft) mode**, which is **off by default**. If you
+do nothing, the engine uses the same single-node direct write path as v0.3.1 —
+byte for byte — and nothing about your deployment changes.
+
+What is new and how it affects an upgrade:
+
+- The `[cluster]` configuration table is added, `enabled = false` by default. A
+  disabled `[cluster]` table is inert and never affects single-node behavior.
+- Enabling a single-node cluster (`[cluster] enabled = true`, no peers) on an
+  upgraded data directory works: on first start the node creates its cluster/node
+  identity under `<data_dir>/cluster/`, elects itself leader, and orders subsequent
+  commits through the durable Raft log. Existing data is read normally. Note that a
+  single-node cluster provides no fault tolerance.
+- Multi-node deployment is experimental and not enabled: configuring `peers` is
+  rejected at startup, and a non-loopback cluster bind is rejected without
+  `--allow-insecure-bind`.
+- The health report and `auradb status` gain an additive `cluster` section, and a
+  new `not_leader` error code is additive. The Aura Wire Protocol is unchanged at
+  AWP 1, so Aura Connector 0.3.x stays compatible — no connector release is
+  required.
+
+**Downgrade.** v0.3.1 and v0.4.0 share storage format v2, so a v0.4.0 data
+directory whose cluster mode was never enabled can be reopened by v0.3.1. The
+`cluster/` directory is ignored by a non-cluster build. As always, back up the
+data directory before changing versions. See [CLUSTERING.md](CLUSTERING.md).
+
 ## From v0.3.0 to v0.3.1
 
 v0.3.1 is a drop-in binary replacement. The on-disk **storage format is unchanged

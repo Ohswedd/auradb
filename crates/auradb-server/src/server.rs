@@ -51,12 +51,24 @@ impl Server {
             config.cursor_timeout_secs,
         )));
         let metrics = Arc::new(Metrics::new());
+
+        // When cluster mode is enabled, bootstrap a durable single-node Raft
+        // deployment and route the engine's writes through it. (Multi-node
+        // deployment is rejected during config validation above, so reaching here
+        // with cluster mode on always means a single-node cluster.)
+        let cluster = if config.cluster.enabled {
+            Some(build_cluster_node(&engine, &config)?)
+        } else {
+            None
+        };
+
         let ctx = ServerContext {
             engine,
             metrics,
             cursors,
             config: Arc::new(config),
             connection_counter: Arc::new(std::sync::atomic::AtomicU64::new(1)),
+            cluster,
         };
         Ok(Server { ctx, tls })
     }
@@ -71,9 +83,15 @@ impl Server {
         &self.ctx
     }
 
-    /// A snapshot of current metrics.
+    /// A snapshot of current metrics (refreshing cluster gauges first).
     pub fn metrics_snapshot(&self) -> MetricsSnapshot {
+        self.ctx.refresh_cluster_metrics();
         self.ctx.metrics.snapshot()
+    }
+
+    /// The cluster status snapshot, when cluster mode is enabled.
+    pub fn cluster_status(&self) -> Option<auradb_cluster::ClusterStatus> {
+        self.ctx.cluster.as_ref().map(|c| c.status())
     }
 
     /// Bind to the configured address and serve until `shutdown` resolves.
@@ -143,6 +161,54 @@ impl Server {
             });
         }
     }
+}
+
+/// Bootstrap (or recover) the single-node cluster coordinator and route the
+/// engine's writes through it. Identity is created on first run and reused
+/// afterwards; a config-pinned id that conflicts with persisted identity fails
+/// closed.
+fn build_cluster_node(
+    engine: &Engine,
+    config: &Config,
+) -> Result<Arc<auradb_replication::ClusterNode>> {
+    use auradb_core::Error;
+
+    let version = env!("CARGO_PKG_VERSION");
+    let store = auradb_cluster::ClusterStore::new(&config.data_dir);
+    let pinned_node = parse_opt::<auradb_cluster::NodeId>(&config.cluster.node_id, "node_id")?;
+    let pinned_cluster =
+        parse_opt::<auradb_cluster::ClusterId>(&config.cluster.cluster_id, "cluster_id")?;
+    let identity = store
+        .init(pinned_node, pinned_cluster, version)
+        .map_err(|e| Error::Config(e.to_string()))?;
+    let node = auradb_replication::ClusterNode::bootstrap(
+        engine.clone(),
+        identity,
+        config.cluster.clone(),
+        store.dir(),
+    )
+    .map_err(|e| Error::Internal(format!("cluster bootstrap failed: {e}")))?;
+    engine.attach_replicated_log(node.write_log());
+    tracing::info!(
+        node_id = %node.identity().node_id(),
+        cluster_id = %node.identity().cluster_id(),
+        "single-node cluster mode enabled; writes are routed through the Raft log"
+    );
+    Ok(Arc::new(node))
+}
+
+fn parse_opt<T: std::str::FromStr>(value: &str, field: &str) -> Result<Option<T>>
+where
+    T::Err: std::fmt::Display,
+{
+    if value.trim().is_empty() {
+        return Ok(None);
+    }
+    value
+        .trim()
+        .parse::<T>()
+        .map(Some)
+        .map_err(|e| auradb_core::Error::Config(format!("invalid cluster.{field}: {e}")))
 }
 
 fn spawn_reaper(ctx: ServerContext) -> tokio::task::JoinHandle<()> {

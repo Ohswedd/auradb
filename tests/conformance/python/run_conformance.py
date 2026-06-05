@@ -255,6 +255,27 @@ def health(c):
 
 
 @scenario
+def cluster_health_shape(c):
+    # The cluster health section is additive and present only in cluster mode.
+    # When present (single-node cluster server), validate its honest shape; when
+    # absent (the recommended non-cluster server), the scenario is a no-op. This
+    # keeps the suite green against both deployment modes while exercising the
+    # additive field over the wire.
+    report = c.health()
+    cluster = report.get("cluster")
+    if cluster is None:
+        return
+    assert cluster["enabled"] is True
+    assert cluster["role"] in ("leader", "follower", "candidate")
+    assert isinstance(cluster["term"], int)
+    assert isinstance(cluster["commit_index"], int)
+    assert isinstance(cluster["applied_index"], int)
+    # A single-node cluster has no peers and its applied index never exceeds
+    # what has been committed.
+    assert cluster["applied_index"] <= cluster["commit_index"]
+
+
+@scenario
 def schema_create(c):
     c.create_schema(USER_SCHEMA)
     c.create_schema(DOC_SCHEMA)

@@ -18,12 +18,36 @@ auradb-query       Query IR + executor + EXPLAIN + migration estimate
     │
 auradb             Engine: composes storage + index + txn + query + schema
     │
+auradb-cluster     cluster/node identity, [cluster] config, role, status
+auradb-raft        durable Raft log + deterministic consensus state machine
+auradb-replication replicated command model, apply path, snapshot boundary
+    │
 auradb-observability   tracing, metrics, health/readiness
 auradb-server      TCP listener, dispatch, server-side cursors, config
     │
 auradb-cli         operator CLI
 auradb-conformance protocol client + conformance scenarios (test crate)
 ```
+
+## Cluster mode (v0.4.0)
+
+v0.4.0 adds optional cluster mode on top of the engine. Three crates form the
+replication groundwork:
+
+- `auradb-cluster` owns durable cluster/node identity, the `[cluster]` config
+  table, role, and status.
+- `auradb-raft` provides a durable, checksummed Raft log and a deterministic
+  consensus state machine.
+- `auradb-replication` maps database mutations onto the Raft log, applies
+  committed commands idempotently, and defines the snapshot boundary.
+
+When cluster mode is enabled, the engine attaches a replicated log and routes
+data-plane commits through it (the commit timestamp equals the Raft log index).
+When cluster mode is **disabled — the default — the write path is byte-for-byte
+the v0.3.1 direct path and these crates are inert.** Multi-node server deployment
+is experimental and not enabled in this release. See
+[CLUSTERING.md](CLUSTERING.md), [RAFT.md](RAFT.md), and
+[REPLICATION.md](REPLICATION.md).
 
 ## Request lifecycle
 

@@ -316,3 +316,89 @@ async fn oversized_payload_rejected_by_server() {
     assert!(!buf.is_empty(), "expected an error frame");
     shutdown.notify_one();
 }
+
+/// Single-node cluster mode wires the engine's writes through the Raft log and
+/// surfaces honest cluster state in status, health, and metrics.
+#[test]
+fn single_node_cluster_server_commits_and_reports() {
+    use auradb::core::{CollectionSchema, Document, FieldDef, FieldType, Value};
+    use auradb_cluster::{ClusterConfig, NodeRole};
+
+    let dir = tempfile::tempdir().unwrap();
+    let server = Server::open(Config {
+        data_dir: dir.path().to_path_buf(),
+        cluster: ClusterConfig::single_node(),
+        ..Config::default()
+    })
+    .unwrap();
+    let ctx = server.context();
+
+    // The server elected itself leader and reports cluster state.
+    let status = server.cluster_status().expect("cluster mode is enabled");
+    assert!(status.enabled);
+    assert_eq!(status.role, NodeRole::Leader);
+    assert!(status.node_id.is_some());
+    assert!(status.cluster_id.is_some());
+
+    // A write routes through the Raft log and is visible.
+    ctx.engine
+        .create_schema(
+            CollectionSchema::new("C")
+                .with_field(FieldDef {
+                    name: "id".into(),
+                    field_type: FieldType::Int,
+                    primary_key: true,
+                    unique: true,
+                    nullable: false,
+                    indexed: false,
+                })
+                .with_field(FieldDef::new("v", FieldType::Int)),
+        )
+        .unwrap();
+    let mut r = Document::new();
+    r.insert("id".into(), Value::Int(1));
+    r.insert("v".into(), Value::Int(10));
+    ctx.engine
+        .apply_mutation(auradb::query::Mutation::Insert {
+            collection: "C".into(),
+            fields: r,
+        })
+        .unwrap();
+    assert_eq!(
+        ctx.engine
+            .find(&auradb::query::FindQuery::new("C"))
+            .unwrap()
+            .len(),
+        1
+    );
+
+    // Status advanced past the election no-op + the committed write.
+    let status = server.cluster_status().unwrap();
+    assert!(status.commit_index >= 2);
+
+    // Metrics reflect cluster mode and leadership.
+    let metrics = server.metrics_snapshot();
+    assert_eq!(metrics.cluster_enabled, 1);
+    assert_eq!(metrics.node_role, 2); // leader
+    assert!(metrics.raft_commit_index >= 2);
+}
+
+/// Configuring peers is rejected at startup: multi-node deployment is
+/// experimental and fails closed in this release.
+#[test]
+fn multi_node_cluster_server_fails_closed() {
+    use auradb_cluster::ClusterConfig;
+
+    let dir = tempfile::tempdir().unwrap();
+    let mut cluster = ClusterConfig::single_node();
+    cluster.peers = vec!["10.0.0.2:7172".into()];
+    let result = Server::open(Config {
+        data_dir: dir.path().to_path_buf(),
+        cluster,
+        ..Config::default()
+    });
+    assert!(
+        result.is_err(),
+        "multi-node server startup must fail closed"
+    );
+}

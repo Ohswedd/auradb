@@ -31,6 +31,62 @@ pub struct ServerContext {
     /// Monotonic source of per-connection ids, recorded against transactions
     /// for observability and connection-scoped cleanup.
     pub connection_counter: Arc<std::sync::atomic::AtomicU64>,
+    /// The single-node cluster coordinator, present only when cluster mode is
+    /// enabled. Drives the Raft write path and reports cluster status.
+    pub cluster: Option<Arc<auradb_replication::ClusterNode>>,
+}
+
+impl ServerContext {
+    /// Mirror the live cluster/Raft state into the metrics registry so an
+    /// exported snapshot reflects current consensus state. A no-op when cluster
+    /// mode is disabled.
+    pub fn refresh_cluster_metrics(&self) {
+        let Some(node) = self.cluster.as_ref() else {
+            return;
+        };
+        let status = node.status();
+        let m = node.metrics();
+        let role_code = match status.role {
+            auradb_cluster::NodeRole::Follower => 0,
+            auradb_cluster::NodeRole::Candidate => 1,
+            auradb_cluster::NodeRole::Leader => 2,
+        };
+        self.metrics.set_cluster(
+            status.enabled,
+            role_code,
+            status.term,
+            status.commit_index,
+            status.applied_index,
+            status.last_log_index,
+            status.replication_lag_entries(),
+            m.leader_changes,
+            m.votes_granted,
+            m.append_entries_sent,
+            m.append_entries_received,
+            m.apply_errors,
+        );
+    }
+}
+
+/// Build the cluster health summary for a health/status report, or `None` when
+/// cluster mode is disabled.
+pub fn cluster_health(ctx: &ServerContext) -> Option<auradb_protocol::ClusterHealth> {
+    let node = ctx.cluster.as_ref()?;
+    let status = node.status();
+    Some(auradb_protocol::ClusterHealth {
+        enabled: status.enabled,
+        node_id: status.node_id.map(|id| id.to_string()),
+        cluster_id: status.cluster_id.map(|id| id.to_string()),
+        role: status.role.to_string(),
+        term: status.term,
+        leader_id: status.leader_id.map(|id| id.to_string()),
+        commit_index: status.commit_index,
+        applied_index: status.applied_index,
+        last_log_index: status.last_log_index,
+        peer_count: status.peer_count,
+        single_node: status.single_node,
+        replication_lag_entries: status.replication_lag_entries(),
+    })
 }
 
 /// Per-connection mutable state.
@@ -212,6 +268,7 @@ fn handle(ctx: &ServerContext, session: &mut Session, frame: &Frame) -> Result<F
                     transaction_timeout_secs: ctx.config.mvcc.transaction_timeout_secs,
                     gc_enabled: ctx.config.mvcc.gc_enabled,
                 }),
+                cluster: cluster_health(ctx),
             };
             Frame::json(Opcode::HealthResult, frame.request_id, 0, &report)
         }

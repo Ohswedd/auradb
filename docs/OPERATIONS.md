@@ -96,6 +96,36 @@ Properties that hold across GC:
   one version per live record.
 - Restoring then running GC is safe and idempotent.
 
+Backup and restore are **unaffected by cluster mode**: `dump` and `restore`
+operate on the engine's visible state and behave identically whether cluster mode
+is on or off.
+
+## Single-node cluster mode (v0.4.0)
+
+Cluster mode is opt-in and **off by default**; the recommended production path
+remains single-node, non-cluster mode. To run a single-node cluster — every commit
+ordered through a durable Raft log and replayed on restart — enable `[cluster]`
+with no peers:
+
+```bash
+# Validate the configuration offline first.
+auradb config validate --config examples/auradb.cluster.local.toml
+
+# Create node and cluster identity for a data directory.
+auradb cluster init --data-dir /data
+
+# Inspect identity and configuration without standing up a node.
+auradb cluster status --data-dir /data --json
+auradb cluster doctor --data-dir /data
+```
+
+`auradb cluster doctor` validates the `[cluster]` configuration and on-disk
+identity offline and is the first stop when a cluster node refuses to start. A
+single-node cluster provides **no fault tolerance** (same availability as a single
+non-cluster node) and adds write-path overhead. Multi-node deployment is
+experimental and disabled in this release: configuring peers is rejected at
+startup. See [CLUSTERING.md](CLUSTERING.md) and [CLI.md](CLI.md).
+
 ## Upgrading
 
 Upgrading is a drop-in binary replacement; the storage format is unchanged at v2.

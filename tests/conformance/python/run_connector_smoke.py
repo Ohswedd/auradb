@@ -104,6 +104,20 @@ async def run(addr: str, token: str | None, tls_ca: str | None, server_name: str
                 check("read_your_writes", bool(visible))
         check("transaction_commit", await client.query(Note).where(Note.id == "n4").exists())
 
+        # Forward-compatibility: the published 0.3.x connector must safely handle
+        # a v0.4.0 server's health frame, which carries an additive `cluster`
+        # section in cluster mode. The connector either ignores the unknown field
+        # or surfaces it; either way `health()` must succeed and stay usable. This
+        # passes against both a non-cluster server (no cluster field) and a
+        # single-node cluster server (cluster field present).
+        if hasattr(client, "health"):
+            health = await client.health()
+            check(
+                "health_with_additive_cluster_field",
+                isinstance(health, dict) and "status" in health,
+                f"unexpected health shape: {type(health).__name__}",
+            )
+
     # Reconnect: data persisted across the closed connection.
     async with connect(dsn, models=[Note], **options) as client2:
         check("close_and_reconnect", await client2.query(Note).count() == 4)

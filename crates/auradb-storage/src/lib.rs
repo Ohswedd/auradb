@@ -313,6 +313,43 @@ impl Storage {
         Ok(commit_ts)
     }
 
+    /// Apply a batch that has already been ordered and committed by an external
+    /// log (Raft), stamping every op with the caller-provided `commit_ts`.
+    ///
+    /// Unlike [`Storage::commit_batch`], this does **not** allocate a timestamp:
+    /// the replication layer uses the committed log index as the commit
+    /// timestamp so that every replica derives identical, monotonic MVCC
+    /// timestamps from the same ordered log. The operation is **idempotent**: if
+    /// `commit_ts` is not greater than the current watermark the batch is treated
+    /// as already applied and ignored, which makes crash-recovery replay safe.
+    ///
+    /// `commit_ts` must be strictly greater than the current watermark (a gap is
+    /// allowed — log entries that produce no batch, such as no-ops, simply skip
+    /// timestamps); a regression is rejected as corruption.
+    pub fn apply_committed_batch(&mut self, mut batch: Batch, commit_ts: u64) -> Result<()> {
+        if commit_ts <= self.last_commit_ts {
+            // Already durable from an earlier apply; replay is a no-op.
+            return Ok(());
+        }
+        if batch.ops.is_empty() {
+            self.last_commit_ts = commit_ts;
+            return Ok(());
+        }
+        for op in &mut batch.ops {
+            op.set_commit_ts(commit_ts);
+        }
+        let bytes = batch.encode();
+        self.active_file.write_all(&bytes)?;
+        self.active_file.flush()?;
+        if self.options.sync_on_commit {
+            self.active_file.sync_all()?;
+        }
+        self.max_txn_id = self.max_txn_id.max(batch.txn_id.get());
+        self.last_commit_ts = commit_ts;
+        apply_batch(&mut self.records, batch);
+        Ok(())
+    }
+
     /// Put a single record under an auto-commit batch. Returns its commit ts.
     pub fn put(&mut self, record: Record) -> Result<u64> {
         self.commit_batch(Batch {
@@ -674,6 +711,60 @@ mod tests {
             .get(&CollectionId::new("C"), RecordId::from_u128(1))
             .unwrap();
         assert_eq!(got.get("v"), Some(&Value::Int(10)));
+    }
+
+    #[test]
+    fn apply_committed_batch_is_idempotent() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut s = Storage::open(dir.path()).unwrap();
+        let batch = Batch {
+            txn_id: TxnId(1),
+            ops: vec![LogOp::Put {
+                commit_ts: 0,
+                record: rec(1, 10),
+            }],
+        };
+        // Apply at log index 5 (gaps from skipped no-op entries are allowed).
+        s.apply_committed_batch(batch.clone(), 5).unwrap();
+        assert_eq!(s.commit_watermark(), 5);
+        let v1 = s
+            .latest_commit_ts(&CollectionId::new("C"), RecordId::from_u128(1))
+            .unwrap();
+        assert_eq!(v1, 5);
+        // Replaying the same committed index is a no-op: no duplicate version.
+        s.apply_committed_batch(batch, 5).unwrap();
+        assert_eq!(s.commit_watermark(), 5);
+        assert_eq!(
+            s.latest_commit_ts(&CollectionId::new("C"), RecordId::from_u128(1)),
+            Some(5)
+        );
+    }
+
+    #[test]
+    fn apply_committed_batch_survives_restart() {
+        let dir = tempfile::tempdir().unwrap();
+        {
+            let mut s = Storage::open(dir.path()).unwrap();
+            s.apply_committed_batch(
+                Batch {
+                    txn_id: TxnId(1),
+                    ops: vec![LogOp::Put {
+                        commit_ts: 0,
+                        record: rec(7, 70),
+                    }],
+                },
+                3,
+            )
+            .unwrap();
+        }
+        let s = Storage::open(dir.path()).unwrap();
+        assert_eq!(s.commit_watermark(), 3);
+        assert_eq!(
+            s.get(&CollectionId::new("C"), RecordId::from_u128(7))
+                .unwrap()
+                .get("v"),
+            Some(&Value::Int(70))
+        );
     }
 
     #[test]
