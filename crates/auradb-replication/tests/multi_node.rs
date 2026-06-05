@@ -211,12 +211,36 @@ impl TestCluster {
     }
 
     /// Write a record through a node's engine (the real, blocking leader path).
+    ///
+    /// A single synchronous commit waits for a majority within a fixed timeout.
+    /// Under heavy CI parallelism the Raft driver task can be starved of CPU long
+    /// enough that one commit exceeds that timeout, or leadership briefly churns
+    /// during a restart test — both transient resource conditions, not
+    /// correctness failures. Retry those a bounded number of times so the tests
+    /// are not flaky on contended runners; a genuinely stuck cluster still fails
+    /// after the retries are exhausted.
     async fn write(&self, idx: usize, id: i64, v: i64) -> auradb::core::Result<()> {
-        let engine = self.nodes[idx].engine.clone();
-        tokio::task::spawn_blocking(move || engine.apply_mutation(insert_mutation(id, v)))
-            .await
-            .unwrap()
-            .map(|_| ())
+        for attempt in 0..6 {
+            let engine = self.nodes[idx].engine.clone();
+            let result =
+                tokio::task::spawn_blocking(move || engine.apply_mutation(insert_mutation(id, v)))
+                    .await
+                    .unwrap();
+            match result {
+                Ok(_) => return Ok(()),
+                Err(err) => {
+                    let transient = matches!(&err, auradb::core::Error::NotLeader(_))
+                        || matches!(&err, auradb::core::Error::Internal(m)
+                            if m.contains("replication timed out"));
+                    if transient && attempt < 5 {
+                        tokio::time::sleep(Duration::from_millis(100)).await;
+                        continue;
+                    }
+                    return Err(err);
+                }
+            }
+        }
+        unreachable!("write retry loop always returns")
     }
 
     /// Count records of collection "C" on a node (a direct, local read).

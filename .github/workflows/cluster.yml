@@ -43,7 +43,11 @@ jobs:
         run: cargo test -p auradb-replication transport
 
       - name: Cross-process Raft + replication (real TCP sockets)
-        run: cargo test -p auradb-replication --test multi_node
+        # Run serially: these are heavy process-level cluster tests (each spawns a
+        # multi-threaded runtime and Raft driver tasks). Running them in parallel
+        # on a few-core runner can starve a cluster's driver enough to exceed a
+        # commit timeout, so serialize them for a stable signal.
+        run: cargo test -p auradb-replication --test multi_node -- --test-threads=1
 
       - name: Long-running cluster tests (manual)
         # The heaviest variants (e.g. 1,000-entry follower catch-up) are

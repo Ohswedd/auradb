@@ -51,7 +51,16 @@ jobs:
         # replication tests over real TCP sockets, the server-level multi-node AWP
         # routing tests, and the live cluster CLI tests. A dedicated cluster.yml
         # workflow runs the multi-node integration suites in isolation as well.
-        run: cargo test --workspace --all-features
+        #
+        # Integration tests run serially (--test-threads=1): the process-level
+        # multi-node cluster tests spawn real servers on reserved loopback ports
+        # and multi-threaded Raft runtimes, so running them in parallel on a
+        # few-core runner can race on port reservation or starve a cluster's
+        # driver. Unit and doc tests still run in parallel.
+        run: |
+          cargo test --workspace --all-features --lib --bins
+          cargo test --workspace --all-features --doc
+          cargo test --workspace --all-features --tests -- --test-threads=1
 
       - name: Build
         run: cargo build --workspace --all-features
