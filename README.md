@@ -7,7 +7,7 @@
 [![CI](https://github.com/Ohswedd/auradb/actions/workflows/ci.yml/badge.svg)](https://github.com/Ohswedd/auradb/actions/workflows/ci.yml)
 [![Security](https://github.com/Ohswedd/auradb/actions/workflows/security.yml/badge.svg)](https://github.com/Ohswedd/auradb/actions/workflows/security.yml)
 [![Docker](https://github.com/Ohswedd/auradb/actions/workflows/docker.yml/badge.svg)](https://github.com/Ohswedd/auradb/actions/workflows/docker.yml)
-[![Release](https://img.shields.io/badge/release-v0.3.1-green.svg)](CHANGELOG.md)
+[![Release](https://img.shields.io/badge/release-v0.4.0-green.svg)](CHANGELOG.md)
 [![Rust](https://img.shields.io/badge/rust-1.85%2B-orange.svg)](https://www.rust-lang.org)
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
 
@@ -30,20 +30,26 @@ demo.
 
 ## Scope and honesty
 
-AuraDB 0.3.1 is a stabilization release on top of the 0.3.0 MVCC and query-planner
-foundations: each record keeps a chain of committed versions, transactions read
-from a snapshot pinned at `begin`, and read queries route through a cost-based
-planner with `EXPLAIN ANALYZE`. v0.3.1 hardens the transaction lifecycle (a
-transaction timeout and an abandoned-transaction reaper so a long-lived or
-abandoned transaction can no longer pin versions forever without visibility),
-strengthens version garbage collection, and surfaces MVCC pressure through metrics,
-`status`, and `doctor` warnings. It preserves all v0.3.0 behavior for
-non-transactional reads. AuraDB implements single-node snapshot isolation
-with optimistic write conflict detection. It is not serializable isolation. It is
-a complete single-node server, and it is honest about its boundaries. The
-following are not implemented and not claimed: distributed clustering, replication,
-sharding, failover, multi-region, and Raft; approximate (ANN/HNSW) vector indexes;
-BM25 full-text and hybrid fusion ranking; and serializable isolation.
+AuraDB 0.4.0 adds the replication and Raft foundation for future clustered
+deployments, on top of the 0.3.x MVCC and query-planner foundations: each record
+keeps a chain of committed versions, transactions read from a snapshot pinned at
+`begin`, and read queries route through a cost-based planner with `EXPLAIN
+ANALYZE`. **Single-node mode remains the recommended production path.** v0.4.0
+introduces stable node and cluster identity, a durable Raft log, a deterministic
+Raft state machine, a leader-only write path with a structured `not_leader`
+error, an idempotent replicated apply path, a snapshot boundary, and cluster
+CLI/metrics/status — all validated by tests. When cluster mode is disabled (the
+default), every v0.3.1 behavior is preserved byte-for-byte. AuraDB implements
+single-node snapshot isolation with optimistic write conflict detection. It is
+not serializable isolation. It is honest about its boundaries. Multi-node
+clustering is **experimental**: the Raft and replication core is exercised by
+deterministic in-process tests, but cross-process multi-node server deployment is
+not enabled in this release (configuring peers is rejected at startup), and a
+single-node cluster provides no fault tolerance. The following are not
+implemented and not claimed: production multi-node clustering, automatic
+failover, linearizable reads, distributed transactions, sharding, multi-region;
+approximate (ANN/HNSW) vector indexes; BM25 full-text and hybrid fusion ranking;
+and serializable isolation.
 Authentication and TLS are now implemented and enforced
 when enabled, but RBAC, field-level encryption, encryption at rest, and audit
 logging are not. Unsupported operations return a structured error. See
@@ -121,9 +127,36 @@ and [`docs/COMPATIBILITY.md`](docs/COMPATIBILITY.md).
   artifacts, a benchmark baseline ([`docs/BENCHMARKS.md`](docs/BENCHMARKS.md)),
   and CI.
 
+## New in 0.4.0: replication and Raft groundwork
+
+AuraDB 0.4.0 lays the foundation for future clustered deployments. **Single-node
+mode remains the recommended production path.**
+
+- **Stable identity.** `auradb init` creates a persistent node id and cluster id
+  under `<data_dir>/cluster/`.
+- **Durable Raft log + state machine.** A checksummed, crash-safe Raft log and a
+  deterministic follower/candidate/leader state machine (elections, log
+  replication, log repair, commit advancement), validated by deterministic
+  in-process tests — including multi-node consensus.
+- **Single-node cluster mode.** Opt in with `[cluster] enabled = true`. Every
+  write is ordered through a durable local Raft log and replayed on restart; the
+  MVCC commit timestamp is the Raft log index. A single-node cluster has no fault
+  tolerance — it is for exercising the replication path, not for high availability.
+- **Leader-only writes.** Followers reject writes with a structured `not_leader`
+  error and a leader hint.
+- **Snapshot boundary, metrics, and CLI.** A versioned snapshot manifest for
+  future state transfer; Raft/replication metrics; and
+  `auradb cluster init|status|peers|doctor|bootstrap`.
+
+Multi-node clustering is **experimental and not enabled for server deployment**:
+configuring `peers` is rejected at startup. See [`docs/CLUSTERING.md`](docs/CLUSTERING.md),
+[`docs/RAFT.md`](docs/RAFT.md), and [`docs/REPLICATION.md`](docs/REPLICATION.md).
+
 ## What is intentionally not claimed yet
 
-Distributed clustering, replication, sharding, failover, multi-region, and Raft;
+Production multi-node clustering, automatic failover, linearizable reads,
+distributed transactions, sharding, and multi-region (the Raft/replication
+foundation in 0.4.0 is single-node and experimental for multi-node);
 ANN/HNSW vector indexes; BM25 full-text and hybrid fusion ranking; serializable
 isolation; RBAC, field-level encryption, encryption at rest, and audit logging;
 time-travel queries; and change streams. These are tracked in the
@@ -238,7 +271,7 @@ auradb check --data-dir .local/auradb
 auradb gc --data-dir .local/auradb
 auradb stats analyze --data-dir .local/auradb
 auradb stats show --data-dir .local/auradb --json
-auradb bench --json --output benches/baseline/v0.3.1.json
+auradb bench --json --output benches/baseline/v0.4.0.json
 auradb status --addr 127.0.0.1:7171 --json
 auradb auth hash-token --token "your-secret"
 auradb auth rotate-token --config AuraDB.toml --token "new-secret" --backup
@@ -337,7 +370,7 @@ are exposed. No external collector is required to run the server. See
 A published image is available on the GitHub Container Registry:
 
 ```bash
-docker run --rm -p 7171:7171 -v auradb-data:/data ghcr.io/ohswedd/auradb:0.3.1
+docker run --rm -p 7171:7171 -v auradb-data:/data ghcr.io/ohswedd/auradb:0.4.0
 ```
 
 The image runs as a non-root user, exposes `7171`, stores data in the `/data`
@@ -393,7 +426,7 @@ and `EXPLAIN ANALYZE`.
 The CLI also runs a baseline suite and writes a JSON snapshot:
 
 ```bash
-auradb bench --json --output benches/baseline/v0.3.1.json
+auradb bench --json --output benches/baseline/v0.4.0.json
 ```
 
 Benchmarks are hardware-dependent and exist to catch regressions on the same

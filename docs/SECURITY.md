@@ -123,6 +123,23 @@ the environment so no secret is committed. See [DEPLOYMENT.md](DEPLOYMENT.md).
   `--allow-insecure-bind` is passed to `auradb server`. This prevents
   accidentally exposing an unauthenticated server on a public interface.
 
+## Cluster transport (v0.4.0)
+
+Cluster (Raft) mode is disabled by default. When it is enabled, its security
+posture is deliberately conservative in this release:
+
+- **Loopback-only.** The cluster transport is unauthenticated in this release, so
+  a non-loopback cluster `listen_addr` is **rejected at startup** unless
+  `--allow-insecure-bind` is explicitly passed. The default `listen_addr` is
+  `127.0.0.1:7172`.
+- **Multi-node deployment is disabled.** Configuring any `peers` in `[cluster]` is
+  **rejected at server startup (fail closed)**, so the server never forms or joins
+  a multi-node cluster over an unauthenticated channel.
+- **Single-node cluster only.** With cluster mode enabled and no peers, the node
+  is a single-node cluster bound to loopback — it talks to no other process.
+
+See [CLUSTERING.md](CLUSTERING.md).
+
 ## Redaction
 
 `auradb doctor` prints a redacted security summary (bind address, whether the
@@ -157,9 +174,12 @@ or certificate or key material in their output.
 
 AuraDB is single node. The following are not implemented in `0.2.1`:
 role-based access control (RBAC/ABAC), tenant isolation, field-level read/write
-policies, field-level encryption, encryption at rest, and audit logging. There
-is no clustering, replication, sharding, or Raft. The roadmap is in
-[ROADMAP](ROADMAP.md).
+policies, field-level encryption, encryption at rest, and audit logging. The
+recommended production deployment remains single-node. v0.4.0 adds an optional,
+loopback-only single-node cluster mode and the Raft/replication groundwork, but
+multi-node deployment is experimental and disabled (configuring peers is rejected
+at startup), there is no authenticated cluster transport, and there is no
+sharding. The roadmap is in [ROADMAP](ROADMAP.md).
 
 ## Operational guidance
 

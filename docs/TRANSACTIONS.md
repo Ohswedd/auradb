@@ -162,3 +162,16 @@ reaper, GC-progresses-after-timeout, status, metrics — all driven by a
 controllable clock so the tests are deterministic). See
 [OPERATIONS.md](OPERATIONS.md) and the `[mvcc]` section of
 [CONFIGURATION.md](CONFIGURATION.md).
+
+## Cluster mode and commit ordering (v0.4.0)
+
+When cluster mode is enabled, commits are ordered through the Raft log: each
+committed batch is assigned the Raft log index, and that index is used as the MVCC
+commit timestamp. The MVCC commit order is therefore preserved and made
+deterministic across replicas, while remaining monotonic. Single-node snapshot
+isolation, optimistic write-conflict detection, and every other semantic above are
+**unchanged** — cluster mode changes how the commit order is *established*, not the
+isolation model. There are still **no distributed transactions**, and the
+isolation level remains single-node snapshot isolation (not serializable). When
+cluster mode is disabled (the default), commits behave exactly as in v0.3.1. See
+[REPLICATION.md](REPLICATION.md) and [CLUSTERING.md](CLUSTERING.md).

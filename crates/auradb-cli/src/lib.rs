@@ -13,6 +13,12 @@ use auradb::Engine;
 use auradb_server::{Config, Server};
 use serde::{Deserialize, Serialize};
 
+mod cluster;
+pub use cluster::{
+    cluster_metadata_report, cmd_cluster_bootstrap, cmd_cluster_doctor, cmd_cluster_init,
+    cmd_cluster_peers, cmd_cluster_status, ClusterDoctorReport, ClusterMetadataReport,
+};
+
 /// The package version.
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 
@@ -152,6 +158,12 @@ pub fn cmd_init(data_dir: &Path, config_path: &Path) -> Result<()> {
         .with_context(|| format!("creating data dir {}", data_dir.display()))?;
     // Opening the engine initializes the manifest, catalog, and first segment.
     Engine::open(data_dir).context("initializing storage")?;
+    // Create a stable node identity so a node id exists (and persists) even
+    // before cluster mode is enabled. This is inert while `[cluster]` is
+    // disabled, but means enabling cluster mode reuses the same identity.
+    auradb_cluster::ClusterStore::new(data_dir)
+        .init(None, None, VERSION)
+        .context("initializing node identity")?;
     let config = Config {
         data_dir: data_dir.to_path_buf(),
         ..Config::default()
@@ -204,6 +216,14 @@ pub fn cmd_doctor(data_dir: &Path, config: &Config) -> Result<String> {
         }
     }
     report.push_str(&security_summary(config));
+    // Cluster metadata validation: loading rejects an unknown future format.
+    let cluster =
+        cluster_metadata_report(data_dir, config).context("validating cluster metadata")?;
+    report.push_str(&format!("cluster_enabled: {}\n", cluster.enabled));
+    report.push_str(&format!("cluster_initialized: {}\n", cluster.initialized));
+    if let Some(node_id) = &cluster.node_id {
+        report.push_str(&format!("node_id: {node_id}\n"));
+    }
     Ok(report)
 }
 
@@ -326,6 +346,8 @@ pub struct DoctorReport {
     pub warnings: Vec<String>,
     /// The redacted security summary.
     pub security: SecurityReport,
+    /// Cluster metadata and configuration summary.
+    pub cluster: ClusterMetadataReport,
 }
 
 /// MVCC health fields included in the doctor report.
@@ -454,6 +476,8 @@ pub fn cmd_doctor_json(data_dir: &Path, config: &Config) -> Result<String> {
         mvcc,
         warnings,
         security: SecurityReport::from_config(config),
+        cluster: cluster_metadata_report(data_dir, config)
+            .context("validating cluster metadata")?,
     };
     serde_json::to_string_pretty(&report).context("serializing doctor report")
 }
@@ -482,6 +506,9 @@ pub struct StatusReport {
     /// MVCC health and version-pressure summary, when the server reports it.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub mvcc: Option<auradb_protocol::MvccHealth>,
+    /// Cluster / replication summary, when the server runs in cluster mode.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cluster: Option<auradb_protocol::ClusterHealth>,
 }
 
 /// `auradb config validate` - load and validate a config file, failing on any
@@ -829,6 +856,22 @@ pub async fn cmd_status(
             m.gc_enabled,
         ));
     }
+    if let Some(c) = &report.cluster {
+        out.push_str(&format!(
+            "\ncluster_enabled: {}\nnode_id: {}\ncluster_id: {}\nrole: {}\nterm: {}\nleader_id: {}\ncommit_index: {}\napplied_index: {}\nlast_log_index: {}\npeer_count: {}\nreplication_lag_entries: {}",
+            c.enabled,
+            c.node_id.as_deref().unwrap_or("n/a"),
+            c.cluster_id.as_deref().unwrap_or("n/a"),
+            c.role,
+            c.term,
+            c.leader_id.as_deref().unwrap_or("n/a"),
+            c.commit_index,
+            c.applied_index,
+            c.last_log_index,
+            c.peer_count,
+            c.replication_lag_entries,
+        ));
+    }
     Ok(out)
 }
 
@@ -875,6 +918,7 @@ async fn status_report(
         collections: health.collections,
         tls,
         mvcc: health.mvcc,
+        cluster: health.cluster,
     })
 }
 

@@ -24,6 +24,15 @@ The `Metrics` registry tracks:
   `auradb_mvcc_oldest_snapshot_age_seconds`, `auradb_mvcc_retained_versions`.
 - **Histograms** - `request_latency`, `query_latency`, `storage_latency`
   (fixed microsecond buckets with sum and count).
+- **Cluster / Raft metrics (v0.4.0, present when cluster mode is enabled)** -
+  `auradb_cluster_enabled`, `auradb_node_role`, `auradb_raft_current_term`,
+  `auradb_raft_commit_index`, `auradb_raft_applied_index`,
+  `auradb_raft_log_last_index`, `auradb_raft_leader_changes_total`,
+  `auradb_raft_votes_granted_total`, `auradb_raft_append_entries_sent_total`,
+  `auradb_raft_append_entries_received_total`,
+  `auradb_raft_replication_lag_entries`, `auradb_replication_apply_errors_total`,
+  and the `auradb_raft_apply_latency_us` summary. See
+  [REPLICATION.md](REPLICATION.md).
 
 A `snapshot()` is serializable and can be exported:
 
@@ -57,6 +66,16 @@ field.
 is high, the oldest snapshot is too old, retained versions exceed a threshold, GC
 is disabled, transaction timeouts are disabled, statistics are stale, or the index
 consistency check fails. See [OPERATIONS.md](OPERATIONS.md).
+
+### Cluster health (v0.4.0)
+
+When cluster mode is enabled, the health report gains an additive `cluster`
+section: `node_id`, `cluster_id`, `role`, `term`, `leader_id`, `commit_index`,
+`applied_index`, `last_log_index`, `peer_count`, `single_node`, and
+`replication_lag_entries`. The field is purely additive JSON; the Aura Wire
+Protocol version is unchanged at AWP 1, and an older client ignores the field. The
+`auradb status --json` and `auradb doctor` outputs include the cluster fields. See
+[CLUSTERING.md](CLUSTERING.md).
 
 ### JSON output
 

@@ -146,3 +146,38 @@ Setting `transaction_timeout_secs = 0` disables timeouts; this is not recommende
 because an abandoned transaction then pins versions indefinitely. Validation
 rejects `abandoned_transaction_reaper_secs = 0` while timeouts are enabled. See
 [OPERATIONS.md](OPERATIONS.md) and [TRANSACTIONS.md](TRANSACTIONS.md).
+
+## `[cluster]`
+
+Cluster (Raft) mode, added in v0.4.0. **Disabled by default**; when disabled the
+whole table is inert and the engine uses the single-node direct write path
+exactly as in v0.3.1.
+
+```toml
+[cluster]
+enabled = false                 # enable cluster (Raft) mode
+cluster_id = ""                 # optional pinned cluster id (32 hex); empty = use/generate
+node_id = ""                    # optional pinned node id (16 hex, non-zero); empty = use/generate
+listen_addr = "127.0.0.1:7172"  # cluster (Raft) transport bind; loopback-only in this release
+advertise_addr = "127.0.0.1:7172"  # address advertised to peers (may differ behind NAT)
+bootstrap = true                # bootstrap a brand-new single-node cluster
+peers = []                      # peer addresses; configuring any peer is rejected at startup
+```
+
+- `enabled` — when `true` with no `peers`, the node runs as a real, durable
+  single-node cluster: every commit is ordered through the Raft log. A single-node
+  cluster provides no fault tolerance.
+- `cluster_id` / `node_id` — leave empty to use the persisted identity (created by
+  `auradb init` / `auradb cluster init`) or generate one. Pin them only to enforce
+  a specific identity; a mismatch with the persisted id is rejected.
+- `listen_addr` / `advertise_addr` — the dedicated cluster transport. The cluster
+  transport is unauthenticated in this release, so a non-loopback `listen_addr` is
+  rejected unless `--allow-insecure-bind` is passed.
+- `peers` — multi-node deployment is **experimental and not enabled** in this
+  release; configuring any peer is **rejected at server startup (fail closed)**.
+
+Validate a cluster configuration offline with
+`auradb config validate --config AuraDB.toml` or `auradb cluster doctor`. A
+complete example ships at `examples/auradb.cluster.local.toml`. See
+[CLUSTERING.md](CLUSTERING.md), [SECURITY.md](SECURITY.md), and
+[CLI.md](CLI.md).

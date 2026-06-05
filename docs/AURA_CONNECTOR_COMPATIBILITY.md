@@ -2,21 +2,23 @@
 
 This document is the connector-focused companion to the
 [Compatibility Matrix](COMPATIBILITY.md). It records which Aura Connector release
-talks to AuraDB 0.3.1, what it can drive, and what it cannot. AuraDB 0.3.1 is a
-stabilization release for the v0.3.0 MVCC and planner behavior; it preserves the
-v0.3.0 wire behavior, so the same connector compatibility applies and **no
-connector release is required**. The only wire additions are additive JSON
-fields: an `mvcc` section in the health report and extra `EXPLAIN ANALYZE`
-diagnostics, both of which older clients ignore.
+talks to AuraDB 0.4.0, what it can drive, and what it cannot. AuraDB 0.4.0 adds the
+replication and Raft groundwork (optional cluster mode, off by default); it
+preserves the existing wire behavior, so the same connector compatibility applies
+and **no connector release is required**. The only wire additions are additive: a
+`cluster` section in the health report and a new `not_leader` error code, both of
+which a 0.3.x connector handles safely (it ignores unknown fields and maps unknown
+error codes to a generic server error).
 
 ## Summary
 
-- **Aura Connector 0.3.x remains fully compatible with AuraDB 0.3.1. No connector
-  release is required.** The MVCC stabilization changes are server-side and ride
-  the existing AWP 1 wire format and Query IR; new health/EXPLAIN fields are
-  additive and optional.
-- **AuraDB 0.3.0 speaks AWP 1** (the 44-byte framed Aura Wire Protocol header,
-  CRC32-checked, with JSON payloads). See [PROTOCOL.md](PROTOCOL.md).
+- **Aura Connector 0.3.x remains fully compatible with AuraDB 0.4.0. No connector
+  release is required.** Cluster mode is server-side and rides the existing AWP 1
+  wire format and Query IR; the new `cluster` health section and `not_leader` error
+  code are additive and optional.
+- **AuraDB 0.4.0 speaks AWP 1** (the 44-byte framed Aura Wire Protocol header,
+  CRC32-checked, with JSON payloads), unchanged from prior releases. See
+  [PROTOCOL.md](PROTOCOL.md).
 - **Use Aura Connector 0.3.x.** The published Aura Connector 0.3.x ships a native
   AuraDB-over-TCP backend that speaks AWP 1, including authentication and TLS.
 - **`EXPLAIN ANALYZE` is reachable today through the raw Query IR.** It is
@@ -29,6 +31,7 @@ diagnostics, both of which older clients ignore.
 
 | AuraDB | Aura Connector | Protocol | Status |
 | ------ | -------------- | -------- | ------ |
+| 0.4.0  | 0.3.x          | AWP 1    | Supported (native AuraDB backend; cluster fields additive) |
 | 0.3.1  | 0.3.x          | AWP 1    | Supported (native AuraDB backend) |
 | 0.3.0  | 0.3.x          | AWP 1    | Supported (native AuraDB backend) |
 | 0.2.1  | 0.3.x          | AWP 1    | Supported (native AuraDB backend) |
@@ -94,7 +97,13 @@ The pure-standard-library Python conformance client at
 
 ## Known unsupported features
 
-- Clustering, replication, sharding, and Raft (AuraDB is single node).
+- Multi-node clustering, automatic failover, and sharding. v0.4.0 adds optional
+  single-node cluster mode and the Raft/replication groundwork, but multi-node
+  deployment is experimental and disabled (configuring peers is rejected at
+  startup); the recommended production path remains single-node. There is nothing
+  the connector must do for cluster mode — the `not_leader` error and `cluster`
+  health section are additive and handled safely by a 0.3.x connector. There are no
+  distributed transactions, linearizable reads, or follower reads.
 - Serializable isolation (AuraDB implements single-node snapshot isolation with
   optimistic write conflict detection, not serializable isolation).
 - Approximate nearest neighbour (ANN/HNSW); vector search is exact.

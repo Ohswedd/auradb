@@ -1,7 +1,7 @@
 # Release guide
 
 This guide describes how a maintainer cuts an AuraDB release. The current release
-is `0.3.1`.
+is `0.4.0`.
 
 ## Pre-release checklist
 
@@ -11,6 +11,11 @@ is `0.3.1`.
 - [ ] All limitations are stated honestly; nothing unimplemented is claimed.
 - [ ] The backup/restore, v0.1.0 and v0.2.x upgrade, MVCC/snapshot-isolation,
       planner, and chaos restart tests pass.
+- [ ] The cluster metadata, Raft log, Raft consensus (deterministic in-process),
+      replicated apply, snapshot, and single-node cluster tests pass.
+- [ ] Cluster mode limitations are stated honestly: single-node remains the
+      recommended production path; multi-node server deployment is experimental
+      and rejected at startup.
 - [ ] The benchmark baseline under `benches/baseline/` is refreshed on the
       release machine with
       `auradb bench --json --output benches/baseline/<version>.json`.

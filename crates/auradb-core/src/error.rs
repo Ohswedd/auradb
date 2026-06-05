@@ -35,6 +35,8 @@ pub enum ErrorCode {
     NotFound,
     /// The requested feature is recognized but not supported in this release.
     Unsupported,
+    /// A write was routed to a node that is not the current cluster leader.
+    NotLeader,
     /// A request requires authentication but the session is not authenticated.
     Unauthenticated,
     /// Authentication failed because the presented credentials were invalid.
@@ -63,6 +65,7 @@ impl ErrorCode {
             ErrorCode::UniqueViolation => "unique_violation",
             ErrorCode::NotFound => "not_found",
             ErrorCode::Unsupported => "unsupported",
+            ErrorCode::NotLeader => "not_leader",
             ErrorCode::Unauthenticated => "unauthenticated",
             ErrorCode::InvalidCredentials => "invalid_credentials",
             ErrorCode::Config => "config",
@@ -126,6 +129,11 @@ pub enum Error {
         feature: String,
     },
 
+    /// A write reached a node that is not the cluster leader. The message
+    /// carries a leader hint when one is known, so clients can redirect.
+    #[error("not leader: {0}")]
+    NotLeader(String),
+
     /// Authentication is required but was not provided or not completed.
     #[error("unauthenticated: {0}")]
     Unauthenticated(String),
@@ -172,6 +180,7 @@ impl Error {
             Error::UniqueViolation(_) => ErrorCode::UniqueViolation,
             Error::NotFound(_) => ErrorCode::NotFound,
             Error::Unsupported { .. } => ErrorCode::Unsupported,
+            Error::NotLeader(_) => ErrorCode::NotLeader,
             Error::Unauthenticated(_) => ErrorCode::Unauthenticated,
             Error::InvalidCredentials => ErrorCode::InvalidCredentials,
             Error::Config(_) => ErrorCode::Config,
@@ -216,6 +225,15 @@ mod tests {
             let back: ErrorCode = serde_json::from_str(&json).unwrap();
             assert_eq!(code, back);
         }
+    }
+
+    #[test]
+    fn not_leader_has_stable_code() {
+        assert_eq!(ErrorCode::NotLeader.as_str(), "not_leader");
+        assert_eq!(
+            Error::NotLeader("leader is node 7".into()).code(),
+            ErrorCode::NotLeader
+        );
     }
 
     #[test]

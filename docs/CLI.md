@@ -127,6 +127,27 @@ rebuilt) and verifies consistency.
 ### `auradb index rebuild [--data-dir <dir>]`
 Rebuilds indexes from storage and persists fresh snapshots.
 
+### `auradb cluster ...` (v0.4.0)
+Cluster (Raft) administration. These commands operate offline on a data
+directory's cluster metadata and the parsed `[cluster]` configuration; they do not
+stand up a running node.
+
+- `auradb cluster init [--data-dir <dir>] [--config <file>]` — create stable node
+  and cluster identity if not already present. (`auradb init` also creates node
+  identity.)
+- `auradb cluster status [--data-dir <dir>] [--config <file>] [--json]` — show
+  local cluster metadata for a data directory.
+- `auradb cluster peers [--data-dir <dir>] [--config <file>] [--json]` — list
+  configured cluster peers.
+- `auradb cluster doctor [--data-dir <dir>] [--config <file>] [--json]` — validate
+  the cluster configuration and on-disk identity offline.
+- `auradb cluster bootstrap [--data-dir <dir>] [--config <file>]` — bootstrap a
+  brand-new single-node cluster identity.
+
+`join`, `leave`, and `step-down` are **not provided**, because membership changes
+are not implemented in this release. `auradb status --json` and `auradb doctor`
+also include the cluster fields. See [CLUSTERING.md](CLUSTERING.md).
+
 ## Examples
 
 ```bash

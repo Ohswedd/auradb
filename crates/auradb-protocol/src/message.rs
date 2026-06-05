@@ -123,6 +123,47 @@ pub struct HealthReport {
     /// field defaults to `None`) stays compatible with newer clients.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub mvcc: Option<MvccHealth>,
+    /// Cluster / replication summary. Additive in AWP for AuraDB 0.4.0: present
+    /// only when cluster mode is enabled, and ignored by older clients. The wire
+    /// protocol version is unchanged — this is a purely additive JSON field.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cluster: Option<ClusterHealth>,
+}
+
+/// Cluster and replication summary carried in [`HealthReport`].
+///
+/// Reported only when cluster mode is enabled. Every field is honest: a
+/// single-node cluster reports `single_node = true` and zero peers rather than
+/// implying replication that is not happening.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ClusterHealth {
+    /// Whether cluster (Raft) mode is enabled.
+    pub enabled: bool,
+    /// This node's id (hex), if initialized.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub node_id: Option<String>,
+    /// The cluster id (hex), if initialized.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cluster_id: Option<String>,
+    /// The consensus role (`leader` / `follower` / `candidate`).
+    pub role: String,
+    /// The current Raft term.
+    pub term: u64,
+    /// The recognized leader's id (hex), if known.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub leader_id: Option<String>,
+    /// The highest committed log index.
+    pub commit_index: u64,
+    /// The highest applied log index.
+    pub applied_index: u64,
+    /// The last log index on this node.
+    pub last_log_index: u64,
+    /// Configured peer count (0 for a single-node cluster).
+    pub peer_count: usize,
+    /// Whether this is a single-node cluster.
+    pub single_node: bool,
+    /// Replication lag in entries (committed minus applied).
+    pub replication_lag_entries: u64,
 }
 
 /// MVCC health and version-pressure summary carried in [`HealthReport`].

@@ -6,7 +6,8 @@ use std::path::PathBuf;
 use anyhow::Result;
 use auradb_cli::{
     build_config, cmd_auth_hash_token, cmd_auth_rotate_token, cmd_bench, cmd_bench_compare,
-    cmd_bench_json, cmd_cert_generate_dev, cmd_check, cmd_compact, cmd_compatibility,
+    cmd_bench_json, cmd_cert_generate_dev, cmd_check, cmd_cluster_bootstrap, cmd_cluster_doctor,
+    cmd_cluster_init, cmd_cluster_peers, cmd_cluster_status, cmd_compact, cmd_compatibility,
     cmd_config_validate, cmd_doctor, cmd_doctor_json, cmd_dump, cmd_gc, cmd_index_check,
     cmd_index_rebuild, cmd_init, cmd_restore, cmd_server, cmd_stats_analyze, cmd_stats_show,
     cmd_status, cmd_status_json, cmd_version,
@@ -160,6 +161,59 @@ enum Command {
     Index {
         #[command(subcommand)]
         command: IndexCommand,
+    },
+    /// Cluster (Raft) administration.
+    Cluster {
+        #[command(subcommand)]
+        command: ClusterCommand,
+    },
+}
+
+#[derive(Subcommand)]
+enum ClusterCommand {
+    /// Create stable node and cluster identity if not already present.
+    Init {
+        #[arg(long, default_value = ".local/auradb")]
+        data_dir: PathBuf,
+        #[arg(long)]
+        config: Option<PathBuf>,
+    },
+    /// Show local cluster metadata for a data directory.
+    Status {
+        #[arg(long, default_value = ".local/auradb")]
+        data_dir: PathBuf,
+        #[arg(long)]
+        config: Option<PathBuf>,
+        /// Emit the report as JSON.
+        #[arg(long)]
+        json: bool,
+    },
+    /// List configured cluster peers.
+    Peers {
+        #[arg(long, default_value = ".local/auradb")]
+        data_dir: PathBuf,
+        #[arg(long)]
+        config: Option<PathBuf>,
+        /// Emit the peers as JSON.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Validate cluster configuration and metadata.
+    Doctor {
+        #[arg(long, default_value = ".local/auradb")]
+        data_dir: PathBuf,
+        #[arg(long)]
+        config: Option<PathBuf>,
+        /// Emit the report as JSON.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Bootstrap a durable single-node cluster and elect this node leader.
+    Bootstrap {
+        #[arg(long, default_value = ".local/auradb")]
+        data_dir: PathBuf,
+        #[arg(long)]
+        config: Option<PathBuf>,
     },
 }
 
@@ -388,6 +442,54 @@ async fn main() -> Result<()> {
         Command::Index { command } => match command {
             IndexCommand::Check { data_dir } => println!("{}", cmd_index_check(&data_dir)?),
             IndexCommand::Rebuild { data_dir } => println!("{}", cmd_index_rebuild(&data_dir)?),
+        },
+        Command::Cluster { command } => match command {
+            ClusterCommand::Init { data_dir, config } => {
+                let cfg =
+                    build_config(config.as_deref(), Some(data_dir.clone()), None, None, false)?;
+                print!("{}", cmd_cluster_init(&data_dir, &cfg)?);
+            }
+            ClusterCommand::Status {
+                data_dir,
+                config,
+                json,
+            } => {
+                let cfg =
+                    build_config(config.as_deref(), Some(data_dir.clone()), None, None, false)?;
+                print!("{}", cmd_cluster_status(&data_dir, &cfg, json)?);
+                if json {
+                    println!();
+                }
+            }
+            ClusterCommand::Peers {
+                data_dir,
+                config,
+                json,
+            } => {
+                let cfg =
+                    build_config(config.as_deref(), Some(data_dir.clone()), None, None, false)?;
+                print!("{}", cmd_cluster_peers(&data_dir, &cfg, json)?);
+                if json {
+                    println!();
+                }
+            }
+            ClusterCommand::Doctor {
+                data_dir,
+                config,
+                json,
+            } => {
+                let cfg =
+                    build_config(config.as_deref(), Some(data_dir.clone()), None, None, false)?;
+                print!("{}", cmd_cluster_doctor(&data_dir, &cfg, json)?);
+                if json {
+                    println!();
+                }
+            }
+            ClusterCommand::Bootstrap { data_dir, config } => {
+                let cfg =
+                    build_config(config.as_deref(), Some(data_dir.clone()), None, None, false)?;
+                print!("{}", cmd_cluster_bootstrap(&data_dir, &cfg)?);
+            }
         },
     }
     Ok(())

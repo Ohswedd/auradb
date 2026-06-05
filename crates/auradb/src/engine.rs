@@ -52,6 +52,22 @@ impl Default for EngineOptions {
     }
 }
 
+/// A replicated write log the engine routes commits through in cluster mode.
+///
+/// When a [`ReplicatedLog`] is attached (via [`Engine::attach_replicated_log`]),
+/// every data-plane commit is first appended to it and only applied to storage
+/// once consensus has committed the entry. The returned value is the committed
+/// **log index**, which the engine uses as the MVCC commit timestamp so that
+/// every replica derives identical, monotonic timestamps from the same ordered
+/// log. When no log is attached (the default, single-node path) commits go
+/// straight to storage exactly as in previous releases.
+pub trait ReplicatedLog: Send + Sync {
+    /// Append `batch` to the replicated log, block until it is committed, and
+    /// return the committed log index. Returns [`Error::NotLeader`] if this node
+    /// is not the current leader and therefore cannot accept writes.
+    fn replicate(&self, batch: &Batch) -> Result<u64>;
+}
+
 /// The lifecycle state of a registered transaction.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -158,6 +174,9 @@ struct Inner {
     planner_stats: PlannerStats,
     /// Path to the persisted planner statistics file.
     stats_path: PathBuf,
+    /// When set, data-plane commits are routed through this replicated log
+    /// (cluster mode). `None` is the default, single-node direct write path.
+    cluster: Option<Arc<dyn ReplicatedLog>>,
 }
 
 /// The embeddable AuraDB engine. Cheap to clone (shares one locked core).
@@ -341,12 +360,43 @@ impl Engine {
                 gc_min_retained_versions: options.gc_min_retained_versions.max(1),
                 planner_stats,
                 stats_path,
+                cluster: None,
             })),
         })
     }
 
     fn lock(&self) -> MutexGuard<'_, Inner> {
         self.inner.lock().expect("engine mutex poisoned")
+    }
+
+    /// Route this engine's data-plane commits through a replicated log (enable
+    /// cluster mode). After this call, every commit is appended to `log` and
+    /// applied to storage at the committed log index; writes on a non-leader
+    /// node are rejected with [`Error::NotLeader`].
+    ///
+    /// This is a no-op on behavior until called; the default engine path is the
+    /// unchanged single-node direct write path.
+    pub fn attach_replicated_log(&self, log: Arc<dyn ReplicatedLog>) {
+        self.lock().cluster = Some(log);
+    }
+
+    /// The current MVCC commit watermark — for the replication layer, this is the
+    /// highest applied log index, so it knows which committed entries still need
+    /// to be replayed after a restart.
+    pub fn commit_watermark(&self) -> u64 {
+        self.lock().storage.commit_watermark()
+    }
+
+    /// Apply a committed replicated batch at `log_index` (used by followers and
+    /// by crash-recovery replay). Idempotent: a `log_index` at or below the
+    /// current watermark is ignored, so replaying the log is always safe.
+    ///
+    /// Unlike the leader write path, this recomputes index deltas from current
+    /// storage state rather than from a staged write set, because a follower
+    /// never ran the originating mutation locally.
+    pub fn apply_replicated_batch(&self, batch: Batch, log_index: u64) -> Result<()> {
+        let mut inner = self.lock();
+        inner.apply_replicated_batch(batch, log_index)
     }
 
     // ----- schema -----
@@ -827,6 +877,69 @@ enum WriteMode {
 }
 
 impl Inner {
+    /// The single choke point through which every data-plane commit flows.
+    ///
+    /// In single-node mode this delegates straight to storage. In cluster mode
+    /// it first appends the batch to the replicated log, waits for consensus to
+    /// commit it, and then applies it to storage at the committed log index
+    /// (used as the commit timestamp). A non-leader returns [`Error::NotLeader`].
+    fn commit_batch(&mut self, batch: Batch) -> Result<u64> {
+        match self.cluster.clone() {
+            Some(log) => {
+                let index = log.replicate(&batch)?;
+                self.storage.apply_committed_batch(batch, index)?;
+                Ok(index)
+            }
+            None => self.storage.commit_batch(batch),
+        }
+    }
+
+    /// Apply a committed replicated batch to storage and indexes at `log_index`.
+    /// Idempotent on the commit watermark; see [`Engine::apply_replicated_batch`].
+    fn apply_replicated_batch(&mut self, batch: Batch, log_index: u64) -> Result<()> {
+        if log_index <= self.storage.commit_watermark() {
+            return Ok(());
+        }
+        // Capture the prior state of every touched record so index deltas can be
+        // computed before the batch mutates storage.
+        let mut deltas: Vec<(Option<Record>, Option<Record>)> = Vec::new();
+        for op in &batch.ops {
+            match op {
+                LogOp::Put { record, .. } => {
+                    let existing = self.storage.get(&record.collection, record.id).cloned();
+                    deltas.push((existing, Some(record.clone())));
+                }
+                LogOp::Delete { collection, id, .. } => {
+                    let existing = self.storage.get(collection, *id).cloned();
+                    deltas.push((existing, None));
+                }
+            }
+        }
+        self.storage.apply_committed_batch(batch, log_index)?;
+
+        let mut affected: HashSet<String> = HashSet::new();
+        for (old, new) in deltas {
+            let collection = old
+                .as_ref()
+                .or(new.as_ref())
+                .map(|r| r.collection.0.clone())
+                .expect("a replicated op always names a record");
+            if let Some(idx) = self.indexes.get_mut(&collection) {
+                if let Some(old) = &old {
+                    idx.remove(old);
+                }
+                if let Some(new) = &new {
+                    idx.insert(new);
+                }
+            }
+            affected.insert(collection);
+        }
+        for collection in affected {
+            self.refresh_stats_row_count(&collection);
+        }
+        Ok(())
+    }
+
     /// Write a persisted snapshot for every collection index plus an updated
     /// manifest, and prune snapshot files for dropped collections.
     fn persist_indexes(&self) -> Result<()> {
@@ -1084,7 +1197,7 @@ impl Inner {
                 record: r.clone(),
             })
             .collect();
-        self.storage.commit_batch(Batch { txn_id, ops })?;
+        self.commit_batch(Batch { txn_id, ops })?;
 
         let idx = self.indexes.get_mut(collection).expect("indexes exist");
         let mut result = MutationResult::empty();
@@ -1188,7 +1301,7 @@ impl Inner {
                 record: r.clone(),
             })
             .collect();
-        self.storage.commit_batch(Batch { txn_id, ops })?;
+        self.commit_batch(Batch { txn_id, ops })?;
 
         let idx = self.indexes.get_mut(collection).expect("indexes exist");
         let mut result = MutationResult::empty();
@@ -1231,7 +1344,7 @@ impl Inner {
                 id: r.id,
             })
             .collect();
-        self.storage.commit_batch(Batch { txn_id, ops })?;
+        self.commit_batch(Batch { txn_id, ops })?;
 
         let idx = self.indexes.get_mut(collection).expect("indexes exist");
         let mut result = MutationResult::empty();
@@ -1450,8 +1563,9 @@ impl Inner {
             return Ok(());
         }
 
-        // 3. Durable atomic commit.
-        self.storage.commit_batch(Batch {
+        // 3. Durable atomic commit (routed through the replicated log in
+        //    cluster mode; a non-leader is rejected here before any apply).
+        self.commit_batch(Batch {
             txn_id,
             ops: batch_ops,
         })?;

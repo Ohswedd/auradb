@@ -1,0 +1,26 @@
+[package]
+name = "auradb-cluster"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+description = "Cluster identity, metadata, configuration, and role state for AuraDB."
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+rand.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+criterion.workspace = true
+
+[[bench]]
+name = "cluster_status"
+harness = false
+
+[lib]
+bench = false

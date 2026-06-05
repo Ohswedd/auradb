@@ -14,7 +14,16 @@ record store.
   indexes/           persisted index snapshots
     INDEX_MANIFEST.json
     <collection>.idx framed, CRC32-checked index snapshot files
+  cluster/           cluster identity + Raft log (only when cluster mode is used)
+    node.json        this node's stable id
+    cluster.json     the cluster this node belongs to
+    raft-log.bin     framed, CRC32-checked Raft log entries
+    raft-state.json  Raft hard state (term, vote, commit index)
 ```
+
+The `cluster/` directory exists only when cluster mode is enabled (or after
+`auradb cluster init`); it is a **separate durable log** and does not change the
+regular storage format. See [RAFT.md](RAFT.md) and [CLUSTERING.md](CLUSTERING.md).
 
 ## Storage format and version chains
 
@@ -29,6 +38,13 @@ A v1 directory (AuraDB ≤ 0.2.x) is migrated to v2 transparently the first time
 v0.3.0 opens it: each existing record becomes the first committed version on its
 chain. An unknown future format is still rejected rather than opened. See
 [UPGRADING.md](UPGRADING.md).
+
+The **storage format is unchanged in v0.4.0**. When cluster mode is enabled, the
+MVCC commit timestamp equals the Raft log index — the commit clock is driven by
+the ordered Raft log rather than incremented inline — so commit timestamps stay
+monotonic and deterministic across replicas. When cluster mode is disabled (the
+default), commit timestamps are assigned exactly as in v0.3.1. See
+[REPLICATION.md](REPLICATION.md).
 
 ## Segment format
 

@@ -1,0 +1,31 @@
+[package]
+name = "auradb-replication"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+description = "Maps AuraDB mutations to a replicated Raft log and applies committed entries."
+
+[dependencies]
+auradb-core.workspace = true
+auradb-cluster.workspace = true
+auradb-raft.workspace = true
+auradb.workspace = true
+auradb-storage.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+crc32fast.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+criterion.workspace = true
+
+[[bench]]
+name = "replication"
+harness = false
+
+[lib]
+bench = false
