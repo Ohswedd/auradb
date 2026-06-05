@@ -243,6 +243,41 @@ impl TestCluster {
         unreachable!("write retry loop always returns")
     }
 
+    /// Commit a write through whichever of `live` is currently the leader,
+    /// re-resolving the leader and retrying on transient conditions (`NotLeader`
+    /// or a commit timeout). Unlike [`write`], this does not assume a fixed node
+    /// stays leader: on a slow/contended runner a heartbeat hiccup can move
+    /// leadership mid-test, so a "write to the cluster" must follow the leader.
+    /// Panics only if no write can be committed within a generous deadline.
+    async fn write_via_leader(&self, live: &[usize], id: i64, v: i64) {
+        let deadline = Instant::now() + Duration::from_secs(30);
+        loop {
+            if let Some(li) = self.live_leader_index(live) {
+                let engine = self.nodes[li].engine.clone();
+                let result = tokio::task::spawn_blocking(move || {
+                    engine.apply_mutation(insert_mutation(id, v))
+                })
+                .await
+                .unwrap();
+                match result {
+                    Ok(_) => return,
+                    Err(err) => {
+                        let transient = matches!(&err, auradb::core::Error::NotLeader(_))
+                            || matches!(&err, auradb::core::Error::Internal(m)
+                                if m.contains("replication timed out"));
+                        if !transient {
+                            panic!("write {id} via leader {li} failed: {err}");
+                        }
+                    }
+                }
+            }
+            if Instant::now() >= deadline {
+                panic!("could not commit write {id} via a leader among {live:?} within 30s");
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+    }
+
     /// Count records of collection "C" on a node (a direct, local read).
     fn record_count(&self, idx: usize) -> usize {
         self.nodes[idx]
@@ -380,14 +415,15 @@ async fn follower_catches_up_after_restart() {
     let addrs = cluster.addrs();
     let leader = cluster.wait_for_leader(Duration::from_secs(10)).await;
 
-    cluster.write(leader, 1, 1).await.unwrap();
+    cluster.write_via_leader(&[0, 1, 2], 1, 1).await;
     cluster.wait_all_have(1, Duration::from_secs(5)).await;
 
-    // Stop a follower, keep writing on the leader (still a 2/3 majority).
+    // Stop a follower, keep writing via the current leader (still a 2/3 majority).
     let follower = (0..3).find(|&i| i != leader).unwrap();
     cluster.stop(follower).await;
-    cluster.write(leader, 2, 2).await.unwrap();
-    cluster.write(leader, 3, 3).await.unwrap();
+    let live: Vec<usize> = (0..3).filter(|&i| i != follower).collect();
+    cluster.write_via_leader(&live, 2, 2).await;
+    cluster.write_via_leader(&live, 3, 3).await;
 
     // Restart the follower: it replays its durable log and the leader brings it
     // current with the entries it missed while down.
@@ -527,7 +563,7 @@ async fn peer_status_reports_unreachable_peer() {
 async fn leader_restart_elects_new_leader() {
     let cluster = TestCluster::start(3).await;
     let leader = cluster.wait_for_leader(Duration::from_secs(10)).await;
-    cluster.write(leader, 1, 1).await.unwrap();
+    cluster.write_via_leader(&[0, 1, 2], 1, 1).await;
     cluster.wait_all_have(1, Duration::from_secs(5)).await;
 
     // Stop the leader; the surviving majority must elect a new leader.
@@ -544,17 +580,17 @@ async fn leader_restart_elects_new_leader() {
 async fn write_continues_after_leader_restart_with_majority() {
     let cluster = TestCluster::start(3).await;
     let leader = cluster.wait_for_leader(Duration::from_secs(10)).await;
-    cluster.write(leader, 1, 1).await.unwrap();
+    cluster.write_via_leader(&[0, 1, 2], 1, 1).await;
     cluster.wait_all_have(1, Duration::from_secs(5)).await;
 
     cluster.stop(leader).await;
     let live: Vec<usize> = (0..3).filter(|&i| i != leader).collect();
-    let new_leader = cluster
+    cluster
         .wait_for_live_leader(&live, Duration::from_secs(10))
         .await;
 
     // The new leader accepts writes (a 2/3 majority is still present).
-    cluster.write(new_leader, 2, 2).await.unwrap();
+    cluster.write_via_leader(&live, 2, 2).await;
     cluster
         .wait_indices_have(&live, 2, Duration::from_secs(5))
         .await;
@@ -568,12 +604,12 @@ async fn old_leader_rejoins_as_follower() {
     let addrs = cluster.addrs();
     let leader = cluster.wait_for_leader(Duration::from_secs(10)).await;
 
-    cluster.write(leader, 1, 1).await.unwrap();
+    cluster.write_via_leader(&[0, 1, 2], 1, 1).await;
     cluster.wait_all_have(1, Duration::from_secs(5)).await;
 
     cluster.stop(leader).await;
     let live: Vec<usize> = (0..3).filter(|&i| i != leader).collect();
-    let new_leader = cluster
+    cluster
         .wait_for_live_leader(&live, Duration::from_secs(10))
         .await;
 
@@ -582,8 +618,8 @@ async fn old_leader_rejoins_as_follower() {
     // a future election (a node missing committed entries is denied votes), so on
     // restart it deterministically rejoins as a follower rather than possibly
     // winning re-election (which an up-to-date node legitimately could).
-    cluster.write(new_leader, 2, 2).await.unwrap();
-    cluster.write(new_leader, 3, 3).await.unwrap();
+    cluster.write_via_leader(&live, 2, 2).await;
+    cluster.write_via_leader(&live, 3, 3).await;
     cluster
         .wait_indices_have(&live, 3, Duration::from_secs(10))
         .await;
@@ -619,17 +655,17 @@ async fn old_leader_catches_up_after_restart() {
     let ids = cluster.ids();
     let addrs = cluster.addrs();
     let leader = cluster.wait_for_leader(Duration::from_secs(10)).await;
-    cluster.write(leader, 1, 1).await.unwrap();
+    cluster.write_via_leader(&[0, 1, 2], 1, 1).await;
     cluster.wait_all_have(1, Duration::from_secs(5)).await;
 
     // Stop the leader; the majority elects a new one and accepts more writes.
     cluster.stop(leader).await;
     let live: Vec<usize> = (0..3).filter(|&i| i != leader).collect();
-    let new_leader = cluster
+    cluster
         .wait_for_live_leader(&live, Duration::from_secs(10))
         .await;
-    cluster.write(new_leader, 2, 2).await.unwrap();
-    cluster.write(new_leader, 3, 3).await.unwrap();
+    cluster.write_via_leader(&live, 2, 2).await;
+    cluster.write_via_leader(&live, 3, 3).await;
     cluster
         .wait_indices_have(&live, 3, Duration::from_secs(5))
         .await;
@@ -658,18 +694,18 @@ async fn all_nodes_consistent_after_leader_restart() {
     let ids = cluster.ids();
     let addrs = cluster.addrs();
     let leader = cluster.wait_for_leader(Duration::from_secs(10)).await;
-    cluster.write(leader, 1, 1).await.unwrap();
+    cluster.write_via_leader(&[0, 1, 2], 1, 1).await;
     // Let the first write settle on every node so the post-stop election is
     // deterministic (any survivor has an up-to-date log and can win).
     cluster.wait_all_have(1, Duration::from_secs(5)).await;
 
     cluster.stop(leader).await;
     let live: Vec<usize> = (0..3).filter(|&i| i != leader).collect();
-    let new_leader = cluster
+    cluster
         .wait_for_live_leader(&live, Duration::from_secs(10))
         .await;
-    cluster.write(new_leader, 2, 2).await.unwrap();
-    cluster.write(new_leader, 3, 3).await.unwrap();
+    cluster.write_via_leader(&live, 2, 2).await;
+    cluster.write_via_leader(&live, 3, 3).await;
 
     // Restart the old leader and wait until every node has all three records.
     cluster.restart(leader, &ids, &addrs).await;
@@ -712,13 +748,15 @@ async fn follower_catches_up_after_1000_entries() {
     let addrs = cluster.addrs();
     let leader = cluster.wait_for_leader(Duration::from_secs(10)).await;
 
-    // Stop a follower; the leader keeps a 2/3 majority and commits a long run.
+    // Stop a follower; the remaining majority commits a long run via whichever
+    // node is currently the leader.
     let follower = (0..3).find(|&i| i != leader).unwrap();
     cluster.stop(follower).await;
+    let live: Vec<usize> = (0..3).filter(|&i| i != follower).collect();
 
     const N: i64 = 1000;
     for id in 1..=N {
-        cluster.write(leader, id, id).await.unwrap();
+        cluster.write_via_leader(&live, id, id).await;
     }
 
     // Restart the follower; it replays its durable log and the leader brings it
@@ -728,8 +766,12 @@ async fn follower_catches_up_after_1000_entries() {
         .wait_indices_have(&[follower], N as usize, Duration::from_secs(30))
         .await;
 
-    // The follower's applied index matches the leader's (no gap).
-    let leader_applied = cluster.nodes[leader].peer.status().applied_index;
+    // The follower's applied index catches up to the rest of the cluster (no gap).
+    let leader_applied = live
+        .iter()
+        .map(|&i| cluster.nodes[i].peer.status().applied_index)
+        .max()
+        .unwrap();
     let deadline = Instant::now() + Duration::from_secs(10);
     loop {
         if cluster.nodes[follower].peer.status().applied_index >= leader_applied {
@@ -755,14 +797,15 @@ async fn follower_catches_up_with_transaction_batches() {
     let leader = cluster.wait_for_leader(Duration::from_secs(10)).await;
 
     // Establish a baseline that all three share.
-    cluster.write(leader, 1, 1).await.unwrap();
+    cluster.write_via_leader(&[0, 1, 2], 1, 1).await;
     cluster.wait_all_have(1, Duration::from_secs(5)).await;
 
-    // Stop a follower and commit several more batches on the leader.
+    // Stop a follower and commit several more batches via the current leader.
     let follower = (0..3).find(|&i| i != leader).unwrap();
     cluster.stop(follower).await;
+    let live: Vec<usize> = (0..3).filter(|&i| i != follower).collect();
     for id in 2..=60 {
-        cluster.write(leader, id, id * 7).await.unwrap();
+        cluster.write_via_leader(&live, id, id * 7).await;
     }
 
     // The restarted follower converges on the full set, values intact.
@@ -791,14 +834,15 @@ async fn follower_catches_up_with_snapshot_boundary_present() {
     let leader = cluster.wait_for_leader(Duration::from_secs(10)).await;
 
     for id in 1..=20 {
-        cluster.write(leader, id, id).await.unwrap();
+        cluster.write_via_leader(&[0, 1, 2], id, id).await;
     }
     cluster.wait_all_have(20, Duration::from_secs(10)).await;
 
     let follower = (0..3).find(|&i| i != leader).unwrap();
     cluster.stop(follower).await;
+    let live: Vec<usize> = (0..3).filter(|&i| i != follower).collect();
     for id in 21..=120 {
-        cluster.write(leader, id, id).await.unwrap();
+        cluster.write_via_leader(&live, id, id).await;
     }
     cluster.restart(follower, &ids, &addrs).await;
     cluster
