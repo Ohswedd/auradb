@@ -186,6 +186,35 @@ not timing-flaky.
   the readiness/leader-detection polling and detecting when no leader is known
   yet.
 
+## Multi-node preview hardening suites (v0.5.1)
+
+> **AuraDB v0.5.1 hardens the controlled multi-node preview. Single-node mode
+> remains the recommended production mode.**
+
+- **Leader restart and re-election** (`crates/auradb-replication/tests/multi_node.rs`):
+  stopping the leader lets the surviving majority elect a new leader and keep
+  accepting writes; the restarted old leader rejoins as a follower, catches up,
+  and all nodes converge on an identical record set. This is preview
+  leader-restart behavior, not production failover.
+- **Follower catch-up under larger logs** (same file): a follower that misses a
+  long run of committed entries (1,000+ entries, batched commits, and across the
+  commit-base/snapshot boundary) replays its durable log and is brought current,
+  with matching applied indices and record counts. A snapshot install that the
+  preview does not implement is answered with a structured *unsupported*
+  response, never silent corruption or a hang.
+- **`not_leader` ergonomics** (`crates/auradb-server/tests/not_leader.rs`,
+  `cluster_preview.rs`): the error carries the leader hint and the leader's client
+  address (when a peer declared one), is marked `retryable`, and the same client
+  connection stays usable afterward.
+- **Cluster diagnostics** (`cluster_preview.rs`, `multi_node.rs`): health and
+  `cluster status --addr` report the leader's client address, per-peer
+  reachability, and connection attempts; an unreachable peer and a lost quorum are
+  visible.
+- **Peer TLS validation** (`crates/auradb-server/tests/peer_tls.rs`): a real
+  mutual-TLS peer handshake succeeds for valid material and is rejected for a
+  wrong CA or a non-matching SAN; a certificate rotated under the same CA is
+  accepted.
+
 See [CLUSTERING.md](CLUSTERING.md), [RAFT.md](RAFT.md),
 [REPLICATION.md](REPLICATION.md), and [CONFORMANCE.md](CONFORMANCE.md).
 

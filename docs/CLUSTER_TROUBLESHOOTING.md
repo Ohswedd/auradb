@@ -33,6 +33,25 @@ The runtime role/term of a *running* server is reported by
 `auradb status --addr <host:port> --json` under the `cluster` section, not by the
 offline `cluster status`.
 
+### Live cluster diagnostics (v0.5.1)
+
+For a running server, `auradb cluster status --addr <host:port>` queries it for
+live cluster state:
+
+```bash
+auradb cluster status --addr 127.0.0.1:7171 --json
+```
+
+It reports `role`, `term`, `leader_id`, the leader's client address
+(`leader_client_addr`, when a peer declared a `client_addr`), `quorum_available`,
+`commit_index` / `applied_index` / `last_log_index`, `replication_lag_entries`,
+and a `peers` array with each peer's `connected` state, `connect_attempts`, and
+`match_index` / `next_index`. Use it to spot an unreachable peer (its
+`connected` is `false` and `connect_attempts` keeps rising), a lost quorum
+(`quorum_available: false`), or a lagging follower (a large
+`replication_lag_entries` or a `match_index` far behind the leader's
+`last_log_index`).
+
 ## Validating cluster metadata
 
 ```bash
@@ -63,8 +82,16 @@ A write is only accepted by the **leader**. If a node is a follower (or no leade
 is known), a write returns a structured `not_leader` error with a leader hint:
 
 ```text
-not_leader: this node is not the leader; current leader is node <hex>
+not_leader: this node (<hex>) is not the leader; current leader is node <hex>
+(client address <host:port>); retry the write against the leader
 ```
+
+The error carries a stable `not_leader` code, the current node id, the known
+leader id (and the leader's client address when a peer declared a `client_addr`),
+and retry/redirect guidance in the message; the wire error payload also marks it
+`retryable: true`. When no leader is known yet, the message says so and advises a
+short backoff. The same client connection stays usable after a `not_leader`
+response.
 
 In single-node cluster mode the sole node is always the leader, so you should not
 see `not_leader` in normal operation. In the multi-node preview, **route writes

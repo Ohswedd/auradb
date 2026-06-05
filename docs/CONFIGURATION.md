@@ -182,12 +182,20 @@ node_id    = "00000000000000a1"                  # distinct per node
 listen_addr    = "127.0.0.1:7172"
 advertise_addr = "127.0.0.1:7172"
 bootstrap = true
-# Static membership: every other node, by id and cluster address.
+# Static membership: every other node, by id and cluster address. The optional
+# client_addr (v0.5.1) lets a `not_leader` response and the cluster diagnostics
+# report the leader's client address so a client can redirect.
 peers = [
-  { node_id = "00000000000000a2", addr = "127.0.0.1:7182" },
-  { node_id = "00000000000000a3", addr = "127.0.0.1:7192" },
+  { node_id = "00000000000000a2", addr = "127.0.0.1:7182", client_addr = "127.0.0.1:7181" },
+  { node_id = "00000000000000a3", addr = "127.0.0.1:7192", client_addr = "127.0.0.1:7191" },
 ]
 ```
+
+Each peer entry takes `node_id` and `addr` (the cluster/Raft transport address),
+plus an optional `client_addr` (the peer's client-facing `host:port`). When
+`client_addr` is set, a `not_leader` error and `auradb cluster status --addr`
+report the leader's client address; when omitted, that address is reported as
+unknown rather than guessed.
 
 A public (non-loopback) preview additionally requires
 `allow_experimental_public_cluster = true`, peer TLS, and a token:

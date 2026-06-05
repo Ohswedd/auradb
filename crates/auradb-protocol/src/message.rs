@@ -63,6 +63,35 @@ pub struct ErrorPayload {
     pub code: ErrorCode,
     /// A human-readable message.
     pub message: String,
+    /// Whether retrying the request (possibly after redirecting to a different
+    /// node, or after a bounded backoff) may succeed. Additive and optional: it
+    /// is omitted for errors where retryability is not meaningful, and older
+    /// clients that do not model the field ignore it. The wire protocol version
+    /// is unchanged — this is a purely additive JSON field.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub retryable: Option<bool>,
+}
+
+/// The retryability hint for a stable error code, or `None` when retryability is
+/// not meaningful for that class of error. `not_leader` is retryable because the
+/// client can redirect to (or wait for) the current leader; a transaction
+/// conflict or timeout is retryable because re-running the transaction may
+/// succeed. Deterministic client errors (invalid request, schema/unique
+/// violations, not found, unsupported, unauthenticated) are not retryable.
+fn retryable_for(code: ErrorCode) -> Option<bool> {
+    match code {
+        ErrorCode::NotLeader | ErrorCode::Conflict | ErrorCode::TransactionTimeout => Some(true),
+        ErrorCode::InvalidRequest
+        | ErrorCode::SchemaViolation
+        | ErrorCode::UniqueViolation
+        | ErrorCode::NotFound
+        | ErrorCode::Unsupported
+        | ErrorCode::Unauthenticated
+        | ErrorCode::InvalidCredentials => Some(false),
+        // Storage, corruption, protocol, config, io, limit, and internal errors
+        // have no honest blanket retryability answer; leave it unset.
+        _ => None,
+    }
 }
 
 impl ErrorPayload {
@@ -71,6 +100,7 @@ impl ErrorPayload {
         ErrorPayload {
             code: err.code(),
             message: err.to_string(),
+            retryable: retryable_for(err.code()),
         }
     }
 
@@ -152,6 +182,11 @@ pub struct ClusterHealth {
     /// The recognized leader's id (hex), if known.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub leader_id: Option<String>,
+    /// The recognized leader's client-facing address, when an operator declared
+    /// one for that peer. Additive (v0.5.1); `None` when unknown rather than
+    /// guessed. Older clients ignore it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub leader_client_addr: Option<String>,
     /// The highest committed log index.
     pub commit_index: u64,
     /// The highest applied log index.
@@ -185,8 +220,16 @@ pub struct ClusterPeerHealth {
     pub node_id: String,
     /// The peer's configured cluster transport address.
     pub addr: String,
+    /// The peer's declared client-facing address, if configured. Additive
+    /// (v0.5.1); `None` when not declared. Older clients ignore it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub client_addr: Option<String>,
     /// Whether this node currently holds an outbound connection to the peer.
     pub connected: bool,
+    /// Total outbound connection attempts to this peer. Additive (v0.5.1);
+    /// defaults to 0 for older servers.
+    #[serde(default)]
+    pub connect_attempts: u64,
     /// The leader's record of the peer's highest matching log index, if known.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub match_index: Option<u64>,

@@ -4,6 +4,57 @@ All notable changes to AuraDB are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and the project uses
 [Semantic Versioning](https://semver.org/).
 
+## [0.5.1] - 2026-06-05
+
+Multi-node preview hardening. A patch release that makes the v0.5.0 controlled
+multi-node preview safer, easier to operate, and more trustworthy. It adds
+local Docker cluster automation, sharper cluster diagnostics, more honest
+`not_leader` ergonomics, and additional leader-restart and follower-catch-up
+coverage. No production-clustering claims are made: multi-node mode remains an
+experimental, opt-in preview, and single-node mode remains the recommended
+production mode. All v0.5.0 behavior, the storage format, the Aura Wire
+Protocol, and Aura Connector 0.3.x compatibility are preserved.
+
+### Added
+- Development certificate generation for local multi-node Docker clusters:
+  `auradb cert generate-dev` now accepts `--server-name` and repeatable `--san`
+  flags to emit per-node certificates with explicit Subject Alternative Names,
+  and `examples/cluster/generate-dev-certs.sh` drives it to produce a local CA
+  and node1/node2/node3 certificates under a git-ignored `certs/` directory.
+- Live Docker Compose cluster smoke validation (`scripts/smoke_cluster_compose.sh`):
+  generates dev certs, starts the three-node Compose cluster, waits for a
+  leader, reports status, and tears the cluster down.
+- Leader restart and re-election smoke tests: a stopped leader's term is taken
+  over by the surviving majority, the old leader rejoins as a follower and
+  catches up, and all nodes converge.
+- Larger follower catch-up tests: a follower that misses a long run of committed
+  entries (including transaction batches and a compacted-log boundary) replays
+  its durable log and is brought current by the leader.
+- Peer TLS certificate rotation guidance and validation: documented rolling
+  rotation plus tests that a wrong CA, a wrong SAN, and a peer-token mismatch are
+  rejected, and that a node presenting a freshly rotated certificate is accepted.
+- Better cluster failure diagnostics: `auradb cluster status --addr` now queries
+  a running server for live role, leader, quorum, replication indices, and
+  per-peer reachability; `auradb cluster doctor` explains no-leader, no-quorum,
+  unreachable-peer, and public-cluster-without-TLS conditions.
+- Replicated write latency baseline: `benches/baseline/v0.5.1.json` records the
+  same-machine baseline used for regression tracking.
+- Connector `not_leader` behavior validation: tests assert the leader hint, the
+  retryable guidance, and that the same client connection stays usable after a
+  `not_leader` response.
+
+### Changed
+- Improved multi-node preview deployment documentation across `docs/CLUSTERING.md`,
+  `docs/SECURITY.md`, `docs/OPERATIONS.md`, and `docs/CLUSTER_TROUBLESHOOTING.md`.
+- Improved cluster diagnostics and troubleshooting output, including explicit
+  preview and public-cluster warnings.
+- Improved preview guardrails and operator guidance for peer TLS and peer tokens.
+
+### Fixed
+- Peer transport, leader election, follower catch-up, Docker cluster, and
+  diagnostics issues found during validation are addressed; no behavioral
+  regressions to v0.5.0 single-node or single-node cluster modes.
+
 ## [0.5.0] - 2026-06-05
 
 Controlled multi-node server preview. The first release in which AuraDB server

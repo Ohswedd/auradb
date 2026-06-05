@@ -102,10 +102,16 @@ echo. The plaintext token is never stored or printed. A running server keeps the
 token it loaded at startup; restart it to enforce the new token. See
 [SECURITY.md](SECURITY.md).
 
-### `auradb cert generate-dev [--out-dir <dir>]`
-Generates development-only TLS certificates: `ca.crt`, `ca.key`, `server.crt`,
-and `server.key`. The server certificate has SANs `localhost` and `127.0.0.1`,
-signed by the generated development CA. Development use only.
+### `auradb cert generate-dev [--out-dir <dir>] [--server-name <name>] [--san <name>]...`
+Generates development-only TLS certificates: a `ca.crt` / `ca.key` development CA
+and a server certificate/key signed by it. With no arguments it writes
+`server.crt` / `server.key` with SANs `localhost` and `127.0.0.1` (the original
+behavior). With `--server-name nodeN` it sets the certificate Common Name and
+writes `nodeN.crt` / `nodeN.key`, and `--san` (repeatable) sets the Subject
+Alternative Names (defaulting to the server name plus `localhost` and
+`127.0.0.1`). An existing CA in the output directory is reused, so several
+per-node certificates can share one trust root — see
+`examples/cluster/generate-dev-certs.sh`. Development use only.
 
 ### `auradb config validate [--config <file>] [--no-file-checks]`
 Validates a config file without starting the server. Fails on invalid values or
@@ -136,7 +142,12 @@ stand up a running node.
   and cluster identity if not already present. (`auradb init` also creates node
   identity.)
 - `auradb cluster status [--data-dir <dir>] [--config <file>] [--json]` — show
-  local cluster metadata for a data directory.
+  local cluster metadata for a data directory. **(v0.5.1)** With `--addr
+  <client-addr>` (plus optional `--token` / `--tls-ca` / `--server-name`) it
+  instead queries a **running** server for live diagnostics: role, leader (and its
+  client address), quorum availability, commit/applied/last-log indices,
+  replication lag, and per-peer reachability (`connected`, `connect_attempts`,
+  `match_index` / `next_index`).
 - `auradb cluster peers [--data-dir <dir>] [--config <file>] [--json]` — list
   configured cluster peers.
 - `auradb cluster doctor [--data-dir <dir>] [--config <file>] [--json]` — validate

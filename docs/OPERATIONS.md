@@ -135,10 +135,10 @@ portable snapshots with `auradb snapshot create|inspect|restore`. For diagnosing
 see [CLUSTER_TROUBLESHOOTING.md](CLUSTER_TROUBLESHOOTING.md). See also
 [CLUSTERING.md](CLUSTERING.md) and [CLI.md](CLI.md).
 
-## Multi-node preview operations (v0.5.0)
+## Multi-node preview operations (v0.5.0, hardened in v0.5.1)
 
-> **AuraDB v0.5.0 introduces a controlled, experimental multi-node server
-> preview. Single-node mode remains the recommended production mode.**
+> **AuraDB v0.5.1 hardens the controlled multi-node preview. Single-node mode
+> remains the recommended production mode.**
 
 The preview lets real server processes form a cross-process cluster, elect a
 leader, and replicate writes through Raft. It is **off by default** and requires
@@ -156,8 +156,15 @@ auradb server --config examples/cluster/node3.toml
 auradb cluster wait-ready  --addr 127.0.0.1:7171 --timeout-secs 30
 auradb cluster wait-leader --addr 127.0.0.1:7171 --timeout-secs 30
 auradb cluster leader      --addr 127.0.0.1:7171 --json
+# v0.5.1: live cluster diagnostics (role, leader + client address, quorum,
+# indices, replication lag, per-peer reachability and connection attempts).
+auradb cluster status      --addr 127.0.0.1:7171 --json
 auradb status              --addr 127.0.0.1:7171 --json
 ```
+
+Or run the whole loopback flow with `scripts/smoke_cluster_loopback.sh`, and the
+Docker Compose flow (generate dev certs, start, wait, status, tear down) with
+`scripts/smoke_cluster_compose.sh`.
 
 Operating notes:
 
@@ -169,7 +176,15 @@ Operating notes:
 - **Public (non-loopback) clusters fail closed** unless
   `allow_experimental_public_cluster = true`, which additionally requires peer
   TLS (`[cluster.tls]`) and a `peer_auth_token`. The Docker Compose preview under
-  `examples/cluster/docker/` shows this path.
+  `examples/cluster/docker/` shows this path. Generate development certificates
+  with `examples/cluster/generate-dev-certs.sh` (development only).
+- **Rotate peer certificates and the peer token with a rolling restart**, one
+  node at a time, keeping a quorum. Re-issue a node's certificate from the same
+  CA and restart only that node; to rotate the CA, distribute an old+new CA
+  bundle, roll onto new-CA certs, then drop the old CA. Update `peer_auth_token`
+  on each node and restart it, watching `auradb cluster status --addr` for peer
+  connectivity. See [SECURITY.md](SECURITY.md) and
+  [CLUSTERING.md](CLUSTERING.md).
 - **Watch quorum.** `auradb_cluster_quorum_available` and the
   `quorum_available` status field tell you whether a majority is connected.
 

@@ -46,8 +46,10 @@ node_id = "00000000000000a1"
 listen_addr = "127.0.0.1:7172"
 advertise_addr = "127.0.0.1:7172"
 bootstrap = true
-# Static membership: every other node, by id and cluster address.
+# Static membership: every other node, by id and cluster address. The optional
+# client_addr lets a `not_leader` response and cluster diagnostics report the
+# leader's client address so a client can redirect.
 peers = [
-  { node_id = "00000000000000a2", addr = "127.0.0.1:7182" },
-  { node_id = "00000000000000a3", addr = "127.0.0.1:7192" },
+  { node_id = "00000000000000a2", addr = "127.0.0.1:7182", client_addr = "127.0.0.1:7181" },
+  { node_id = "00000000000000a3", addr = "127.0.0.1:7192", client_addr = "127.0.0.1:7191" },
 ]

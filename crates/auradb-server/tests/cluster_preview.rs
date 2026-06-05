@@ -75,6 +75,10 @@ async fn start_cluster() -> Vec<RunningNode> {
             .map(|j| PeerConfig {
                 node_id: ids[j].to_string(),
                 addr: cluster_addrs[j].clone(),
+                // Declare each peer's client-facing address so a `not_leader`
+                // response and the cluster health can report the leader's client
+                // address (the v0.5.1 ergonomics).
+                client_addr: Some(format!("127.0.0.1:{}", client_ports[j])),
             })
             .collect();
         let cluster = ClusterConfig {
@@ -252,6 +256,52 @@ async fn follower_health_reports_role_and_leader() {
     // The follower recognizes the elected leader.
     let leader_id = nodes[leader].server.cluster_status().unwrap().node_id;
     assert_eq!(cluster.leader_id, leader_id.map(|id| id.to_string()));
+
+    shutdown_all(&nodes);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn not_leader_error_contains_leader_client_addr() {
+    let nodes = start_cluster().await;
+    let leader = wait_for_leader(&nodes, Duration::from_secs(15)).await;
+    let follower = (0..nodes.len()).find(|&i| i != leader).unwrap();
+
+    // A write to a follower returns not_leader; because each node declared its
+    // peers' client addresses, the message names the leader's client address.
+    let resp = awp_insert(&nodes[follower].client_addr, 3, 2).await;
+    assert_eq!(resp.opcode, Opcode::Error);
+    let payload: auradb_protocol::ErrorPayload = resp.decode_json().unwrap();
+    assert_eq!(payload.code, auradb_core::ErrorCode::NotLeader);
+    assert_eq!(payload.retryable, Some(true), "not_leader is retryable");
+    let leader_client = &nodes[leader].client_addr;
+    assert!(
+        payload.message.contains(leader_client),
+        "not_leader names the leader's client address {leader_client}: {}",
+        payload.message
+    );
+
+    shutdown_all(&nodes);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn cluster_status_reports_leader_client_addr() {
+    let nodes = start_cluster().await;
+    let leader = wait_for_leader(&nodes, Duration::from_secs(15)).await;
+    let follower = (0..nodes.len()).find(|&i| i != leader).unwrap();
+
+    // The follower's health reports the leader's declared client address.
+    let health = awp_health(&nodes[follower].client_addr).await;
+    let cluster = health.cluster.expect("cluster health present");
+    assert_eq!(
+        cluster.leader_client_addr.as_deref(),
+        Some(nodes[leader].client_addr.as_str()),
+        "health reports the leader's client address"
+    );
+    // Per-peer diagnostics carry each peer's declared client address.
+    assert!(
+        cluster.peers.iter().all(|p| p.client_addr.is_some()),
+        "every peer reports a declared client address"
+    );
 
     shutdown_all(&nodes);
 }

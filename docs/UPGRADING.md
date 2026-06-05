@@ -1,5 +1,38 @@
 # Upgrading
 
+## From v0.5.0 to v0.5.1
+
+> **AuraDB v0.5.1 hardens the controlled multi-node preview. Single-node mode
+> remains the recommended production mode.**
+
+v0.5.1 is a patch release and a drop-in binary replacement. It changes **no
+on-disk format**: storage stays at v2, cluster metadata at v1, the Raft log,
+hard state, compaction marker, and commit base are unchanged, and the snapshot
+manifest stays at v1. A v0.5.0 data directory — single-node or a single-node /
+multi-node cluster directory with its `cluster/` identity and Raft state — opens
+directly with no migration. Stop the old binary, swap in the new one, start it.
+
+If you do nothing, behavior is unchanged. What is new in v0.5.1:
+
+- `auradb cert generate-dev` accepts `--server-name` and repeatable `--san`
+  flags for per-node development certificates; the previous no-argument form is
+  unchanged (it still emits a `localhost` / `127.0.0.1` server certificate).
+- `auradb cluster status --addr <server>` queries a running server for live
+  cluster diagnostics (role, leader, quorum, indices, per-peer reachability).
+  The offline `auradb cluster status --data-dir <dir>` form is unchanged.
+- The health report's `cluster` section gains additive diagnostics fields and
+  the error payload gains an optional `retryable` hint. Both are additive and
+  ignored by older clients, so the Aura Wire Protocol stays at AWP 1 and Aura
+  Connector 0.3.x remains compatible — no connector release is required.
+- `examples/cluster/generate-dev-certs.sh`, `docker-compose.cluster.yml`, and
+  `scripts/smoke_cluster_compose.sh` make the local Docker cluster preview
+  runnable without hand-crafting certificates. Generated certificates are
+  development-only.
+
+**Downgrade.** v0.5.0 and v0.5.1 share the same on-disk and wire formats, so a
+v0.5.1 data directory can be reopened by v0.5.0. As always, back up the data
+directory before changing versions. See [CLUSTERING.md](CLUSTERING.md).
+
 ## From v0.4.1 to v0.5.0
 
 > **AuraDB v0.5.0 introduces a controlled, experimental multi-node server

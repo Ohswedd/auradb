@@ -84,6 +84,7 @@ fn peer(node_id: &str, addr: &str) -> auradb_cluster::PeerConfig {
     auradb_cluster::PeerConfig {
         node_id: node_id.to_string(),
         addr: addr.to_string(),
+        client_addr: None,
     }
 }
 

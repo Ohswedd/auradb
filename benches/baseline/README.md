@@ -18,3 +18,8 @@ number from one laptop is not comparable to a number from another.
 
 The benchmark opens the engine with `sync_on_commit = false` so it measures
 engine work rather than disk-flush latency. See [docs/BENCHMARKS.md](../../docs/BENCHMARKS.md).
+
+The current baseline is `v0.5.1.json`. It is the single-node engine suite;
+multi-node replicated-write latency is topology- and network-dependent and is
+exercised by the cross-process preview tests
+(`crates/auradb-replication/tests/multi_node.rs`) rather than committed here.

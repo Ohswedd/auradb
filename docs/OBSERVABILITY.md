@@ -75,7 +75,7 @@ is high, the oldest snapshot is too old, retained versions exceed a threshold, G
 is disabled, transaction timeouts are disabled, statistics are stale, or the index
 consistency check fails. See [OPERATIONS.md](OPERATIONS.md).
 
-### Cluster health (v0.4.0, extended in v0.5.0)
+### Cluster health (v0.4.0, extended in v0.5.0 and v0.5.1)
 
 When cluster mode is enabled, the health report gains an additive `cluster`
 section: `node_id`, `cluster_id`, `role`, `term`, `leader_id`, `commit_index`,
@@ -86,12 +86,18 @@ section: `node_id`, `cluster_id`, `role`, `term`, `leader_id`, `commit_index`,
   active.
 - `quorum_available` (bool) — whether a majority of nodes is connected (a
   minority cannot commit).
-- `peers` — an array of `{ node_id, addr, connected, match_index, next_index }`,
-  one entry per declared peer.
+- `peers` — an array of one entry per declared peer. New in v0.5.1, each entry is
+  `{ node_id, addr, client_addr?, connected, connect_attempts, match_index,
+  next_index }`.
+- `leader_client_addr` (v0.5.1) — the recognized leader's client-facing address
+  when a peer declared a `client_addr`; omitted (unknown) otherwise.
 
 These are additive AWP fields; the Aura Wire Protocol version is unchanged at AWP
-1, and an older client ignores them. The `auradb status --json` and `auradb
-doctor` outputs include the cluster fields. See [CLUSTERING.md](CLUSTERING.md).
+1, and an older client ignores them. The `auradb status --json`, `auradb cluster
+status --addr --json`, and `auradb doctor` outputs include the cluster fields.
+The error payload also gained an additive, optional `retryable` hint (set for
+`not_leader`, conflicts, and transaction timeouts). See
+[CLUSTERING.md](CLUSTERING.md).
 
 ### JSON output
 

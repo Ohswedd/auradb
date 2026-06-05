@@ -7,7 +7,7 @@
 [![CI](https://github.com/Ohswedd/auradb/actions/workflows/ci.yml/badge.svg)](https://github.com/Ohswedd/auradb/actions/workflows/ci.yml)
 [![Security](https://github.com/Ohswedd/auradb/actions/workflows/security.yml/badge.svg)](https://github.com/Ohswedd/auradb/actions/workflows/security.yml)
 [![Docker](https://github.com/Ohswedd/auradb/actions/workflows/docker.yml/badge.svg)](https://github.com/Ohswedd/auradb/actions/workflows/docker.yml)
-[![Release](https://img.shields.io/badge/release-v0.5.0-green.svg)](CHANGELOG.md)
+[![Release](https://img.shields.io/badge/release-v0.5.1-green.svg)](CHANGELOG.md)
 [![Rust](https://img.shields.io/badge/rust-1.85%2B-orange.svg)](https://www.rust-lang.org)
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
 
@@ -34,9 +34,13 @@ AuraDB 0.5.0 introduces a **controlled, experimental multi-node server preview**
 real AuraDB server processes can form a cross-process cluster, elect a leader, and
 replicate writes through Raft over a dedicated, frame-checked, authenticated peer
 transport. The preview is **off by default** and gated behind two explicit
-`[cluster]` opt-ins. **AuraDB v0.5.0 introduces a controlled, experimental
-multi-node server preview. Single-node mode remains the recommended production
-mode.** It builds on the v0.4.x Raft and replication groundwork (a durable
+`[cluster]` opt-ins. **AuraDB v0.5.1 hardens the controlled multi-node preview.
+Single-node mode remains the recommended production mode.** v0.5.1 is a patch
+release that adds local Docker cluster automation with generated development
+certificates, sharper cluster diagnostics, more honest `not_leader` ergonomics,
+and additional leader-restart and follower-catch-up coverage; it makes no
+production-clustering claims. It builds on the v0.4.x Raft and replication
+groundwork (a durable
 consensus core, a replicated commit path, log compaction boundaries, and snapshot
 restore hardening), and changes no on-disk or wire format.
 
@@ -328,7 +332,7 @@ auradb check --data-dir .local/auradb
 auradb gc --data-dir .local/auradb
 auradb stats analyze --data-dir .local/auradb
 auradb stats show --data-dir .local/auradb --json
-auradb bench --json --output benches/baseline/v0.5.0.json
+auradb bench --json --output benches/baseline/v0.5.1.json
 auradb status --addr 127.0.0.1:7171 --json
 auradb cluster leader --addr 127.0.0.1:7171 --json
 auradb cluster wait-leader --addr 127.0.0.1:7171 --timeout-secs 30
@@ -433,7 +437,7 @@ are exposed. No external collector is required to run the server. See
 A published image is available on the GitHub Container Registry:
 
 ```bash
-docker run --rm -p 7171:7171 -v auradb-data:/data ghcr.io/ohswedd/auradb:0.5.0
+docker run --rm -p 7171:7171 -v auradb-data:/data ghcr.io/ohswedd/auradb:0.5.1
 ```
 
 The image runs as a non-root user, exposes `7171`, stores data in the `/data`
@@ -489,7 +493,7 @@ and `EXPLAIN ANALYZE`.
 The CLI also runs a baseline suite and writes a JSON snapshot:
 
 ```bash
-auradb bench --json --output benches/baseline/v0.5.0.json
+auradb bench --json --output benches/baseline/v0.5.1.json
 ```
 
 Benchmarks are hardware-dependent and exist to catch regressions on the same

@@ -48,6 +48,12 @@ jobs:
       - name: Server-level multi-node preview (AWP routing)
         run: cargo test -p auradb-server --test cluster_preview
 
+      - name: Peer TLS validation (wrong CA / SAN, rotation)
+        run: cargo test -p auradb-server --test peer_tls
+
+      - name: not_leader ergonomics
+        run: cargo test -p auradb-server --test not_leader
+
       - name: Live cluster CLI commands
         run: cargo test -p auradb-cli --test cluster_cli
 
@@ -88,11 +94,33 @@ jobs:
           ./target/debug/auradb server --config examples/cluster/node2.toml > node2.log 2>&1 &
           ./target/debug/auradb server --config examples/cluster/node3.toml > node3.log 2>&1 &
           ./target/debug/auradb cluster wait-leader --addr 127.0.0.1:7171 --timeout-secs 30
-          # Live status uses the top-level `status` command (the `cluster status`
-          # subcommand is the offline, data-dir view).
+          # Live cluster diagnostics: `cluster status --addr` queries the running
+          # server (role, leader, quorum, indices, per-peer state). The offline
+          # `cluster status --data-dir` view reads on-disk metadata.
+          ./target/debug/auradb cluster status --addr 127.0.0.1:7171 --json
           ./target/debug/auradb status --addr 127.0.0.1:7171 --json
           ./target/debug/auradb cluster leader --addr 127.0.0.1:7171
 
       - name: Tear down
         if: always()
         run: pkill -f 'auradb server --config examples/cluster' || true
+
+  compose-live-smoke:
+    name: Docker Compose live smoke (manual)
+    # Opt-in only: the live Docker Compose path is not a required check (it is
+    # heavier and image-dependent). Run it on demand via "Run workflow".
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Build the auradb image for the Compose cluster
+        # Tag the locally built image as the name docker-compose.cluster.yml
+        # references, so Compose uses it without pulling an unpublished tag.
+        run: docker build -t ghcr.io/ohswedd/auradb:0.5.1 .
+
+      - name: Generate dev certs, run the cluster, and tear it down
+        run: bash scripts/smoke_cluster_compose.sh

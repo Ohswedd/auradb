@@ -8,10 +8,10 @@ use auradb_cli::{
     build_config, cmd_auth_hash_token, cmd_auth_rotate_token, cmd_bench, cmd_bench_compare,
     cmd_bench_json, cmd_cert_generate_dev, cmd_check, cmd_cluster_bootstrap,
     cmd_cluster_compact_log, cmd_cluster_doctor, cmd_cluster_init, cmd_cluster_leader,
-    cmd_cluster_peers, cmd_cluster_status, cmd_cluster_wait_leader, cmd_cluster_wait_ready,
-    cmd_compact, cmd_compatibility, cmd_config_validate, cmd_doctor, cmd_doctor_json, cmd_dump,
-    cmd_gc, cmd_index_check, cmd_index_rebuild, cmd_init, cmd_restore, cmd_server,
-    cmd_snapshot_create, cmd_snapshot_inspect, cmd_snapshot_restore, cmd_stats_analyze,
+    cmd_cluster_peers, cmd_cluster_status, cmd_cluster_status_live, cmd_cluster_wait_leader,
+    cmd_cluster_wait_ready, cmd_compact, cmd_compatibility, cmd_config_validate, cmd_doctor,
+    cmd_doctor_json, cmd_dump, cmd_gc, cmd_index_check, cmd_index_rebuild, cmd_init, cmd_restore,
+    cmd_server, cmd_snapshot_create, cmd_snapshot_inspect, cmd_snapshot_restore, cmd_stats_analyze,
     cmd_stats_show, cmd_status, cmd_status_json, cmd_version,
 };
 use clap::{Parser, Subcommand};
@@ -214,12 +214,27 @@ enum ClusterCommand {
         #[arg(long)]
         config: Option<PathBuf>,
     },
-    /// Show local cluster metadata for a data directory.
+    /// Show cluster status. With `--addr`, query a running server for live
+    /// runtime diagnostics (role, leader, quorum, indices, per-peer state);
+    /// otherwise show the offline metadata view for `--data-dir`.
     Status {
         #[arg(long, default_value = ".local/auradb")]
         data_dir: PathBuf,
         #[arg(long)]
         config: Option<PathBuf>,
+        /// Query a running server's client port for live cluster diagnostics
+        /// instead of reading on-disk metadata.
+        #[arg(long)]
+        addr: Option<String>,
+        /// Authentication token, if the queried server requires auth.
+        #[arg(long)]
+        token: Option<String>,
+        /// PEM CA bundle to enable and verify TLS when querying `--addr`.
+        #[arg(long)]
+        tls_ca: Option<PathBuf>,
+        /// TLS server name to verify against when querying `--addr`.
+        #[arg(long, default_value = "localhost")]
+        server_name: String,
         /// Emit the report as JSON.
         #[arg(long)]
         json: bool,
@@ -409,9 +424,18 @@ enum CertCommand {
     /// Generate self-signed development certificates (a CA and a server
     /// certificate signed by it). For local testing only.
     GenerateDev {
-        /// Directory to write ca.crt, ca.key, server.crt, and server.key into.
+        /// Directory to write the CA and certificate/key into.
         #[arg(long, default_value = ".local/certs")]
         out_dir: PathBuf,
+        /// Certificate Common Name and output file stem (e.g. `node1` writes
+        /// `node1.crt` / `node1.key`). Omit for the classic `server.crt` /
+        /// `server.key` with CN `localhost`.
+        #[arg(long)]
+        server_name: Option<String>,
+        /// Subject Alternative Name to include (repeatable). When omitted, the
+        /// SANs default to the server name plus `localhost` and `127.0.0.1`.
+        #[arg(long = "san")]
+        san: Vec<String>,
     },
 }
 
@@ -536,8 +560,12 @@ async fn main() -> Result<()> {
             } => println!("{}", cmd_auth_rotate_token(&config, token, backup)?),
         },
         Command::Cert { command } => match command {
-            CertCommand::GenerateDev { out_dir } => {
-                println!("{}", cmd_cert_generate_dev(&out_dir)?)
+            CertCommand::GenerateDev {
+                out_dir,
+                server_name,
+                san,
+            } => {
+                println!("{}", cmd_cert_generate_dev(&out_dir, server_name, san)?)
             }
         },
         Command::Index { command } => match command {
@@ -553,13 +581,27 @@ async fn main() -> Result<()> {
             ClusterCommand::Status {
                 data_dir,
                 config,
+                addr,
+                token,
+                tls_ca,
+                server_name,
                 json,
             } => {
-                let cfg =
-                    build_config(config.as_deref(), Some(data_dir.clone()), None, None, false)?;
-                print!("{}", cmd_cluster_status(&data_dir, &cfg, json)?);
-                if json {
-                    println!();
+                if let Some(addr) = addr {
+                    print!(
+                        "{}",
+                        cmd_cluster_status_live(&addr, token, tls_ca, &server_name, json).await?
+                    );
+                    if json {
+                        println!();
+                    }
+                } else {
+                    let cfg =
+                        build_config(config.as_deref(), Some(data_dir.clone()), None, None, false)?;
+                    print!("{}", cmd_cluster_status(&data_dir, &cfg, json)?);
+                    if json {
+                        println!();
+                    }
                 }
             }
             ClusterCommand::Peers {

@@ -1,12 +1,19 @@
 # Clustering
 
-> **AuraDB v0.5.0 introduces a controlled, experimental multi-node server
-> preview. Single-node mode remains the recommended production mode.** Real
-> AuraDB server processes can now form a cross-process cluster, elect a leader,
-> and replicate writes through Raft. This preview is **off by default** and is
-> intended for local testing and early validation only. For diagnosing and
-> recovering cluster mode, see
+> **AuraDB v0.5.1 hardens the controlled multi-node preview. Single-node mode
+> remains the recommended production mode.** Real AuraDB server processes can
+> form a cross-process cluster, elect a leader, and replicate writes through
+> Raft. This preview is **off by default** and is intended for local testing and
+> early validation only. For diagnosing and recovering cluster mode, see
 > [CLUSTER_TROUBLESHOOTING.md](CLUSTER_TROUBLESHOOTING.md).
+
+> **New in v0.5.1.** Local Docker cluster automation with generated development
+> certificates (`examples/cluster/generate-dev-certs.sh`,
+> `scripts/smoke_cluster_compose.sh`); a live `auradb cluster status --addr`
+> diagnostics view; sharper `not_leader` ergonomics (a leader hint with the
+> leader's client address and a retryable flag); peer TLS rotation guidance; and
+> additional leader-restart and follower-catch-up test coverage. Leader restart
+> is **preview behavior**, not production automatic failover.
 
 AuraDB introduced cluster mode in v0.4.0 (an optional, durable replication path
 built on a Raft consensus core) and hardened it in v0.4.1. v0.5.0 builds on that

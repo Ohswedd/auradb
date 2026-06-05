@@ -1,0 +1,6 @@
+# Generated development certificates and keys for the local preview cluster.
+# These are produced by generate-dev-certs.sh and must never be committed.
+certs/
+*.crt
+*.key
+*.pem

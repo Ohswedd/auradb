@@ -395,6 +395,7 @@ fn multi_node_cluster_without_preview_flag_fails_closed() {
     cluster.peers = vec![PeerConfig {
         node_id: "00000000000000a2".into(),
         addr: "127.0.0.1:7272".into(),
+        client_addr: None,
     }];
     let result = Server::open(Config {
         data_dir: dir.path().to_path_buf(),
