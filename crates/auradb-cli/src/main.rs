@@ -6,11 +6,12 @@ use std::path::PathBuf;
 use anyhow::Result;
 use auradb_cli::{
     build_config, cmd_auth_hash_token, cmd_auth_rotate_token, cmd_bench, cmd_bench_compare,
-    cmd_bench_json, cmd_cert_generate_dev, cmd_check, cmd_cluster_bootstrap, cmd_cluster_doctor,
-    cmd_cluster_init, cmd_cluster_peers, cmd_cluster_status, cmd_compact, cmd_compatibility,
-    cmd_config_validate, cmd_doctor, cmd_doctor_json, cmd_dump, cmd_gc, cmd_index_check,
-    cmd_index_rebuild, cmd_init, cmd_restore, cmd_server, cmd_stats_analyze, cmd_stats_show,
-    cmd_status, cmd_status_json, cmd_version,
+    cmd_bench_json, cmd_cert_generate_dev, cmd_check, cmd_cluster_bootstrap,
+    cmd_cluster_compact_log, cmd_cluster_doctor, cmd_cluster_init, cmd_cluster_peers,
+    cmd_cluster_status, cmd_compact, cmd_compatibility, cmd_config_validate, cmd_doctor,
+    cmd_doctor_json, cmd_dump, cmd_gc, cmd_index_check, cmd_index_rebuild, cmd_init, cmd_restore,
+    cmd_server, cmd_snapshot_create, cmd_snapshot_inspect, cmd_snapshot_restore, cmd_stats_analyze,
+    cmd_stats_show, cmd_status, cmd_status_json, cmd_version,
 };
 use clap::{Parser, Subcommand};
 
@@ -167,6 +168,40 @@ enum Command {
         #[command(subcommand)]
         command: ClusterCommand,
     },
+    /// Snapshot create / inspect / restore.
+    Snapshot {
+        #[command(subcommand)]
+        command: SnapshotCommand,
+    },
+}
+
+#[derive(Subcommand)]
+enum SnapshotCommand {
+    /// Capture a portable snapshot of a data directory to a file.
+    Create {
+        #[arg(long, default_value = ".local/auradb")]
+        data_dir: PathBuf,
+        /// Output snapshot file.
+        #[arg(long, visible_alias = "out")]
+        output: PathBuf,
+    },
+    /// Print a snapshot manifest and verify its integrity.
+    Inspect {
+        /// Input snapshot file.
+        #[arg(long, name = "in", visible_alias = "input")]
+        input: PathBuf,
+    },
+    /// Restore a snapshot file into a data directory.
+    Restore {
+        /// Input snapshot file.
+        #[arg(long, name = "in", visible_alias = "input")]
+        input: PathBuf,
+        #[arg(long, default_value = ".local/auradb-restore")]
+        data_dir: PathBuf,
+        /// Overwrite a non-empty target directory.
+        #[arg(long)]
+        force: bool,
+    },
 }
 
 #[derive(Subcommand)]
@@ -214,6 +249,19 @@ enum ClusterCommand {
         data_dir: PathBuf,
         #[arg(long)]
         config: Option<PathBuf>,
+    },
+    /// Compact the durable Raft log up to the safely-applied prefix.
+    CompactLog {
+        #[arg(long, default_value = ".local/auradb")]
+        data_dir: PathBuf,
+        #[arg(long)]
+        config: Option<PathBuf>,
+        /// Report what would be compacted without modifying any data.
+        #[arg(long)]
+        dry_run: bool,
+        /// Emit the report as JSON.
+        #[arg(long)]
+        json: bool,
     },
 }
 
@@ -490,6 +538,35 @@ async fn main() -> Result<()> {
                     build_config(config.as_deref(), Some(data_dir.clone()), None, None, false)?;
                 print!("{}", cmd_cluster_bootstrap(&data_dir, &cfg)?);
             }
+            ClusterCommand::CompactLog {
+                data_dir,
+                config,
+                dry_run,
+                json,
+            } => {
+                let cfg =
+                    build_config(config.as_deref(), Some(data_dir.clone()), None, None, false)?;
+                print!(
+                    "{}",
+                    cmd_cluster_compact_log(&data_dir, &cfg, dry_run, json)?
+                );
+                if json {
+                    println!();
+                }
+            }
+        },
+        Command::Snapshot { command } => match command {
+            SnapshotCommand::Create { data_dir, output } => {
+                println!("{}", cmd_snapshot_create(&data_dir, &output)?)
+            }
+            SnapshotCommand::Inspect { input } => {
+                println!("{}", cmd_snapshot_inspect(&input)?)
+            }
+            SnapshotCommand::Restore {
+                input,
+                data_dir,
+                force,
+            } => println!("{}", cmd_snapshot_restore(&input, &data_dir, force)?),
         },
     }
     Ok(())

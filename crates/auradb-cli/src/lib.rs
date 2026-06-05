@@ -15,8 +15,9 @@ use serde::{Deserialize, Serialize};
 
 mod cluster;
 pub use cluster::{
-    cluster_metadata_report, cmd_cluster_bootstrap, cmd_cluster_doctor, cmd_cluster_init,
-    cmd_cluster_peers, cmd_cluster_status, ClusterDoctorReport, ClusterMetadataReport,
+    cluster_metadata_report, cmd_cluster_bootstrap, cmd_cluster_compact_log, cmd_cluster_doctor,
+    cmd_cluster_init, cmd_cluster_peers, cmd_cluster_status, ClusterDoctorReport,
+    ClusterMetadataReport,
 };
 
 /// The package version.
@@ -816,6 +817,109 @@ pub fn cmd_restore(data_dir: &Path, input: &Path) -> Result<usize> {
     Ok(records)
 }
 
+/// `auradb snapshot create` - capture the engine state as a portable snapshot
+/// file. When the data directory carries cluster identity, the snapshot records
+/// the cluster and node id so a later restore can detect a cluster mismatch.
+pub fn cmd_snapshot_create(data_dir: &Path, output: &Path) -> Result<String> {
+    use auradb_replication::SnapshotManifest;
+    let engine = Engine::open(data_dir).context("opening engine")?;
+    let identity = auradb_cluster::ClusterStore::new(data_dir)
+        .load()
+        .ok()
+        .flatten();
+    let (cid, nid) = match &identity {
+        Some(id) => (
+            Some(id.cluster_id().to_string()),
+            Some(id.node_id().to_string()),
+        ),
+        None => (None, None),
+    };
+    let manifest = SnapshotManifest::create(&engine, 0, 0, VERSION)
+        .map_err(|e| anyhow::anyhow!("{e}"))?
+        .with_identity(cid, nid);
+    let bytes = manifest.encode().map_err(|e| anyhow::anyhow!("{e}"))?;
+    if let Some(parent) = output.parent() {
+        std::fs::create_dir_all(parent).ok();
+    }
+    std::fs::write(output, &bytes).with_context(|| format!("writing {}", output.display()))?;
+    Ok(format!(
+        "wrote snapshot to {} ({} collection(s), {} record(s))",
+        output.display(),
+        manifest.meta.collections,
+        manifest.meta.records
+    ))
+}
+
+/// `auradb snapshot inspect` - print a snapshot manifest and verify its integrity
+/// without restoring it.
+pub fn cmd_snapshot_inspect(input: &Path) -> Result<String> {
+    use auradb_replication::SnapshotManifest;
+    let bytes = std::fs::read(input).with_context(|| format!("reading {}", input.display()))?;
+    let manifest = SnapshotManifest::decode(&bytes).map_err(|e| anyhow::anyhow!("{e}"))?;
+    let integrity = match manifest.verified_payload() {
+        Ok(_) => "ok",
+        Err(_) => "FAILED",
+    };
+    let m = &manifest.meta;
+    Ok(format!(
+        "snapshot_format_version: {}\n\
+         cluster_id: {}\n\
+         node_id: {}\n\
+         last_included_index: {}\n\
+         last_included_term: {}\n\
+         storage_format_version: {}\n\
+         collections: {}\n\
+         records: {}\n\
+         digest: {:08x}\n\
+         integrity: {}\n\
+         created_by_version: {}\n\
+         created_at_unix: {}",
+        m.format_version,
+        m.cluster_id.as_deref().unwrap_or("(none)"),
+        m.node_id.as_deref().unwrap_or("(none)"),
+        m.last_included_index,
+        m.last_included_term,
+        m.storage_format_version,
+        m.collections,
+        m.records,
+        m.digest,
+        integrity,
+        m.created_by_version,
+        m.created_at_unix,
+    ))
+}
+
+/// `auradb snapshot restore` - restore a snapshot file into a data directory.
+/// Refuses to overwrite a non-empty directory unless `force` is set; the restore
+/// is atomic (built in a staging directory and swapped into place).
+pub fn cmd_snapshot_restore(input: &Path, data_dir: &Path, force: bool) -> Result<String> {
+    use auradb_replication::{RestoreOptions, SnapshotManifest};
+    let bytes = std::fs::read(input).with_context(|| format!("reading {}", input.display()))?;
+    let manifest = SnapshotManifest::decode(&bytes).map_err(|e| anyhow::anyhow!("{e}"))?;
+    let opts = RestoreOptions {
+        force,
+        ..RestoreOptions::default()
+    };
+    let engine = manifest
+        .restore_to(data_dir, &opts)
+        .map_err(|e| anyhow::anyhow!("{e}"))?;
+    let records: usize = engine
+        .list_schemas()
+        .iter()
+        .map(|s| {
+            engine
+                .find(&FindQuery::new(&s.name))
+                .map(|r| r.len())
+                .unwrap_or(0)
+        })
+        .sum();
+    Ok(format!(
+        "restored snapshot into {} ({} record(s))",
+        data_dir.display(),
+        records
+    ))
+}
+
 /// `auradb server` - start the network server until Ctrl-C.
 pub async fn cmd_server(config: Config) -> Result<()> {
     auradb_observability::init_tracing(&config.log_level, config.log_json);
@@ -1306,10 +1410,15 @@ pub fn run_bench(data_dir: &Path, records: usize, commit: Option<String>) -> Res
 }
 
 /// Create a unique scratch directory beside `base` for transient benchmark
-/// artifacts.
+/// artifacts. The name combines the process id with a per-call atomic counter so
+/// concurrent benchmark runs in the same process (for example parallel tests
+/// sharing the system temp dir) never collide on the same scratch path.
 fn tempdir_in_parent(base: &Path) -> Result<PathBuf> {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static SEQ: AtomicU64 = AtomicU64::new(0);
     let parent = base.parent().unwrap_or_else(|| Path::new("."));
-    let dir = parent.join(format!(".auradb-bench-tmp-{}", std::process::id()));
+    let seq = SEQ.fetch_add(1, Ordering::Relaxed);
+    let dir = parent.join(format!(".auradb-bench-tmp-{}-{seq}", std::process::id()));
     std::fs::create_dir_all(&dir)?;
     Ok(dir)
 }
@@ -1526,6 +1635,75 @@ mod tests {
         assert_eq!(restored, 3);
         let engine = Engine::open(&dst).unwrap();
         assert_eq!(engine.find(&FindQuery::new("C")).unwrap().len(), 3);
+    }
+
+    #[test]
+    fn snapshot_create_inspect_restore_roundtrips() {
+        use auradb::core::{FieldDef, FieldType};
+        let dir = tempfile::tempdir().unwrap();
+        let data = dir.path().join("data");
+        {
+            let engine = Engine::open(&data).unwrap();
+            engine
+                .create_schema(CollectionSchema::new("C").with_field(FieldDef {
+                    name: "id".into(),
+                    field_type: FieldType::Uuid,
+                    primary_key: true,
+                    unique: true,
+                    nullable: false,
+                    indexed: false,
+                }))
+                .unwrap();
+            for i in 0..3 {
+                let mut f = Document::new();
+                f.insert("id".into(), Value::Text(format!("r{i}")));
+                engine.insert("C", f).unwrap();
+            }
+        }
+        let snap = dir.path().join("snap.aura");
+        let out = cmd_snapshot_create(&data, &snap).unwrap();
+        assert!(out.contains("3 record(s)"), "{out}");
+
+        let inspect = cmd_snapshot_inspect(&snap).unwrap();
+        assert!(inspect.contains("records: 3"), "{inspect}");
+        assert!(inspect.contains("integrity: ok"), "{inspect}");
+
+        let restore_dir = dir.path().join("restored");
+        let r = cmd_snapshot_restore(&snap, &restore_dir, false).unwrap();
+        assert!(r.contains("3 record(s)"), "{r}");
+        let engine = Engine::open(&restore_dir).unwrap();
+        assert_eq!(engine.find(&FindQuery::new("C")).unwrap().len(), 3);
+    }
+
+    #[test]
+    fn snapshot_restore_refuses_nonempty_without_force() {
+        use auradb::core::{FieldDef, FieldType};
+        let dir = tempfile::tempdir().unwrap();
+        let data = dir.path().join("data");
+        {
+            let engine = Engine::open(&data).unwrap();
+            engine
+                .create_schema(CollectionSchema::new("C").with_field(FieldDef {
+                    name: "id".into(),
+                    field_type: FieldType::Uuid,
+                    primary_key: true,
+                    unique: true,
+                    nullable: false,
+                    indexed: false,
+                }))
+                .unwrap();
+            let mut f = Document::new();
+            f.insert("id".into(), Value::Text("r0".into()));
+            engine.insert("C", f).unwrap();
+        }
+        let snap = dir.path().join("snap.aura");
+        cmd_snapshot_create(&data, &snap).unwrap();
+        let target = dir.path().join("target");
+        cmd_snapshot_restore(&snap, &target, false).unwrap();
+        // A second restore into the now-populated target is refused without force.
+        assert!(cmd_snapshot_restore(&snap, &target, false).is_err());
+        // With force it succeeds.
+        assert!(cmd_snapshot_restore(&snap, &target, true).is_ok());
     }
 
     #[test]

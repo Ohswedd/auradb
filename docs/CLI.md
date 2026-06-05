@@ -143,10 +143,33 @@ stand up a running node.
   the cluster configuration and on-disk identity offline.
 - `auradb cluster bootstrap [--data-dir <dir>] [--config <file>]` — bootstrap a
   brand-new single-node cluster identity.
+- `auradb cluster compact-log [--data-dir <dir>] [--config <file>] [--dry-run]
+  [--json]` (v0.4.1) — compact the durable Raft log up to the safely-applied
+  prefix. `--dry-run` reports what would be discarded without modifying anything.
+  Compaction never runs ahead of the committed/applied prefix. Requires an
+  initialized single-node cluster.
 
 `join`, `leave`, and `step-down` are **not provided**, because membership changes
 are not implemented in this release. `auradb status --json` and `auradb doctor`
-also include the cluster fields. See [CLUSTERING.md](CLUSTERING.md).
+also include the cluster fields. See [CLUSTERING.md](CLUSTERING.md) and
+[CLUSTER_TROUBLESHOOTING.md](CLUSTER_TROUBLESHOOTING.md).
+
+### `auradb snapshot ...` (v0.4.1)
+Capture, inspect, and restore a portable snapshot of a data directory. A snapshot
+is a self-contained logical dump (schemas + current live records) with a versioned
+manifest recording the cluster/node id, storage-format version, collection/record
+counts, a digest, and a creation timestamp.
+
+- `auradb snapshot create --data-dir <dir> --output <file>` — write a snapshot
+  file. If the directory carries cluster identity, the snapshot records it.
+- `auradb snapshot inspect --input <file>` — print the manifest and verify its
+  payload digest (`integrity: ok`) without restoring.
+- `auradb snapshot restore --input <file> --data-dir <dir> [--force]` — restore a
+  snapshot into a data directory. The restore is **atomic** (built in a staging
+  directory, validated, then swapped into place) and refuses to overwrite a
+  non-empty directory unless `--force` is passed. Future formats, cluster-id
+  mismatches, corrupt manifests, and digest mismatches are rejected before any
+  existing data is touched.
 
 ## Examples
 

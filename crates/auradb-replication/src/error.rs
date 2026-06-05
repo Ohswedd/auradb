@@ -36,6 +36,13 @@ pub enum ReplicationError {
     /// A snapshot manifest or payload was malformed.
     #[error("snapshot is malformed: {0}")]
     SnapshotMalformed(String),
+
+    /// A snapshot restore was refused: the target directory is non-empty without
+    /// `--force`, the snapshot's cluster id does not match the target, or the
+    /// snapshot's storage format is newer than this build understands. Restore
+    /// fails closed before touching existing data.
+    #[error("snapshot restore refused: {0}")]
+    SnapshotRestoreRefused(String),
 }
 
 /// Result alias for replication operations.

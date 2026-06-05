@@ -37,4 +37,4 @@ pub use log::{
 };
 pub use node::{single_node, Envelope, Message, RaftConfig, RaftMetrics, RaftNode};
 pub use sim::Sim;
-pub use storage::FileStorage;
+pub use storage::{CompactionOutcome, FileStorage};

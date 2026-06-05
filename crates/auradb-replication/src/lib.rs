@@ -34,5 +34,5 @@ mod snapshot;
 pub use apply::apply_command;
 pub use command::{ReplicatedCommand, SchemaCommand, ENVELOPE_VERSION};
 pub use error::{ReplicationError, Result};
-pub use node::{ClusterNode, ReplicationMetrics};
-pub use snapshot::{SnapshotManifest, SnapshotMeta, SNAPSHOT_FORMAT_VERSION};
+pub use node::{ClusterNode, CompactionReport, ReplicationMetrics};
+pub use snapshot::{RestoreOptions, SnapshotManifest, SnapshotMeta, SNAPSHOT_FORMAT_VERSION};

@@ -7,7 +7,13 @@ AuraDB ships two complementary benchmark paths:
    full-scan queries, exact vector search, cursor paging, and (added in 0.3.0)
    MVCC version reads and GC (`crates/auradb/benches/mvcc.rs`), planner
    access-path selection (`benches/planner.rs`), and `EXPLAIN ANALYZE`
-   (`benches/explain_analyze.rs`).
+   (`benches/explain_analyze.rs`). v0.4.1 adds **single-node cluster overhead**
+   (`crates/auradb-replication/benches/cluster_overhead.rs`): it compares the
+   direct (non-cluster) write/read path against the single-node Raft-backed path,
+   plus the cost of assembling a cluster status snapshot. A single-node cluster
+   orders every write through the Raft log, so a cluster write is expected to cost
+   more than a direct write — the bench quantifies that overhead for same-machine
+   regression tracking. It is not a universal performance claim.
 2. **A baseline snapshot runner** in the CLI, run with `auradb bench`, which
    measures a representative set of engine operations and emits a JSON report.
 
@@ -95,6 +101,23 @@ Capture and compare a v0.4.0 baseline the same way as prior releases:
 cargo run --release -p auradb-cli -- bench --json --output benches/baseline/v0.4.0.json
 auradb bench compare --baseline benches/baseline/v0.3.1.json --current benches/baseline/v0.4.0.json
 ```
+
+## Single-node cluster overhead (v0.4.1)
+
+v0.4.1 adds `crates/auradb-replication/benches/cluster_overhead.rs`, a focused
+Criterion bench comparing the direct write/read path against the single-node
+Raft-backed path (and the cost of a cluster status snapshot). The committed engine
+baseline for this release is `benches/baseline/v0.4.1.json`:
+
+```bash
+cargo run --release -p auradb-cli -- bench --json --output benches/baseline/v0.4.1.json
+auradb bench compare --baseline benches/baseline/v0.4.0.json --current benches/baseline/v0.4.1.json
+cargo bench -p auradb-replication --bench cluster_overhead
+```
+
+Benchmark output is honest: machine-specific, used only for same-machine
+regression tracking, with no universal performance claim. Thresholds are not a
+hard CI gate.
 
 Benchmark numbers are hardware- and load-sensitive; regenerate the baseline on your
 own quiescent machine before using it as a local reference.

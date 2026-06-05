@@ -4,6 +4,59 @@ All notable changes to AuraDB are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and the project uses
 [Semantic Versioning](https://semver.org/).
 
+## [0.4.1] - 2026-06-05
+
+Raft durability and cluster-mode hardening. A patch release that strengthens the
+Raft and replication groundwork from v0.4.0 before any real cross-process
+multi-node preview. No storage-format or wire-protocol change: multi-node server
+deployment remains experimental and disabled by default, and single-node mode
+remains the recommended production path. All v0.4.0 behavior is preserved.
+
+### Added
+- Raft log compaction boundary validation: a compactable-prefix calculation that
+  refuses to discard entries that are not safely applied or are beyond the
+  committed index, preserves the last included index and term, persists
+  `raft-compaction.json`, and surfaces a structured `Compacted` error for reads
+  before the retained prefix. AppendEntries consistency checks understand the
+  compacted prefix.
+- Snapshot restore edge-case tests and a richer snapshot manifest (cluster id,
+  node id, storage-format version, created-at timestamp), with restore that is
+  atomic (build in a temporary directory, validate, then swap), refuses to
+  overwrite a non-empty target without `--force`, and rejects future formats,
+  cluster-id mismatch, corrupt manifests, and digest mismatches.
+- Raft apply idempotency tests under restart and crash-like sequences (commit
+  before apply, partial apply, apply before watermark update).
+- Cluster metadata corruption tests (missing, malformed, future-format, and
+  partial identity) that fail closed.
+- Stronger peer configuration validation: duplicate peers, a peer equal to the
+  local node id, and any non-empty peers list are rejected with clear errors in
+  this release (cross-process peers are not enabled).
+- Single-node cluster overhead benchmarks (`benches/baseline/v0.4.1.json`,
+  `auradb-cluster` `cluster_overhead` bench) comparing direct and single-node
+  cluster write/read paths for same-machine regression tracking.
+- Deterministic multi-node partition tests (minority cannot commit, majority
+  elects a leader, old leader steps down on rejoin, committed entries survive a
+  leader change, an uncommitted old-leader entry never commits and is repaired
+  away).
+- Cluster troubleshooting documentation
+  ([docs/CLUSTER_TROUBLESHOOTING.md](docs/CLUSTER_TROUBLESHOOTING.md)).
+- Cluster operational diagnostics: `auradb cluster compact-log [--dry-run]
+  [--json]` and `auradb snapshot create|inspect|restore`.
+
+### Changed
+- Improved `auradb cluster status` / `auradb cluster doctor` output (JSON modes,
+  clearer peer-rejection and durability warnings).
+- Improved Raft durability checks around the compaction boundary and metadata.
+- Improved cluster-mode documentation and release guardrails.
+
+### Fixed
+- Hardened fail-closed handling of corrupt cluster metadata, corrupt Raft
+  compaction metadata, and inconsistent snapshot manifests found during
+  validation.
+- Gave each benchmark run a unique scratch directory (process id plus a per-call
+  counter) so concurrent `auradb bench` runs in one process no longer race on a
+  shared temporary path.
+
 ## [0.4.0] - 2026-06-05
 
 The replication and Raft foundation for future clustered deployments. This

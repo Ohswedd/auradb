@@ -39,11 +39,14 @@ jobs:
       - name: Test
         # Includes the MVCC/snapshot-isolation and planner suites; the v0.3.1
         # transaction-lifecycle, GC-validation, planner-regression, and
-        # EXPLAIN-ANALYZE suites; the v0.1.0/v0.2.x/v0.3.0/v0.4.0 upgrade tests;
-        # backup/restore combined with GC; the benchmark-compare unit tests;
-        # conformance; chaos restart integration tests; and the v0.4.0 cluster
+        # EXPLAIN-ANALYZE suites; the v0.1.0/v0.2.x/v0.3.0/v0.4.0/v0.4.1 upgrade
+        # tests; backup/restore combined with GC; the benchmark-compare unit
+        # tests; conformance; chaos restart integration tests; the v0.4.0 cluster
         # metadata, Raft log, deterministic Raft consensus, replicated-apply,
-        # snapshot, and single-node cluster-mode suites.
+        # snapshot, and single-node cluster-mode suites; and the v0.4.1 Raft
+        # log-compaction, snapshot-restore-edge-case, apply-idempotency,
+        # cluster-metadata-corruption, peer-validation, deterministic partition,
+        # and `not_leader` over-the-wire suites.
         run: cargo test --workspace --all-features
 
       - name: Build

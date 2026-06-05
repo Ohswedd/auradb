@@ -13,7 +13,7 @@ use auradb_raft::{
     RaftNode, RaftStorage, Term,
 };
 use auradb_replication::{
-    apply_command, ClusterNode, ReplicatedCommand, SchemaCommand, SnapshotManifest,
+    apply_command, ClusterNode, ReplicatedCommand, RestoreOptions, SchemaCommand, SnapshotManifest,
 };
 use auradb_storage::{Batch, LogOp};
 use tempfile::{tempdir, TempDir};
@@ -533,4 +533,544 @@ fn snapshot_rejects_incompatible_version() {
     let encoded = serde_json::to_vec(&snap).unwrap();
     assert!(SnapshotManifest::decode(&encoded).is_err());
     assert!(snap.verified_payload().is_err());
+}
+
+// ---- snapshot restore edge cases (v0.4.1) ----
+
+#[test]
+fn snapshot_restore_rejects_future_format() {
+    let (engine, _dir) = populated_engine();
+    let mut snap = SnapshotManifest::create(&engine, 1, 1, "0.4.1").unwrap();
+    snap.meta.format_version = auradb_replication::SNAPSHOT_FORMAT_VERSION + 1;
+    let target = tempdir().unwrap();
+    let err = snap
+        .restore_to(target.path().join("restored"), &RestoreOptions::default())
+        .map(|_| ())
+        .unwrap_err();
+    assert!(matches!(
+        err,
+        auradb_replication::ReplicationError::UnsupportedSnapshot { .. }
+    ));
+}
+
+#[test]
+fn snapshot_restore_rejects_cluster_mismatch() {
+    let (engine, _dir) = populated_engine();
+    let snap = SnapshotManifest::create(&engine, 1, 1, "0.4.1")
+        .unwrap()
+        .with_identity(Some("cafe0000".into()), Some("node01".into()));
+    let target = tempdir().unwrap();
+    let opts = RestoreOptions {
+        expected_cluster_id: Some("beef0000".into()),
+        ..RestoreOptions::default()
+    };
+    let err = snap
+        .restore_to(target.path().join("restored"), &opts)
+        .map(|_| ())
+        .unwrap_err();
+    assert!(matches!(
+        err,
+        auradb_replication::ReplicationError::SnapshotRestoreRefused(_)
+    ));
+    // The same snapshot restores when the mismatch is explicitly allowed.
+    let opts = RestoreOptions {
+        expected_cluster_id: Some("beef0000".into()),
+        allow_cluster_mismatch: true,
+        ..RestoreOptions::default()
+    };
+    assert!(snap
+        .restore_to(target.path().join("restored2"), &opts)
+        .is_ok());
+}
+
+#[test]
+fn snapshot_restore_rejects_corrupt_file() {
+    let (engine, _dir) = populated_engine();
+    let mut snap = SnapshotManifest::create(&engine, 1, 1, "0.4.1").unwrap();
+    // Corrupt the payload so the digest no longer matches.
+    snap.payload.push(0xff);
+    let target = tempdir().unwrap();
+    let err = snap
+        .restore_to(target.path().join("restored"), &RestoreOptions::default())
+        .map(|_| ())
+        .unwrap_err();
+    assert!(matches!(
+        err,
+        auradb_replication::ReplicationError::SnapshotMalformed(_)
+    ));
+}
+
+#[test]
+fn snapshot_restore_rejects_nonempty_target_without_force() {
+    let (engine, _dir) = populated_engine();
+    let snap = SnapshotManifest::create(&engine, 1, 1, "0.4.1").unwrap();
+    let target = tempdir().unwrap();
+    let dest = target.path().join("restored");
+    // First restore succeeds into an empty target.
+    snap.restore_to(&dest, &RestoreOptions::default()).unwrap();
+    // A second restore into the now-populated target is refused without force.
+    let err = snap
+        .restore_to(&dest, &RestoreOptions::default())
+        .map(|_| ())
+        .unwrap_err();
+    assert!(matches!(
+        err,
+        auradb_replication::ReplicationError::SnapshotRestoreRefused(_)
+    ));
+    // With force, it succeeds.
+    assert!(snap
+        .restore_to(
+            &dest,
+            &RestoreOptions {
+                force: true,
+                ..RestoreOptions::default()
+            }
+        )
+        .is_ok());
+}
+
+#[test]
+fn snapshot_restore_atomic_failure_preserves_existing_data() {
+    // Populate a target directory through a real engine.
+    let target = tempdir().unwrap();
+    let dest = target.path().join("data");
+    {
+        let engine = Engine::open(&dest).unwrap();
+        engine.create_schema(schema()).unwrap();
+        engine
+            .apply_mutation(Mutation::Insert {
+                collection: "C".into(),
+                fields: {
+                    let mut f = Document::new();
+                    f.insert("id".into(), Value::Int(7));
+                    f.insert("v".into(), Value::Int(70));
+                    f
+                },
+            })
+            .unwrap();
+    }
+    // Build a snapshot, then corrupt its digest so restore must fail before it
+    // ever destroys the existing target (validate-before-swap).
+    let (src, _srcdir) = populated_engine();
+    let mut snap = SnapshotManifest::create(&src, 1, 1, "0.4.1").unwrap();
+    snap.payload.push(0x00);
+    let err = snap
+        .restore_to(
+            &dest,
+            &RestoreOptions {
+                force: true,
+                ..RestoreOptions::default()
+            },
+        )
+        .map(|_| ())
+        .unwrap_err();
+    assert!(matches!(
+        err,
+        auradb_replication::ReplicationError::SnapshotMalformed(_)
+    ));
+    // The original data is intact.
+    let engine = Engine::open(&dest).unwrap();
+    let rows = engine.find(&FindQuery::new("C")).unwrap();
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].fields.get("v"), Some(&Value::Int(70)));
+}
+
+#[test]
+fn snapshot_restore_rebuilds_indexes_and_stats() {
+    let (engine, _dir) = populated_engine();
+    let snap = SnapshotManifest::create(&engine, 5, 1, "0.4.1").unwrap();
+    let target = tempdir().unwrap();
+    let restored = snap
+        .restore_to(target.path().join("restored"), &RestoreOptions::default())
+        .unwrap();
+    // Index lookup resolves, and planner stats reflect the restored rows.
+    let mut q = FindQuery::new("C");
+    q.filter = Some(auradb::query::Filter::Compare {
+        field: "id".into(),
+        op: auradb::query::CompareOp::Eq,
+        value: Value::Int(2),
+    });
+    assert_eq!(restored.find(&q).unwrap().len(), 1);
+    let stats = restored.planner_stats();
+    let counted: usize = stats.collections.values().map(|c| c.row_count).sum();
+    assert_eq!(counted, 3, "planner stats rebuilt for the restored rows");
+}
+
+#[test]
+fn snapshot_restore_preserves_mvcc_latest_state_atomic() {
+    let (engine, _dir) = open_engine_with_schema();
+    engine
+        .apply_mutation(Mutation::Insert {
+            collection: "C".into(),
+            fields: {
+                let mut f = Document::new();
+                f.insert("id".into(), Value::Int(1));
+                f.insert("v".into(), Value::Int(1));
+                f
+            },
+        })
+        .unwrap();
+    engine
+        .apply_mutation(Mutation::Upsert {
+            collection: "C".into(),
+            fields: {
+                let mut f = Document::new();
+                f.insert("id".into(), Value::Int(1));
+                f.insert("v".into(), Value::Int(999));
+                f
+            },
+        })
+        .unwrap();
+    let snap = SnapshotManifest::create(&engine, 9, 3, "0.4.1").unwrap();
+    let target = tempdir().unwrap();
+    let restored = snap
+        .restore_to(target.path().join("restored"), &RestoreOptions::default())
+        .unwrap();
+    let rows = restored.find(&FindQuery::new("C")).unwrap();
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].fields.get("v"), Some(&Value::Int(999)));
+}
+
+#[test]
+fn snapshot_inspect_reports_manifest() {
+    let (engine, _dir) = populated_engine();
+    let snap = SnapshotManifest::create(&engine, 12, 4, "0.4.1")
+        .unwrap()
+        .with_identity(Some("cafef00d".into()), Some("0000000000000001".into()));
+    // Encode/decode round-trips the full manifest (what `snapshot inspect` reads).
+    let bytes = snap.encode().unwrap();
+    let back = SnapshotManifest::decode(&bytes).unwrap();
+    assert_eq!(back.meta.last_included_index, 12);
+    assert_eq!(back.meta.last_included_term, 4);
+    assert_eq!(back.meta.collections, 1);
+    assert_eq!(back.meta.records, 3);
+    assert_eq!(back.meta.cluster_id.as_deref(), Some("cafef00d"));
+    assert_eq!(
+        back.meta.storage_format_version,
+        auradb_storage::FORMAT_VERSION
+    );
+}
+
+#[test]
+fn snapshot_restore_preserves_cluster_metadata() {
+    // A local cluster snapshot records the cluster/node identity it came from, so
+    // an operator restoring it can confirm the cluster before re-initializing
+    // identity on the restored directory.
+    let (engine, _dir) = populated_engine();
+    let snap = SnapshotManifest::create(&engine, 3, 1, "0.4.1")
+        .unwrap()
+        .with_identity(
+            Some("0123456789abcdef".into()),
+            Some("00000000000000aa".into()),
+        );
+    let target = tempdir().unwrap();
+    let restored = snap
+        .restore_to(target.path().join("restored"), &RestoreOptions::default())
+        .unwrap();
+    assert_eq!(restored.find(&FindQuery::new("C")).unwrap().len(), 3);
+    assert_eq!(snap.meta.cluster_id.as_deref(), Some("0123456789abcdef"));
+    assert_eq!(snap.meta.node_id.as_deref(), Some("00000000000000aa"));
+}
+
+// ---- compaction integration ----
+
+#[test]
+fn single_node_cluster_write_after_compaction() {
+    let dir = tempdir().unwrap();
+    let data = dir.path().join("data");
+    let engine = Engine::open(&data).unwrap();
+    engine.create_schema(schema()).unwrap();
+    let identity = ClusterStore::new(&data).init(None, None, "0.4.1").unwrap();
+    let cn = ClusterNode::bootstrap(
+        engine.clone(),
+        identity,
+        ClusterConfig::single_node(),
+        data.join("cluster"),
+    )
+    .unwrap();
+    engine.attach_replicated_log(cn.write_log());
+
+    // A few writes through Raft.
+    for id in 1..=3 {
+        engine
+            .apply_mutation(Mutation::Insert {
+                collection: "C".into(),
+                fields: {
+                    let mut f = Document::new();
+                    f.insert("id".into(), Value::Int(id));
+                    f.insert("v".into(), Value::Int(id * 10));
+                    f
+                },
+            })
+            .unwrap();
+    }
+    // Compact the log up to the applied prefix.
+    let report = cn.compact_log(false).unwrap();
+    assert!(
+        report.compacted,
+        "applied prefix is compactable: {report:?}"
+    );
+    assert!(report.last_included_index >= 1);
+
+    // Writes still work after compaction, and existing rows are intact.
+    engine
+        .apply_mutation(Mutation::Insert {
+            collection: "C".into(),
+            fields: {
+                let mut f = Document::new();
+                f.insert("id".into(), Value::Int(4));
+                f.insert("v".into(), Value::Int(40));
+                f
+            },
+        })
+        .unwrap();
+    let rows = engine.find(&FindQuery::new("C")).unwrap();
+    assert_eq!(rows.len(), 4, "all rows present after compaction + write");
+}
+
+#[test]
+fn snapshot_manifest_matches_compacted_prefix() {
+    // A snapshot captured at the compaction boundary lines up with the log's
+    // last included index/term, so the two agree on the covered prefix.
+    let dir = tempdir().unwrap();
+    let data = dir.path().join("data");
+    let engine = Engine::open(&data).unwrap();
+    engine.create_schema(schema()).unwrap();
+    let identity = ClusterStore::new(&data).init(None, None, "0.4.1").unwrap();
+    let cluster_id = identity.cluster_id().to_string();
+    let node_id = identity.node_id().to_string();
+    let cn = ClusterNode::bootstrap(
+        engine.clone(),
+        identity,
+        ClusterConfig::single_node(),
+        data.join("cluster"),
+    )
+    .unwrap();
+    engine.attach_replicated_log(cn.write_log());
+    for id in 1..=3 {
+        engine
+            .apply_mutation(Mutation::Insert {
+                collection: "C".into(),
+                fields: {
+                    let mut f = Document::new();
+                    f.insert("id".into(), Value::Int(id));
+                    f.insert("v".into(), Value::Int(id));
+                    f
+                },
+            })
+            .unwrap();
+    }
+    let dry = cn.compact_log(true).unwrap();
+    // A snapshot taken at the dry-run boundary names the same prefix.
+    let snap = SnapshotManifest::create(
+        &engine,
+        dry.last_included_index,
+        dry.last_included_term,
+        "0.4.1",
+    )
+    .unwrap()
+    .with_identity(Some(cluster_id), Some(node_id));
+    assert_eq!(snap.meta.last_included_index, dry.last_included_index);
+    assert_eq!(snap.meta.last_included_term, dry.last_included_term);
+    // Now really compact; the boundary matches the snapshot's last included index.
+    let done = cn.compact_log(false).unwrap();
+    assert_eq!(done.last_included_index, snap.meta.last_included_index);
+}
+
+// ---- apply idempotency under restart (v0.4.1) ----
+
+#[test]
+fn committed_entries_apply_once_after_restart() {
+    let dir = tempdir().unwrap();
+    let data = dir.path().join("data");
+    let raft = data.join("cluster");
+    // First boot: write three records through the durable cluster.
+    {
+        let engine = Engine::open(&data).unwrap();
+        engine.create_schema(schema()).unwrap();
+        let identity = ClusterStore::new(&data).init(None, None, "0.4.1").unwrap();
+        let cn = ClusterNode::bootstrap(
+            engine.clone(),
+            identity,
+            ClusterConfig::single_node(),
+            &raft,
+        )
+        .unwrap();
+        engine.attach_replicated_log(cn.write_log());
+        for id in 1..=3 {
+            engine
+                .apply_mutation(Mutation::Insert {
+                    collection: "C".into(),
+                    fields: {
+                        let mut f = Document::new();
+                        f.insert("id".into(), Value::Int(id));
+                        f.insert("v".into(), Value::Int(id));
+                        f
+                    },
+                })
+                .unwrap();
+        }
+        assert_eq!(engine.find(&FindQuery::new("C")).unwrap().len(), 3);
+    }
+    // Reboot on the same directories: recovery replays committed entries but the
+    // engine already applied them, so there are no duplicates.
+    {
+        let engine = Engine::open(&data).unwrap();
+        let identity = ClusterStore::new(&data).load().unwrap().unwrap();
+        let cn = ClusterNode::bootstrap(
+            engine.clone(),
+            identity,
+            ClusterConfig::single_node(),
+            &raft,
+        )
+        .unwrap();
+        engine.attach_replicated_log(cn.write_log());
+        assert_eq!(
+            engine.find(&FindQuery::new("C")).unwrap().len(),
+            3,
+            "no duplicate records after restart replay"
+        );
+    }
+}
+
+#[test]
+fn commit_before_apply_recovers_on_open() {
+    // A crash after a Raft commit but before the engine applied it: bootstrap's
+    // recovery replays the committed entry on open.
+    let (engine, dir) = open_engine_with_schema();
+    let data_dir = dir.path().join("data");
+    let raft = data_dir.join("cluster");
+    {
+        let mut s = FileStorage::open(&raft).unwrap();
+        s.append(&[
+            LogEntry {
+                term: Term(1),
+                index: LogIndex(1),
+                command: Command::noop(),
+            },
+            LogEntry {
+                term: Term(1),
+                index: LogIndex(2),
+                command: ReplicatedCommand::Write(write_batch(1, 10))
+                    .encode()
+                    .unwrap(),
+            },
+        ])
+        .unwrap();
+        s.save_hard_state(&HardState {
+            current_term: Term(1),
+            voted_for: None,
+            commit_index: LogIndex(2),
+        })
+        .unwrap();
+    }
+    assert_eq!(engine.find(&FindQuery::new("C")).unwrap().len(), 0);
+    let identity = ClusterStore::new(&data_dir)
+        .init(None, None, "0.4.1")
+        .unwrap();
+    let _cn = ClusterNode::bootstrap(
+        engine.clone(),
+        identity,
+        ClusterConfig::single_node(),
+        &raft,
+    )
+    .unwrap();
+    assert_eq!(
+        engine.find(&FindQuery::new("C")).unwrap().len(),
+        1,
+        "committed-but-unapplied entry recovered on open"
+    );
+}
+
+#[test]
+fn partial_apply_recovers_without_duplicate() {
+    // The engine already applied index 2; recovery applies only index 3 and does
+    // not re-apply index 2.
+    let (engine, dir) = open_engine_with_schema();
+    let data_dir = dir.path().join("data");
+    let raft = data_dir.join("cluster");
+    // Pre-apply the first write directly at commit ts 2 (base 0).
+    apply_command(&engine, &ReplicatedCommand::Write(write_batch(1, 10)), 2).unwrap();
+    assert_eq!(engine.commit_watermark(), 2);
+    {
+        let mut s = FileStorage::open(&raft).unwrap();
+        s.append(&[
+            LogEntry {
+                term: Term(1),
+                index: LogIndex(1),
+                command: Command::noop(),
+            },
+            LogEntry {
+                term: Term(1),
+                index: LogIndex(2),
+                command: ReplicatedCommand::Write(write_batch(1, 10))
+                    .encode()
+                    .unwrap(),
+            },
+            LogEntry {
+                term: Term(1),
+                index: LogIndex(3),
+                command: ReplicatedCommand::Write(write_batch(2, 20))
+                    .encode()
+                    .unwrap(),
+            },
+        ])
+        .unwrap();
+        s.save_hard_state(&HardState {
+            current_term: Term(1),
+            voted_for: None,
+            commit_index: LogIndex(3),
+        })
+        .unwrap();
+    }
+    let identity = ClusterStore::new(&data_dir)
+        .init(None, None, "0.4.1")
+        .unwrap();
+    let _cn = ClusterNode::bootstrap(
+        engine.clone(),
+        identity,
+        ClusterConfig::single_node(),
+        &raft,
+    )
+    .unwrap();
+    // Both records present exactly once (record 1 not duplicated by replay).
+    let rows = engine.find(&FindQuery::new("C")).unwrap();
+    assert_eq!(rows.len(), 2, "partial apply recovered without duplicate");
+}
+
+#[test]
+fn apply_before_watermark_update_is_safe() {
+    // Re-applying an already-applied committed index is a no-op (idempotent),
+    // which is what makes a crash between apply and watermark persistence safe.
+    let (engine, _dir) = open_engine_with_schema();
+    apply_command(&engine, &ReplicatedCommand::Write(write_batch(1, 10)), 5).unwrap();
+    assert_eq!(engine.find(&FindQuery::new("C")).unwrap().len(), 1);
+    // The watermark advanced; replaying at or below it changes nothing.
+    apply_command(&engine, &ReplicatedCommand::Write(write_batch(1, 10)), 5).unwrap();
+    apply_command(&engine, &ReplicatedCommand::Write(write_batch(1, 10)), 3).unwrap();
+    let rows = engine.find(&FindQuery::new("C")).unwrap();
+    assert_eq!(
+        rows.len(),
+        1,
+        "no duplicate from re-apply at/below watermark"
+    );
+}
+
+#[test]
+fn applied_watermark_persists_across_reopen() {
+    let dir = tempdir().unwrap();
+    let data = dir.path().join("data");
+    let watermark = {
+        let engine = Engine::open(&data).unwrap();
+        engine.create_schema(schema()).unwrap();
+        apply_command(&engine, &ReplicatedCommand::Write(write_batch(1, 10)), 4).unwrap();
+        engine.commit_watermark()
+    };
+    assert_eq!(watermark, 4);
+    let engine = Engine::open(&data).unwrap();
+    assert_eq!(
+        engine.commit_watermark(),
+        4,
+        "the applied watermark persists across reopen"
+    );
 }

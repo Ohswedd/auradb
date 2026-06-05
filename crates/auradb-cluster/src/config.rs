@@ -90,8 +90,23 @@ impl ClusterConfig {
                 .parse::<crate::ClusterId>()
                 .map_err(|e| ClusterError::Config(e.to_string()))?;
         }
+        let mut seen: std::collections::HashSet<&str> = std::collections::HashSet::new();
         for peer in &self.peers {
             validate_addr("peer", peer)?;
+            let norm = peer.trim();
+            if !seen.insert(norm) {
+                return Err(ClusterError::Config(format!(
+                    "duplicate peer address {peer:?}: each peer must be listed once"
+                )));
+            }
+            // A peer that points back at this node's own listen/advertise address
+            // is a configuration error: a node is never its own peer.
+            if norm == self.listen_addr.trim() || norm == self.advertise_addr.trim() {
+                return Err(ClusterError::Config(format!(
+                    "peer address {peer:?} is this node's own address; a node cannot peer with \
+                     itself"
+                )));
+            }
         }
         if !self.bootstrap && self.peers.is_empty() {
             return Err(ClusterError::Config(
@@ -171,6 +186,31 @@ mod tests {
     fn bad_node_id_is_rejected() {
         let mut cfg = ClusterConfig::single_node();
         cfg.node_id = "nothex".into();
+        assert!(cfg.validate().is_err());
+    }
+
+    #[test]
+    fn duplicate_peers_are_rejected() {
+        let mut cfg = ClusterConfig::single_node();
+        cfg.peers = vec!["10.0.0.2:7172".into(), "10.0.0.2:7172".into()];
+        let err = cfg.validate().unwrap_err();
+        assert!(err.to_string().contains("duplicate peer"), "{err}");
+    }
+
+    #[test]
+    fn self_referential_peer_is_rejected() {
+        let mut cfg = ClusterConfig::single_node();
+        cfg.listen_addr = "10.0.0.1:7172".into();
+        cfg.advertise_addr = "10.0.0.1:7172".into();
+        cfg.peers = vec!["10.0.0.1:7172".into()];
+        let err = cfg.validate().unwrap_err();
+        assert!(err.to_string().contains("own address"), "{err}");
+    }
+
+    #[test]
+    fn invalid_peer_address_is_rejected() {
+        let mut cfg = ClusterConfig::single_node();
+        cfg.peers = vec!["not-an-addr".into()];
         assert!(cfg.validate().is_err());
     }
 }

@@ -4,7 +4,18 @@ This roadmap describes where AuraDB is headed beyond the first single-node
 release. It is a statement of direction, not a delivery commitment. Items are
 grouped by theme and listed roughly in the order we expect to approach them.
 
-## Current release: 0.4.0
+## Current release: 0.4.1
+
+AuraDB 0.4.1 is a patch release that **hardens the Raft and replication
+groundwork** shipped in 0.4.0 before any real cross-process multi-node preview:
+Raft log compaction boundaries, snapshot restore edge cases, apply idempotency
+under restart, cluster-metadata corruption handling, stronger peer configuration
+validation, deterministic multi-node partition tests, single-node cluster overhead
+benchmarks, and operational diagnostics (`auradb cluster compact-log`, `auradb
+snapshot create|inspect|restore`). No format or wire change: multi-node server
+deployment remains experimental and disabled by default, and single-node mode
+remains the recommended production path. The groundwork itself was delivered in
+0.4.0:
 
 AuraDB 0.4.0 adds the **Replication and Raft groundwork**: an optional cluster
 mode built on a durable, deterministic Raft consensus core, a replicated command

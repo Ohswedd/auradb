@@ -242,6 +242,72 @@ pub fn cmd_cluster_doctor(data_dir: &Path, config: &Config, json: bool) -> Resul
     Ok(out)
 }
 
+/// `auradb cluster compact-log` — compact the durable Raft log up to the safely
+/// applied prefix. With `dry_run`, report what would be discarded without
+/// modifying anything. Fails closed on a multi-node configuration (not enabled in
+/// this release) and on an uninitialized cluster.
+pub fn cmd_cluster_compact_log(
+    data_dir: &Path,
+    config: &Config,
+    dry_run: bool,
+    json: bool,
+) -> Result<String> {
+    if config.cluster.is_multi_node() {
+        anyhow::bail!(
+            "multi-node cluster deployment is experimental and not enabled in this release; \
+             remove peers to operate a single-node cluster"
+        );
+    }
+    let store = ClusterStore::new(data_dir);
+    let identity = store
+        .load()
+        .context("loading cluster metadata")?
+        .ok_or_else(|| {
+            anyhow::anyhow!(
+                "cluster identity is not initialized; run `auradb cluster bootstrap` first"
+            )
+        })?;
+    let engine = Engine::open(data_dir).context("opening engine")?;
+    let mut cluster_cfg = ClusterConfig::single_node();
+    cluster_cfg.node_id = identity.node_id().to_string();
+    let node =
+        auradb_replication::ClusterNode::bootstrap(engine, identity, cluster_cfg, store.dir())
+            .context("opening single-node cluster")?;
+    let report = node
+        .compact_log(dry_run)
+        .context("compacting the raft log")?;
+    if json {
+        return Ok(serde_json::to_string_pretty(&report)?);
+    }
+    let mut out = String::new();
+    if report.dry_run {
+        out.push_str("dry run: no data modified\n");
+    }
+    if report.compacted {
+        out.push_str(&format!(
+            "{} entr{} {} compacted\n",
+            report.entries_discarded,
+            if report.entries_discarded == 1 {
+                "y"
+            } else {
+                "ies"
+            },
+            if report.dry_run { "would be" } else { "were" },
+        ));
+    } else {
+        out.push_str("nothing to compact (no applied prefix beyond the current boundary)\n");
+    }
+    out.push_str(&format!(
+        "last_included_index: {}\nlast_included_term: {}\ncommit_index: {}\napplied_index: {}\nlast_log_index: {}\n",
+        report.last_included_index,
+        report.last_included_term,
+        report.commit_index,
+        report.applied_index,
+        report.last_log_index,
+    ));
+    Ok(out)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -311,6 +377,25 @@ mod tests {
             ..Config::default()
         };
         assert!(cmd_cluster_doctor(dir.path(), &cfg, false).is_err());
+    }
+
+    #[test]
+    fn cluster_compact_log_dry_run_json() {
+        let dir = tempdir().unwrap();
+        let cfg = cluster_config(dir.path());
+        // Bootstrap so identity + raft log exist.
+        cmd_cluster_bootstrap(dir.path(), &cfg).unwrap();
+        let json = cmd_cluster_compact_log(dir.path(), &cfg, true, true).unwrap();
+        assert!(json.contains("\"dry_run\": true"), "{json}");
+        assert!(json.contains("\"last_included_index\""), "{json}");
+    }
+
+    #[test]
+    fn cluster_compact_log_requires_initialized_cluster() {
+        let dir = tempdir().unwrap();
+        let cfg = cluster_config(dir.path());
+        // No bootstrap/init: compaction must refuse rather than guess.
+        assert!(cmd_cluster_compact_log(dir.path(), &cfg, true, false).is_err());
     }
 
     #[test]

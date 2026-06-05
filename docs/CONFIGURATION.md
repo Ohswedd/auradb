@@ -175,9 +175,12 @@ peers = []                      # peer addresses; configuring any peer is reject
   rejected unless `--allow-insecure-bind` is passed.
 - `peers` — multi-node deployment is **experimental and not enabled** in this
   release; configuring any peer is **rejected at server startup (fail closed)**.
+  v0.4.1 also validates peer entries structurally: a duplicate peer address, and a
+  peer that points at this node's own `listen_addr`/`advertise_addr`, are rejected
+  with a clear error, as is a malformed `host:port`.
 
 Validate a cluster configuration offline with
 `auradb config validate --config AuraDB.toml` or `auradb cluster doctor`. A
 complete example ships at `examples/auradb.cluster.local.toml`. See
-[CLUSTERING.md](CLUSTERING.md), [SECURITY.md](SECURITY.md), and
-[CLI.md](CLI.md).
+[CLUSTERING.md](CLUSTERING.md), [SECURITY.md](SECURITY.md),
+[CLUSTER_TROUBLESHOOTING.md](CLUSTER_TROUBLESHOOTING.md), and [CLI.md](CLI.md).

@@ -1,5 +1,13 @@
 # Clustering
 
+> **AuraDB v0.4.1 hardens the Raft groundwork introduced in v0.4.0. Multi-node
+> server deployment remains experimental and disabled by default. Single-node
+> mode remains the recommended production mode.** v0.4.1 adds Raft log compaction
+> boundaries, snapshot restore hardening, cluster-metadata corruption handling,
+> stronger peer-configuration validation, and operational diagnostics. For
+> diagnosing and recovering cluster mode, see
+> [CLUSTER_TROUBLESHOOTING.md](CLUSTER_TROUBLESHOOTING.md).
+
 AuraDB v0.4.0 introduces cluster mode: an optional, durable replication path
 built on a Raft consensus core. This document explains what cluster mode is in
 this release, how it relates to the recommended single-node production path, how
