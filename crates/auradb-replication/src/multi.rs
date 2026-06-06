@@ -31,13 +31,15 @@
 //!
 //! Single-node mode remains the recommended production path.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Condvar, Mutex};
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use auradb::{Engine, ReplicatedLog};
-use auradb_cluster::{ClusterConfig, ClusterIdentity, ClusterStatus, NodeId, NodeRole};
+use auradb_cluster::{
+    CatchUpState, ClusterConfig, ClusterIdentity, ClusterStatus, NodeId, NodeRole,
+};
 use auradb_raft::{
     Command, Envelope, FileStorage, LogIndex, Message as RaftMessage, RaftConfig, RaftError,
     RaftMetrics, RaftNode, RaftStorage, Term,
@@ -91,6 +93,18 @@ pub struct PeerStatus {
     pub match_index: Option<u64>,
     /// The leader's next index to send to the peer, if known.
     pub next_index: Option<u64>,
+    /// Replication lag for this peer in entries (leader commit index minus the
+    /// peer's match index), from the leader's vantage. `None` when this node is
+    /// not the leader and keeps no per-peer bookkeeping.
+    pub lag_entries: Option<u64>,
+    /// Whether the peer has fallen behind the leader's compacted log prefix and
+    /// can only be brought current by a snapshot install (leader vantage).
+    pub needs_snapshot: bool,
+    /// Whether the leader has shipped a snapshot to this peer for the current
+    /// boundary and is awaiting its install acknowledgement.
+    pub snapshot_in_progress: bool,
+    /// The peer's catch-up state from the leader's vantage.
+    pub catch_up_state: CatchUpState,
 }
 
 /// Peer/Raft counters exposed for metrics.
@@ -107,6 +121,31 @@ struct Counters {
     snapshots_installed: AtomicU64,
     /// Snapshot installs this node rejected (validation failure).
     snapshots_rejected: AtomicU64,
+    /// Cumulative count of distinct follower-needs-snapshot detections (a peer
+    /// transitioning into "behind the compacted prefix").
+    snapshot_needed: AtomicU64,
+    /// Cumulative snapshot payload bytes shipped to followers as a leader.
+    snapshot_bytes_sent: AtomicU64,
+    /// Cumulative snapshot payload bytes installed from a leader as a follower.
+    snapshot_bytes_installed: AtomicU64,
+    /// Gauge: peers currently behind the compacted prefix (needing a snapshot).
+    snapshot_in_progress: AtomicU64,
+    /// Textual / last-event snapshot diagnostics that do not fit an atomic.
+    last_snapshot: Mutex<LastSnapshotInfo>,
+}
+
+/// Last-event snapshot diagnostics surfaced in cluster status (the fields that
+/// are text or naturally "most recent" rather than monotonic counters).
+#[derive(Debug, Default, Clone)]
+struct LastSnapshotInfo {
+    /// The reason the most recent snapshot install was rejected, if any.
+    last_error: Option<String>,
+    /// The boundary index of the most recently installed snapshot.
+    last_included_index: u64,
+    /// The boundary term of the most recently installed snapshot.
+    last_included_term: u64,
+    /// Unix seconds at which the most recent snapshot install completed.
+    last_install_unix: Option<u64>,
 }
 
 /// Per-peer record of the last snapshot the leader sent, to rate-limit resends
@@ -115,6 +154,9 @@ struct Counters {
 struct SnapshotSendState {
     /// Peer id -> (boundary index last sent, when it was sent).
     last_sent: HashMap<NodeId, (u64, Instant)>,
+    /// Peers currently flagged as needing a snapshot, so the `snapshot_needed`
+    /// counter increments once per transition rather than once per tick.
+    needed_flagged: HashSet<NodeId>,
 }
 
 /// A pending dialer spec produced during startup: peer id, address, the
@@ -358,6 +400,12 @@ impl PeerCluster {
     /// Per-peer reachability and replication state.
     pub fn peer_status(&self) -> Vec<PeerStatus> {
         let node = self.shared.raft.lock().expect("raft mutex");
+        let is_leader = node.role() == NodeRole::Leader;
+        let base = node.storage().last_included_index().get();
+        let commit = node.commit_index().get();
+        // Snapshot resend bookkeeping tells us which peers are mid-install.
+        let send_state = self.shared.snapshot_send.lock().expect("snapshot_send");
+        let now = Instant::now();
         let mut out = Vec::new();
         for p in &self.shared.config.peers {
             let id: Option<NodeId> = p.node_id.parse().ok();
@@ -368,17 +416,93 @@ impl PeerCluster {
             let connect_attempts = link
                 .map(|l| l.attempts.load(Ordering::Relaxed))
                 .unwrap_or(0);
+            let match_index = id.and_then(|id| node.match_index(id)).map(|i| i.get());
+            let next_index = id.and_then(|id| node.next_index(id)).map(|i| i.get());
+
+            // Catch-up diagnostics are only meaningful from the leader, which is
+            // the node that keeps per-peer match/next bookkeeping. A follower
+            // reports `Unknown` rather than guessing.
+            let (lag_entries, needs_snapshot, snapshot_in_progress, catch_up_state) =
+                match (is_leader, match_index) {
+                    (true, Some(mi)) => {
+                        let ni = next_index.unwrap_or(mi + 1);
+                        let lag = commit.saturating_sub(mi);
+                        let needs = base > 0 && ni <= base;
+                        let installing = needs
+                            && id
+                                .and_then(|id| send_state.last_sent.get(&id))
+                                .map(|(_, when)| {
+                                    now.duration_since(*when) < SNAPSHOT_RESEND_COOLDOWN
+                                })
+                                .unwrap_or(false);
+                        let state = if needs {
+                            if installing {
+                                CatchUpState::SnapshotInstalling
+                            } else {
+                                CatchUpState::SnapshotNeeded
+                            }
+                        } else if mi >= commit {
+                            CatchUpState::CaughtUp
+                        } else if mi == 0 && ni > 1 {
+                            CatchUpState::Probing
+                        } else {
+                            CatchUpState::Normal
+                        };
+                        (Some(lag), needs, installing, state)
+                    }
+                    _ => (None, false, false, CatchUpState::Unknown),
+                };
+
             out.push(PeerStatus {
                 node_id: p.node_id.clone(),
                 addr: p.addr.clone(),
                 client_addr: p.client_addr.clone(),
                 connected,
                 connect_attempts,
-                match_index: id.and_then(|id| node.match_index(id)).map(|i| i.get()),
-                next_index: id.and_then(|id| node.next_index(id)).map(|i| i.get()),
+                match_index,
+                next_index,
+                lag_entries,
+                needs_snapshot,
+                snapshot_in_progress,
+                catch_up_state,
             });
         }
         out
+    }
+
+    /// Last-event snapshot install diagnostics (cluster-level): the most recent
+    /// install boundary, completion time, rejection reason, and cumulative
+    /// payload byte counts. Surfaced by `auradb cluster status --addr`.
+    pub fn snapshot_diagnostics(&self) -> SnapshotDiagnostics {
+        let info = self
+            .shared
+            .counters
+            .last_snapshot
+            .lock()
+            .expect("last_snapshot")
+            .clone();
+        SnapshotDiagnostics {
+            last_included_index: info.last_included_index,
+            last_included_term: info.last_included_term,
+            last_install_unix: info.last_install_unix,
+            last_error: info.last_error,
+            bytes_sent: self
+                .shared
+                .counters
+                .snapshot_bytes_sent
+                .load(Ordering::Relaxed),
+            bytes_installed: self
+                .shared
+                .counters
+                .snapshot_bytes_installed
+                .load(Ordering::Relaxed),
+            in_progress: self
+                .shared
+                .counters
+                .snapshot_in_progress
+                .load(Ordering::Relaxed),
+            needed_total: self.shared.counters.snapshot_needed.load(Ordering::Relaxed),
+        }
     }
 
     /// The client-facing address of the leader this node currently recognizes,
@@ -455,6 +579,22 @@ impl PeerCluster {
                 .shared
                 .counters
                 .snapshots_rejected
+                .load(Ordering::Relaxed),
+            snapshot_needed: self.shared.counters.snapshot_needed.load(Ordering::Relaxed),
+            snapshot_bytes_sent: self
+                .shared
+                .counters
+                .snapshot_bytes_sent
+                .load(Ordering::Relaxed),
+            snapshot_bytes_installed: self
+                .shared
+                .counters
+                .snapshot_bytes_installed
+                .load(Ordering::Relaxed),
+            snapshot_in_progress: self
+                .shared
+                .counters
+                .snapshot_in_progress
                 .load(Ordering::Relaxed),
         }
     }
@@ -537,6 +677,35 @@ pub struct PeerMetrics {
     pub snapshots_installed: u64,
     /// Snapshot installs rejected (validation failure).
     pub snapshots_rejected: u64,
+    /// Distinct follower-needs-snapshot detections (counter).
+    pub snapshot_needed: u64,
+    /// Snapshot payload bytes shipped to followers as a leader (counter).
+    pub snapshot_bytes_sent: u64,
+    /// Snapshot payload bytes installed from a leader as a follower (counter).
+    pub snapshot_bytes_installed: u64,
+    /// Peers currently behind the compacted prefix (gauge).
+    pub snapshot_in_progress: u64,
+}
+
+/// Last-event snapshot install diagnostics surfaced in cluster status.
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct SnapshotDiagnostics {
+    /// Boundary index of the most recently installed snapshot (0 if none).
+    pub last_included_index: u64,
+    /// Boundary term of the most recently installed snapshot (0 if none).
+    pub last_included_term: u64,
+    /// Unix seconds at which the most recent snapshot install completed.
+    pub last_install_unix: Option<u64>,
+    /// Reason the most recent snapshot install was rejected, if any.
+    pub last_error: Option<String>,
+    /// Cumulative snapshot payload bytes shipped to followers as a leader.
+    pub bytes_sent: u64,
+    /// Cumulative snapshot payload bytes installed from a leader as a follower.
+    pub bytes_installed: u64,
+    /// Peers currently behind the compacted prefix (gauge).
+    pub in_progress: u64,
+    /// Cumulative follower-needs-snapshot detections.
+    pub needed_total: u64,
 }
 
 impl Shared {
@@ -722,11 +891,35 @@ fn drive(shared: &Arc<Shared>, event: DriveEvent) {
         }
     }
 
-    // Ship a snapshot to any follower that has fallen behind the compacted
-    // prefix (outside the Raft lock; building it reads the engine).
+    // Maintain the snapshot-progress gauge and the needs-snapshot counter from
+    // the current set of behind peers, then ship a snapshot to any follower that
+    // has fallen behind the compacted prefix (outside the Raft lock; building it
+    // reads the engine).
+    update_snapshot_progress(shared, snapshot.as_ref());
     if let Some(plan) = snapshot {
         send_snapshots(shared, plan);
     }
+}
+
+/// Refresh the `snapshot_in_progress` gauge and increment `snapshot_needed` once
+/// per peer that transitions into needing a snapshot.
+fn update_snapshot_progress(shared: &Arc<Shared>, plan: Option<&SnapshotPlan>) {
+    let behind: &[NodeId] = plan.map(|p| p.peers.as_slice()).unwrap_or(&[]);
+    shared
+        .counters
+        .snapshot_in_progress
+        .store(behind.len() as u64, Ordering::Relaxed);
+    let mut st = shared.snapshot_send.lock().expect("snapshot_send");
+    for &p in behind {
+        if st.needed_flagged.insert(p) {
+            shared
+                .counters
+                .snapshot_needed
+                .fetch_add(1, Ordering::Relaxed);
+        }
+    }
+    let current: HashSet<NodeId> = behind.iter().copied().collect();
+    st.needed_flagged.retain(|p| current.contains(p));
 }
 
 /// A leader's plan to ship a snapshot: the committed boundary the snapshot covers
@@ -859,6 +1052,10 @@ fn send_snapshots(shared: &Arc<Shared>, plan: SnapshotPlan) {
                     .counters
                     .snapshots_sent
                     .fetch_add(1, Ordering::Relaxed);
+                shared
+                    .counters
+                    .snapshot_bytes_sent
+                    .fetch_add(bytes.len() as u64, Ordering::Relaxed);
             }
         }
     }
@@ -1056,6 +1253,9 @@ fn install_snapshot_from_leader(
             .counters
             .snapshots_rejected
             .fetch_add(1, Ordering::Relaxed);
+        if let Ok(mut info) = shared.counters.last_snapshot.lock() {
+            info.last_error = Some(reason.to_string());
+        }
         tracing::debug!(reason, "rejected peer snapshot install");
         (false, current_term)
     };
@@ -1130,6 +1330,19 @@ fn install_snapshot_from_leader(
             .counters
             .snapshots_installed
             .fetch_add(1, Ordering::Relaxed);
+        shared
+            .counters
+            .snapshot_bytes_installed
+            .fetch_add(snapshot.len() as u64, Ordering::Relaxed);
+        if let Ok(mut info) = shared.counters.last_snapshot.lock() {
+            info.last_included_index = last_included_index;
+            info.last_included_term = last_included_term;
+            info.last_install_unix = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .ok()
+                .map(|d| d.as_secs());
+            info.last_error = None;
+        }
     } else {
         shared
             .counters

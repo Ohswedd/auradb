@@ -1,0 +1,67 @@
+{
+  "auradb_version": "0.6.1",
+  "records": 10000,
+  "command": "auradb bench --records 10000",
+  "commit": "34a1863",
+  "machine": {
+    "os": "macos",
+    "arch": "aarch64",
+    "cpus": 14
+  },
+  "measurements": [
+    {
+      "name": "storage_append",
+      "unit": "ops_per_sec",
+      "value": 3519.9940723299824,
+      "iterations": 10000
+    },
+    {
+      "name": "point_lookup",
+      "unit": "ops_per_sec",
+      "value": 215345.15090096105,
+      "iterations": 1000
+    },
+    {
+      "name": "secondary_index_lookup",
+      "unit": "ops_per_sec",
+      "value": 201455.5161038503,
+      "iterations": 1000
+    },
+    {
+      "name": "document_path_index_lookup",
+      "unit": "ops_per_sec",
+      "value": 2435.591293625273,
+      "iterations": 1000
+    },
+    {
+      "name": "full_text_lookup",
+      "unit": "ops_per_sec",
+      "value": 14.27353659713444,
+      "iterations": 1000
+    },
+    {
+      "name": "vector_exact_nearest",
+      "unit": "ops_per_sec",
+      "value": 80.15283410957365,
+      "iterations": 200
+    },
+    {
+      "name": "cursor_paging",
+      "unit": "ops_per_sec",
+      "value": 6.432730297835654,
+      "iterations": 100
+    },
+    {
+      "name": "frame_encode_decode",
+      "unit": "ns_per_op",
+      "value": 837.61,
+      "iterations": 100000
+    },
+    {
+      "name": "dump_restore",
+      "unit": "seconds",
+      "value": 51.850393959,
+      "iterations": 1
+    }
+  ]
+}

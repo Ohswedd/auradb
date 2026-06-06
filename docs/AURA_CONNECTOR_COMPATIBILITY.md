@@ -2,11 +2,39 @@
 
 This document is the connector-focused companion to the
 [Compatibility Matrix](COMPATIBILITY.md). It records which Aura Connector release
-talks to AuraDB 0.6.0, what it can drive, and what it cannot.
+talks to AuraDB 0.6.1, what it can drive, and what it cannot.
 
-> **AuraDB v0.6.0 improves the controlled multi-node preview and validates
-> fail-stop recovery. It is _not_ production HA. Single-node mode remains the
-> recommended production mode.**
+> **AuraDB v0.6.1 hardens snapshot install and published-cluster smoke for the
+> controlled multi-node preview. It is _not_ production HA. Single-node mode
+> remains the recommended production mode.**
+
+## Connector leader-hint UX review (v0.6.1)
+
+For v0.6.1 we reviewed whether the connector needs a patch and chose **docs-only
+(Option A)**: Aura Connector 0.3.x stays fully compatible but is **not
+cluster-routing-aware**, and the v0.6.1 wire changes are additive, so no
+connector release is required.
+
+In a multi-node preview cluster, route writes to the leader **manually**:
+
+- Point the connector at the leader's client address. Resolve it with
+  `auradb cluster leader --addr <any-node>` (or read the `leader_client_addr`
+  field from `auradb cluster status --addr <any-node> --json`).
+- A write sent to a follower returns a structured `not_leader` error (stable code
+  `not_leader`, marked `retryable`) whose human-readable message names the
+  current leader and, when the operator declared a peer `client_addr`, its client
+  address. A 0.3.x connector surfaces this as a retryable server error; reconnect
+  to the leader's address and retry the write.
+- The server returns exactly one terminal `not_leader` per write and never loops
+  internally, so a client is never left hanging. The leader-hint message and the
+  no-infinite-retry contract are pinned by
+  `crates/auradb-server/tests/not_leader.rs`
+  (`connector_not_leader_message_includes_leader_hint`, `connector_no_infinite_retry`).
+
+A future connector could expose a dedicated `AuraNotLeaderError` with parsed
+`leader_hint` / `leader_addr` and an opt-in manual-reconnect helper, but that is
+not part of v0.6.1 and would be a coordinated connector release. The preview does
+**not** do automatic write redirection or transaction redirect.
 
 AuraDB 0.6.0 improves the experimental cross-process multi-node preview
 (fail-stop recovery validation, peer snapshot install, sharper diagnostics), but
@@ -51,6 +79,8 @@ human-readable message.
 
 | AuraDB | Aura Connector | Protocol | Status |
 | ------ | -------------- | -------- | ------ |
+| 0.6.1  | 0.3.x          | AWP 1    | Supported (native AuraDB backend; additive snapshot/lag diagnostics fields; manual leader routing) |
+| 0.6.0  | 0.3.x          | AWP 1    | Supported (native AuraDB backend; additive fail-stop diagnostics fields; targets the leader) |
 | 0.5.1  | 0.3.x          | AWP 1    | Supported (native AuraDB backend; additive diagnostics fields; targets the leader) |
 | 0.5.0  | 0.3.x          | AWP 1    | Supported (native AuraDB backend; cluster fields additive; targets the leader) |
 | 0.4.1  | 0.3.x          | AWP 1    | Supported (native AuraDB backend; cluster fields additive) |
@@ -80,6 +110,14 @@ run locally against a v0.6.0 server: the AWP protocol conformance passed 18/18,
 the connector smoke 12/12, and the full connector conformance 15/15. No connector
 changes are required; AWP stays at v1, and the additive v0.6.0 fail-stop
 diagnostics fields on the health report are ignored by the 0.3.x connector.
+
+For **v0.6.1**, the connector contract is unchanged. Aura Connector 0.3.x remains
+wire-compatible: the additive v0.6.1 snapshot/lag diagnostics fields on the health
+report and per-peer status are ignored by the 0.3.x connector. Local validation
+used the stdlib AWP harness (`run_conformance.py`, 18/18) and the Rust conformance
+crate (`auradb-conformance`); published Aura Connector conformance is covered by
+CI (`conformance.yml`) and must pass before release. The v0.6.1 leader-hint review
+(above) kept the connector as-is (Option A, docs-only).
 
 ## Required connector extras
 

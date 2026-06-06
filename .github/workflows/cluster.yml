@@ -134,11 +134,11 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
 
       - name: Build the auradb image for the Compose cluster
-        run: docker build -t auradb:0.6.0 .
+        run: docker build -t auradb:0.6.1 .
 
       - name: Generate dev certs, run the cluster, and tear it down
         env:
-          AURADB_IMAGE: auradb:0.6.0
+          AURADB_IMAGE: auradb:0.6.1
         run: bash scripts/smoke_cluster_compose.sh
 
   published-image-smoke:
@@ -154,7 +154,13 @@ jobs:
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
 
+      - name: Set up Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Inspect the published multi-arch manifest
+        run: docker buildx imagetools inspect ghcr.io/ohswedd/auradb:0.6.1
+
       - name: Generate dev certs, run the cluster against the published image
         env:
-          AURADB_IMAGE: ghcr.io/ohswedd/auradb:0.6.0
+          AURADB_IMAGE: ghcr.io/ohswedd/auradb:0.6.1
         run: bash scripts/smoke_cluster_compose.sh

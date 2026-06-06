@@ -175,6 +175,31 @@ history. The counters `auradb_cluster_snapshots_sent_total`,
 `auradb_cluster_snapshots_rejected_total` track the path. It is a preview, not a
 production-grade snapshot subsystem.
 
+## Snapshot install diagnostics (v0.6.1)
+
+v0.6.1 makes the snapshot-install path observable; the wire transfer itself is
+**unchanged from v0.6.0** (still a bounded, single-message transfer). The live
+`auradb cluster status --addr <server>` report gains per-peer catch-up fields:
+
+- `catch_up_state` — one of `normal`, `probing`, `snapshot_needed`,
+  `snapshot_installing`, `caught_up`, or `unknown`.
+- `lag_entries` — how far the follower's match index trails the leader.
+- `needs_snapshot` / `snapshot_in_progress` — whether the follower has fallen
+  below the compacted prefix (so AppendEntries can no longer serve it) and
+  whether an install is currently running for that peer.
+
+It also adds cluster-level snapshot diagnostics: the last installed boundary
+(index/term), the last install time, the last error (the rejection reason), bytes
+sent, bytes installed, an in-progress gauge, and a needed-total. The same signals
+are exported as metrics (see [OBSERVABILITY.md](OBSERVABILITY.md)) and surfaced
+by `auradb cluster doctor --addr` (see [CLI.md](CLI.md)).
+
+Larger and concurrent snapshot-install scenarios are covered in
+`crates/auradb-replication/tests/multi_node.rs` — a CI-safe larger run plus
+`#[ignore]`d 1,000-entry and 10,000-entry stress runs — asserting that data, the
+secondary index, planner statistics, and MVCC timestamps converge, with **no
+duplicate apply** even under concurrent leader writes during the install.
+
 ## Replication metrics
 
 When cluster mode is enabled, replication exposes Prometheus metrics (see

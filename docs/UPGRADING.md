@@ -1,5 +1,40 @@
 # Upgrading
 
+## From v0.6.0 to v0.6.1
+
+> **AuraDB v0.6.1 hardens snapshot install and published-cluster smoke for the
+> controlled multi-node preview. It is not production HA. Single-node mode remains
+> the recommended production mode.**
+
+v0.6.1 is a patch release and a **drop-in** binary replacement from v0.6.0: no
+data migration, no config change, and no connector change. Storage stays at v2
+and the Aura Wire Protocol stays at AWP 1; the new diagnostics fields are additive
+and ignored by older clients. The peer snapshot-install wire transfer is unchanged
+from v0.6.0. Stop the old binary, swap in the new one, start it; for a multi-node
+preview cluster, roll one node at a time, keeping a quorum.
+
+If you do nothing, behavior is unchanged. What is new in v0.6.1:
+
+- **Snapshot/lag diagnostics.** `auradb cluster status --addr` gains per-peer
+  `lag_entries`, `needs_snapshot`, `snapshot_in_progress`, and `catch_up_state`
+  plus cluster-level snapshot diagnostics; a new live `auradb cluster doctor
+  --addr` warns on a follower needing a snapshot, a lagging follower, and quorum
+  at the minimum / lost; and five new `auradb_cluster_snapshot_*` metrics are
+  exported. See [OBSERVABILITY.md](OBSERVABILITY.md).
+- **Backup/restore dry-run planners.** `auradb cluster backup-plan` and
+  `auradb cluster restore-plan` inspect and report only (they never write data).
+  See [OPERATIONS.md](OPERATIONS.md) and [CLI.md](CLI.md).
+- **Multi-arch images now published.** The release builds and pushes a
+  `linux/amd64` + `linux/arm64` manifest to `ghcr.io/ohswedd/auradb:0.6.1` and
+  `:latest`, so `docker pull` selects arm64 automatically on Apple Silicon. Verify
+  with `docker buildx imagetools inspect ghcr.io/ohswedd/auradb:0.6.1`.
+
+Aura Connector 0.3.x remains compatible — **no connector release is required**.
+
+**Downgrade.** v0.6.0 and v0.6.1 share the same on-disk and wire formats, so a
+v0.6.1 data directory can be reopened by v0.6.0. As always, back up the data
+directory before changing versions. See [CLUSTERING.md](CLUSTERING.md).
+
 ## From v0.5.x to v0.6.0
 
 > **AuraDB v0.6.0 improves the controlled multi-node preview and validates

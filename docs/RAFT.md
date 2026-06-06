@@ -189,6 +189,10 @@ real cross-process cluster:
   snapshot install over the transport (validated for cluster id, format, digest,
   boundary, storage format, and size), then resumes AppendEntries. This is a
   preview transfer, not chunked streaming. See [REPLICATION.md](REPLICATION.md).
+- **Snapshot-needed and follower-lag diagnostics (v0.6.1).** v0.6.1 adds
+  per-peer snapshot-needed and lag diagnostics plus metrics over the **unchanged
+  v0.6.0 install path**; the transfer itself is not changed. See
+  [REPLICATION.md](REPLICATION.md) and [OBSERVABILITY.md](OBSERVABILITY.md).
 
 The transport is gated behind the two `[cluster]` opt-ins (`enabled = true` and
 `experimental_multi_node = true`) and fails closed on a non-loopback address

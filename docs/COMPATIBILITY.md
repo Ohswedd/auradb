@@ -1,18 +1,19 @@
 # AuraDB Compatibility Matrix
 
-This document records what AuraDB v0.6.0 implements and how it interoperates with
-the Aura Connector client library and the Aura Wire Protocol (AWP). v0.6.0
-improves the controlled multi-node preview and validates fail-stop recovery
-(off by default); single-node mode remains the recommended production mode. It
-keeps **AWP 1** unchanged and makes no incompatible protocol change: the health
-report's `cluster` section gains additional additive fail-stop diagnostics
-fields and the error payload's optional `retryable` hint are both ignored by
-older clients, so no connector release is required and Aura Connector 0.3.x
-remains fully compatible. The on-disk **storage format is unchanged** from
+This document records what AuraDB v0.6.1 implements and how it interoperates with
+the Aura Connector client library and the Aura Wire Protocol (AWP). v0.6.1
+hardens snapshot install and published-cluster smoke for the controlled
+multi-node preview (off by default); single-node mode remains the recommended
+production mode. It keeps **AWP 1** unchanged and makes no incompatible protocol
+change: the health report's `cluster` section gains additive snapshot/lag
+diagnostics fields and the error payload's optional `retryable` hint are both
+ignored by older clients, so no connector release is required and Aura Connector
+0.3.x remains fully compatible. The on-disk **storage format is unchanged** from
 v0.4.x.
 
 | AuraDB | Aura Connector | Protocol | Status |
 | ------ | -------------- | -------- | ------ |
+| 0.6.1  | 0.3.x          | AWP 1    | Supported (native AuraDB backend; additive snapshot/lag diagnostics fields; multi-arch image; preview hardening) |
 | 0.6.0  | 0.3.x          | AWP 1    | Supported (native AuraDB backend; additive fail-stop diagnostics fields; multi-node preview ergonomics) |
 | 0.5.2  | 0.3.x          | AWP 1    | Supported (native AuraDB backend; additive diagnostics fields; multi-node preview cert fix) |
 | 0.5.1  | 0.3.x          | AWP 1    | Supported (native AuraDB backend; additive diagnostics fields; multi-node preview hardening) |
@@ -35,19 +36,19 @@ and TLS). Use Aura Connector 0.3.x to connect to an AuraDB 0.2.x server. See
 
 ## Versions
 
-- **AuraDB:** 0.6.0
+- **AuraDB:** 0.6.1
 - **Storage format:** v2 (commit-timestamped MVCC version chains), unchanged from
   v0.4.x. A v1 (≤ 0.2.x) data directory is migrated to v2 transparently on first
   open; an unknown future format is rejected. See [UPGRADING.md](UPGRADING.md).
 - **Aura Wire Protocol:** AWP 1 (44-byte framed header, CRC32-checked, JSON
-  payloads), unchanged in v0.6.0. The cluster health section (with additive
-  fail-stop diagnostics fields), the optional additive `retryable` error hint,
+  payloads), unchanged in v0.6.1. The cluster health section (with additive
+  snapshot/lag diagnostics fields), the optional additive `retryable` error hint,
   and the `not_leader` error code are additive. See [PROTOCOL.md](PROTOCOL.md).
 - **Aura Connector (tested):** 0.3.x
 - **Cluster mode:** optional, off by default. Single-node cluster, plus a
   controlled, **experimental multi-node server preview** gated by two opt-ins;
-  single-node mode remains the recommended production path. v0.6.0 improves the
-  preview's fail-stop recovery ergonomics but is **not** production HA. See
+  single-node mode remains the recommended production path. v0.6.1 hardens the
+  preview's snapshot install and observability but is **not** production HA. See
   [CLUSTERING.md](CLUSTERING.md).
 
 ## Required connector features

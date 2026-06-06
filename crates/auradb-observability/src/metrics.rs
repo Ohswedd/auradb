@@ -147,6 +147,19 @@ pub struct Metrics {
     pub cluster_snapshots_installed_total: AtomicU64,
     /// Multi-node preview: snapshot installs this node rejected (counter).
     pub cluster_snapshots_rejected_total: AtomicU64,
+    /// Multi-node preview: distinct follower-needs-snapshot detections (counter).
+    pub cluster_snapshot_needed_total: AtomicU64,
+    /// Multi-node preview: snapshot payload bytes shipped as a leader (counter).
+    pub cluster_snapshot_bytes_sent_total: AtomicU64,
+    /// Multi-node preview: snapshot payload bytes installed as a follower
+    /// (counter).
+    pub cluster_snapshot_bytes_installed_total: AtomicU64,
+    /// Multi-node preview: peers currently behind the compacted prefix (gauge).
+    pub cluster_snapshot_in_progress: AtomicU64,
+    /// Multi-node preview: whether the most recent snapshot install was rejected
+    /// (gauge, 0/1). The rejection reason itself is text and is reported in the
+    /// cluster status JSON, not as a metric label.
+    pub cluster_snapshot_last_error: AtomicU64,
     /// Per-request latency.
     pub request_latency: Histogram,
     /// Query execution latency.
@@ -271,6 +284,26 @@ impl Metrics {
         Metrics::gauge_set(&self.cluster_quorum_available, quorum_available as u64);
     }
 
+    /// Mirror the multi-node preview's snapshot-install diagnostics into the
+    /// registry. A no-op for single-node clusters (which never call it).
+    pub fn set_snapshot_metrics(
+        &self,
+        needed_total: u64,
+        bytes_sent_total: u64,
+        bytes_installed_total: u64,
+        in_progress: u64,
+        last_error: bool,
+    ) {
+        Metrics::gauge_set(&self.cluster_snapshot_needed_total, needed_total);
+        Metrics::gauge_set(&self.cluster_snapshot_bytes_sent_total, bytes_sent_total);
+        Metrics::gauge_set(
+            &self.cluster_snapshot_bytes_installed_total,
+            bytes_installed_total,
+        );
+        Metrics::gauge_set(&self.cluster_snapshot_in_progress, in_progress);
+        Metrics::gauge_set(&self.cluster_snapshot_last_error, last_error as u64);
+    }
+
     /// Capture a snapshot of all metrics.
     pub fn snapshot(&self) -> MetricsSnapshot {
         MetricsSnapshot {
@@ -334,6 +367,17 @@ impl Metrics {
             cluster_snapshots_rejected_total: self
                 .cluster_snapshots_rejected_total
                 .load(Ordering::Relaxed),
+            cluster_snapshot_needed_total: self
+                .cluster_snapshot_needed_total
+                .load(Ordering::Relaxed),
+            cluster_snapshot_bytes_sent_total: self
+                .cluster_snapshot_bytes_sent_total
+                .load(Ordering::Relaxed),
+            cluster_snapshot_bytes_installed_total: self
+                .cluster_snapshot_bytes_installed_total
+                .load(Ordering::Relaxed),
+            cluster_snapshot_in_progress: self.cluster_snapshot_in_progress.load(Ordering::Relaxed),
+            cluster_snapshot_last_error: self.cluster_snapshot_last_error.load(Ordering::Relaxed),
             request_latency: self.request_latency.snapshot(),
             query_latency: self.query_latency.snapshot(),
             storage_latency: self.storage_latency.snapshot(),
@@ -425,6 +469,16 @@ pub struct MetricsSnapshot {
     pub cluster_snapshots_installed_total: u64,
     /// Cluster: snapshot installs rejected (validation failure).
     pub cluster_snapshots_rejected_total: u64,
+    /// Cluster: distinct follower-needs-snapshot detections.
+    pub cluster_snapshot_needed_total: u64,
+    /// Cluster: snapshot payload bytes shipped as a leader.
+    pub cluster_snapshot_bytes_sent_total: u64,
+    /// Cluster: snapshot payload bytes installed as a follower.
+    pub cluster_snapshot_bytes_installed_total: u64,
+    /// Cluster: peers currently behind the compacted prefix (gauge).
+    pub cluster_snapshot_in_progress: u64,
+    /// Cluster: whether the most recent snapshot install was rejected (0/1).
+    pub cluster_snapshot_last_error: u64,
     /// Request latency histogram.
     pub request_latency: HistogramSnapshot,
     /// Query latency histogram.
@@ -519,6 +573,26 @@ impl MetricsSnapshot {
         gauge(
             "auradb_cluster_snapshots_rejected_total",
             self.cluster_snapshots_rejected_total,
+        );
+        gauge(
+            "auradb_cluster_snapshot_needed_total",
+            self.cluster_snapshot_needed_total,
+        );
+        gauge(
+            "auradb_cluster_snapshot_bytes_sent_total",
+            self.cluster_snapshot_bytes_sent_total,
+        );
+        gauge(
+            "auradb_cluster_snapshot_bytes_installed_total",
+            self.cluster_snapshot_bytes_installed_total,
+        );
+        gauge(
+            "auradb_cluster_snapshot_in_progress",
+            self.cluster_snapshot_in_progress,
+        );
+        gauge(
+            "auradb_cluster_snapshot_last_error",
+            self.cluster_snapshot_last_error,
         );
         gauge("auradb_cluster_enabled", self.cluster_enabled);
         gauge("auradb_node_role", self.node_role);
@@ -659,5 +733,44 @@ mod tests {
         assert!(prom.contains("auradb_mvcc_gc_reclaimed_versions_total 42"));
         let json = snap.to_json();
         assert!(json.contains("mvcc_conflicts_total"));
+    }
+
+    #[test]
+    fn metrics_include_snapshot_bytes() {
+        let m = Metrics::new();
+        // needed=3, bytes_sent=4096, bytes_installed=2048, in_progress=1, error.
+        m.set_snapshot_metrics(3, 4096, 2048, 1, true);
+        let snap = m.snapshot();
+        let prom = snap.render_prometheus();
+        for name in [
+            "auradb_cluster_snapshot_needed_total",
+            "auradb_cluster_snapshot_bytes_sent_total",
+            "auradb_cluster_snapshot_bytes_installed_total",
+            "auradb_cluster_snapshot_in_progress",
+            "auradb_cluster_snapshot_last_error",
+        ] {
+            assert!(prom.contains(name), "missing snapshot metric {name}");
+        }
+        assert!(prom.contains("auradb_cluster_snapshot_bytes_sent_total 4096"));
+        assert!(prom.contains("auradb_cluster_snapshot_bytes_installed_total 2048"));
+        assert!(prom.contains("auradb_cluster_snapshot_in_progress 1"));
+        assert!(prom.contains("auradb_cluster_snapshot_last_error 1"));
+        let json = snap.to_json();
+        assert!(json.contains("cluster_snapshot_needed_total"));
+    }
+
+    #[test]
+    fn lag_metrics_update_after_catchup() {
+        let m = Metrics::new();
+        // A lagging follower: max peer lag of 12 entries while installing.
+        m.set_peer_metrics(2, 12, 1, 0, 0, 5, true, 1, 0, 0);
+        assert_eq!(m.snapshot().peer_replication_lag_entries, 12);
+        // After catch-up the leader reports zero peer lag.
+        m.set_peer_metrics(2, 0, 1, 0, 0, 5, true, 1, 1, 0);
+        let snap = m.snapshot();
+        assert_eq!(snap.peer_replication_lag_entries, 0);
+        assert!(snap
+            .render_prometheus()
+            .contains("auradb_peer_replication_lag_entries 0"));
     }
 }

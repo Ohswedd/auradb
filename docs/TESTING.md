@@ -228,6 +228,33 @@ not timing-flaky.
 See [CLUSTERING.md](CLUSTERING.md), [RAFT.md](RAFT.md),
 [REPLICATION.md](REPLICATION.md), and [CONFORMANCE.md](CONFORMANCE.md).
 
+## Snapshot-install and diagnostics hardening suites (v0.6.1)
+
+> **AuraDB v0.6.1 hardens snapshot install and published-cluster smoke for the
+> controlled multi-node preview. Single-node mode remains the recommended
+> production mode.**
+
+- **Larger and concurrent snapshot install**
+  (`crates/auradb-replication/tests/multi_node.rs`): a CI-safe larger run plus
+  `#[ignore]`d 1,000-entry and 10,000-entry stress runs assert that data, the
+  secondary index, planner statistics, and MVCC timestamps converge, with **no
+  duplicate apply** under concurrent leader writes during the install.
+- **Snapshot/lag diagnostics**: tests cover the per-peer `lag_entries`,
+  `needs_snapshot`, `snapshot_in_progress`, and `catch_up_state` fields and the
+  cluster-level snapshot diagnostics surfaced by `auradb cluster status --addr`
+  and `auradb cluster doctor --addr`, plus the new `auradb_cluster_snapshot_*`
+  metrics.
+- **Connector `not_leader` ergonomics** (`crates/auradb-server/tests/not_leader.rs`):
+  `connector_not_leader_message_includes_leader_hint` confirms the leader hint is
+  present, and `connector_no_infinite_retry` confirms a follower write does not
+  loop forever. Aura Connector 0.3.x is not cluster-routing-aware; route writes to
+  the leader manually (resolve via `auradb cluster leader` or the
+  `leader_client_addr` status field).
+
+The multi-node suites run **serially** (`--test-threads=1`); the heaviest stress
+variants are `#[ignore]`d so the default suite stays stable under CI parallelism.
+See [REPLICATION.md](REPLICATION.md) and [OBSERVABILITY.md](OBSERVABILITY.md).
+
 ## Raft durability and cluster-mode hardening suites (v0.4.1)
 
 These suites harden the v0.4.0 groundwork. All are deterministic — multi-node

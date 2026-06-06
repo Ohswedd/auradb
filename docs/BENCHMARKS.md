@@ -187,3 +187,19 @@ micro-benchmark numbers that would not be comparable across machines. Snapshot
 install is a bounded single-message transfer; its cost scales with the snapshot
 size up to `MAX_SNAPSHOT_BYTES` (8 MiB). None of this is a universal performance
 claim.
+
+## Snapshot-install and published-cluster smoke baseline (v0.6.1)
+
+v0.6.1 refreshes the committed single-node engine baseline to
+`benches/baseline/v0.6.1.json`, captured with the same suite as v0.6.0 on the
+release machine:
+
+```bash
+cargo run --release -p auradb-cli -- bench --data-dir .local/v061-bench --json \
+  --output benches/baseline/v0.6.1.json
+auradb bench compare --baseline benches/baseline/v0.6.0.json --current benches/baseline/v0.6.1.json
+```
+
+The `v0.6.0.json` baseline is kept as history. As with every benchmark here, the
+numbers are machine-specific and used only for same-machine regression tracking,
+never as a universal performance claim.

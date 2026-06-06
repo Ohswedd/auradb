@@ -65,6 +65,52 @@ pub struct ClusterStatus {
     pub single_node: bool,
 }
 
+/// A follower's catch-up state from the leader's vantage point (multi-node
+/// preview diagnostics).
+///
+/// Reported by `auradb cluster status --addr <leader>` per peer. The state is
+/// honest about what the leader actually knows: `Unknown` when this node is not
+/// the leader and therefore keeps no per-peer replication bookkeeping for the
+/// peer, rather than implying a state it cannot observe.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CatchUpState {
+    /// This node is not the leader, so it has no per-peer replication state for
+    /// the peer.
+    Unknown,
+    /// The peer is being served normally by AppendEntries.
+    Normal,
+    /// The leader is probing backwards to find the peer's last matching entry.
+    Probing,
+    /// The peer has fallen behind the leader's compacted log prefix and can only
+    /// be brought current by a snapshot install.
+    SnapshotNeeded,
+    /// A snapshot has been shipped to the peer and it is installing it.
+    SnapshotInstalling,
+    /// The peer has matched the leader's committed state.
+    CaughtUp,
+}
+
+impl CatchUpState {
+    /// The stable lowercase string code for this state (also the JSON value).
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            CatchUpState::Unknown => "unknown",
+            CatchUpState::Normal => "normal",
+            CatchUpState::Probing => "probing",
+            CatchUpState::SnapshotNeeded => "snapshot_needed",
+            CatchUpState::SnapshotInstalling => "snapshot_installing",
+            CatchUpState::CaughtUp => "caught_up",
+        }
+    }
+}
+
+impl std::fmt::Display for CatchUpState {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
 impl ClusterStatus {
     /// The status of a node with cluster mode disabled (the default path).
     pub fn disabled() -> ClusterStatus {

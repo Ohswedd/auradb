@@ -19,6 +19,16 @@
 > recovery preview** behavior — this is **not production HA** and not production
 > automatic failover. See [V0_6_RELEASE_NOTES.md](V0_6_RELEASE_NOTES.md).
 
+> **AuraDB v0.6.1 hardens snapshot install and published-cluster smoke for the
+> controlled multi-node preview. It is not production HA. Single-node mode remains
+> the recommended production mode.** v0.6.1 adds per-peer snapshot/lag diagnostics
+> to `auradb cluster status --addr` and a live `auradb cluster doctor --addr`, the
+> matching Prometheus/JSON metrics, dry-run cluster backup/restore planners
+> (`auradb cluster backup-plan` / `restore-plan`), and multi-arch Docker images.
+> See [CLUSTER_TROUBLESHOOTING.md](CLUSTER_TROUBLESHOOTING.md),
+> [OBSERVABILITY.md](OBSERVABILITY.md), [OPERATIONS.md](OPERATIONS.md), and
+> [CLI.md](CLI.md).
+
 AuraDB introduced cluster mode in v0.4.0 (an optional, durable replication path
 built on a Raft consensus core) and hardened it in v0.4.1. v0.5.0 builds on that
 groundwork by adding a real cross-process peer transport and Raft over it, so a

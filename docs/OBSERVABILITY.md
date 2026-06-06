@@ -51,6 +51,21 @@ The `Metrics` registry tracks:
   by a snapshot install rather than AppendEntries; a rising rejected count points
   at a misconfigured or mismatched peer. Leadership churn is tracked by
   `auradb_raft_leader_changes_total`. See [V0_6_RELEASE_NOTES.md](V0_6_RELEASE_NOTES.md).
+- **Snapshot-install diagnostics metrics (v0.6.1, present when the preview is
+  enabled)** - exported as both Prometheus and JSON:
+  - `auradb_cluster_snapshot_needed_total` — followers found to need a snapshot
+    (below the leader's compacted prefix).
+  - `auradb_cluster_snapshot_bytes_sent_total` — snapshot bytes the leader has
+    shipped.
+  - `auradb_cluster_snapshot_bytes_installed_total` — snapshot bytes this node has
+    installed as a follower.
+  - `auradb_cluster_snapshot_in_progress` — gauge of snapshot installs currently
+    running.
+  - `auradb_cluster_snapshot_last_error` — a 0/1 gauge that is `1` after the last
+    install was rejected (the textual rejection reason is in the `cluster status`
+    JSON, not a metric label).
+  The same signals are surfaced per peer in the live status report (see below) and
+  by `auradb cluster doctor --addr`. The wire transfer is unchanged from v0.6.0.
 
 A `snapshot()` is serializable and can be exported:
 
@@ -108,6 +123,16 @@ status --addr --json`, and `auradb doctor` outputs include the cluster fields.
 The error payload also gained an additive, optional `retryable` hint (set for
 `not_leader`, conflicts, and transaction timeouts). See
 [CLUSTERING.md](CLUSTERING.md).
+
+New in v0.6.1, each peer entry in `auradb cluster status --addr --json` also
+carries snapshot/lag diagnostics: `lag_entries`, `needs_snapshot`,
+`snapshot_in_progress`, and `catch_up_state` (one of `normal`, `probing`,
+`snapshot_needed`, `snapshot_installing`, `caught_up`, or `unknown`), plus
+cluster-level snapshot diagnostics (last installed boundary, last install time,
+last error, bytes sent/installed, in-progress gauge, needed-total). The new live
+`auradb cluster doctor --addr <server>` fetches live health and warns on a
+follower that needs a snapshot, a lagging follower, and quorum at the minimum or
+quorum lost. These are additive fields and ignored by older clients.
 
 ### JSON output
 

@@ -113,11 +113,17 @@ Because containers communicate over a non-loopback Docker network, this path is 
    image (the recommended preview path, no registry pull) or the published one:
 
    ```bash
-   # Local image (build it first: docker build -t auradb:0.6.0 .)
-   AURADB_IMAGE=auradb:0.6.0 bash scripts/smoke_cluster_compose.sh
+   # Local image (build it first: docker build -t auradb:0.6.1 .)
+   AURADB_IMAGE=auradb:0.6.1 bash scripts/smoke_cluster_compose.sh
    # Or the published image (post-release verification)
-   AURADB_IMAGE=ghcr.io/ohswedd/auradb:0.6.0 bash scripts/smoke_cluster_compose.sh
+   AURADB_IMAGE=ghcr.io/ohswedd/auradb:0.6.1 bash scripts/smoke_cluster_compose.sh
    ```
+
+   The smoke prints the image used, the node ports, the leader, quorum, per-peer
+   states, and the teardown result. The published image is **multi-arch**
+   (`linux/amd64` + `linux/arm64`), so `docker pull` selects arm64 automatically
+   on Apple Silicon; inspect the manifest with `docker buildx imagetools inspect
+   ghcr.io/ohswedd/auradb:0.6.1`.
 
 4. **Inspect** (client ports are published to the host as `7171`/`7181`/`7191`):
 

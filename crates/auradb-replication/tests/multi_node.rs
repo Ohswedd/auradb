@@ -14,7 +14,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use auradb::core::{CollectionSchema, Document, FieldDef, FieldType, Value};
-use auradb::query::{FindQuery, Mutation};
+use auradb::query::{CompareOp, Filter, FindQuery, Mutation};
 use auradb::Engine;
 use auradb_cluster::{
     ClusterConfig, ClusterId, ClusterIdentity, ClusterMetadata, NodeId, NodeMetadata, NodeRole,
@@ -35,7 +35,14 @@ fn schema() -> CollectionSchema {
             nullable: false,
             indexed: false,
         })
-        .with_field(FieldDef::new("v", FieldType::Int))
+        .with_field(FieldDef {
+            name: "v".into(),
+            field_type: FieldType::Int,
+            primary_key: false,
+            unique: false,
+            nullable: false,
+            indexed: true,
+        })
 }
 
 fn insert_mutation(id: i64, v: i64) -> Mutation {
@@ -947,6 +954,335 @@ async fn append_entries_resume_after_snapshot_install() {
     cluster
         .wait_indices_have(&[follower], target + 10, Duration::from_secs(30))
         .await;
+    cluster.shutdown().await;
+}
+
+// ----- larger and concurrent snapshot install scenarios (v0.6.1) -----
+
+/// Like [`run_snapshot_install_scenario`] but parameterized on the shared
+/// `baseline` count and the post-stop `target` count, so larger catch-up runs
+/// (and the ignored stress run) reuse one well-tested scenario. The follower is
+/// stopped after the baseline, the live majority commits up to `target`, the
+/// live logs are compacted past the entries the follower needs, and the follower
+/// is restarted so it can only be brought current by a snapshot install.
+async fn snapshot_install_scenario_sized(
+    baseline: i64,
+    target: i64,
+    catch_up_timeout: Duration,
+) -> (TestCluster, usize, usize) {
+    let mut cluster = TestCluster::start(3).await;
+    let ids = cluster.ids();
+    let addrs = cluster.addrs();
+    let leader = cluster.wait_for_leader(Duration::from_secs(10)).await;
+    let all: Vec<usize> = (0..3).collect();
+
+    for id in 1..=baseline {
+        cluster.write_via_leader(&all, id, id).await;
+    }
+    cluster
+        .wait_all_have(baseline as usize, Duration::from_secs(15))
+        .await;
+
+    let follower = (0..3).find(|&i| i != leader).unwrap();
+    cluster.stop(follower).await;
+    let live: Vec<usize> = (0..3).filter(|&i| i != follower).collect();
+    for id in (baseline + 1)..=target {
+        cluster.write_via_leader(&live, id, id).await;
+    }
+    cluster
+        .wait_indices_have(&live, target as usize, catch_up_timeout)
+        .await;
+
+    for &i in &live {
+        let _ = cluster.nodes[i].peer.compact_log();
+    }
+
+    cluster.restart(follower, &ids, &addrs).await;
+    (cluster, follower, target as usize)
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 6)]
+#[ignore = "heavy: ~1000 synchronous commits; run with `cargo test -- --ignored`"]
+async fn snapshot_install_after_1000_entries() {
+    // The full 1000-entry catch-up via snapshot install. Heavy under contended
+    // CI parallelism (1000 synchronous majority commits), so ignored by default;
+    // `snapshot_install_metrics_increment` and the `preserves_*` tests cover the
+    // same path at a CI-safe size.
+    let (cluster, follower, target) =
+        snapshot_install_scenario_sized(20, 1000, Duration::from_secs(120)).await;
+    cluster
+        .wait_indices_have(&[follower], target, Duration::from_secs(60))
+        .await;
+    assert!(
+        cluster.nodes[follower].peer.snapshot_counters().1 >= 1,
+        "follower should have installed a snapshot"
+    );
+    cluster.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 8)]
+#[ignore = "stress: 10k+ synchronous commits; run with `cargo test -- --ignored`"]
+async fn snapshot_install_large_ignored_stress() {
+    let (cluster, follower, target) =
+        snapshot_install_scenario_sized(50, 10_000, Duration::from_secs(600)).await;
+    cluster
+        .wait_indices_have(&[follower], target, Duration::from_secs(120))
+        .await;
+    cluster.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 6)]
+async fn snapshot_install_metrics_increment() {
+    // A CI-safe larger run (well past the baseline) that must catch up by a
+    // snapshot install, asserting the v0.6.1 snapshot metrics and diagnostics
+    // advance: bytes installed, needs-snapshot detections, and the in-progress
+    // gauge settling back to zero once the follower is current.
+    let (cluster, follower, target) =
+        snapshot_install_scenario_sized(20, 200, Duration::from_secs(30)).await;
+    cluster
+        .wait_indices_have(&[follower], target, Duration::from_secs(30))
+        .await;
+
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        let diag = cluster.nodes[follower].peer.snapshot_diagnostics();
+        let sent_bytes: u64 = (0..3)
+            .map(|i| cluster.nodes[i].peer.snapshot_diagnostics().bytes_sent)
+            .sum();
+        let needed: u64 = (0..3)
+            .map(|i| cluster.nodes[i].peer.peer_metrics().snapshot_needed)
+            .sum();
+        if diag.bytes_installed > 0 && sent_bytes > 0 && needed >= 1 {
+            // The follower recorded a concrete install boundary.
+            assert!(
+                diag.last_included_index > 0,
+                "diagnostics should record the installed boundary"
+            );
+            break;
+        }
+        if Instant::now() >= deadline {
+            panic!("snapshot metrics did not advance: follower diag={diag:?}");
+        }
+        tokio::time::sleep(Duration::from_millis(25)).await;
+    }
+
+    // No duplicate apply on the recovered follower.
+    assert_eq!(
+        cluster.nodes[follower].peer.metrics().apply_errors,
+        0,
+        "snapshot install + resume must not produce apply errors"
+    );
+    cluster.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 6)]
+async fn snapshot_install_preserves_indexes() {
+    let (cluster, follower, target) =
+        snapshot_install_scenario_sized(20, 150, Duration::from_secs(30)).await;
+    cluster
+        .wait_indices_have(&[follower], target, Duration::from_secs(30))
+        .await;
+    // The follower's secondary index on `v` is rebuilt from the installed
+    // snapshot: an indexed equality query returns the right record via the index.
+    let engine = &cluster.nodes[follower].engine;
+    let q = FindQuery {
+        filter: Some(Filter::Compare {
+            field: "v".into(),
+            op: CompareOp::Eq,
+            value: auradb::core::Value::Int(75),
+        }),
+        ..FindQuery::new("C")
+    };
+    let rows = engine.find(&q).unwrap();
+    assert_eq!(
+        rows.len(),
+        1,
+        "indexed lookup should find exactly one record"
+    );
+    let plan = engine.explain(&q).unwrap();
+    assert!(
+        plan.used_index.is_some(),
+        "the rebuilt index should be used by the planner: {plan:?}"
+    );
+    cluster.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 6)]
+async fn snapshot_install_preserves_planner_stats_or_rebuilds() {
+    let (cluster, follower, target) =
+        snapshot_install_scenario_sized(20, 150, Duration::from_secs(30)).await;
+    cluster
+        .wait_indices_have(&[follower], target, Duration::from_secs(30))
+        .await;
+    // Planner statistics are rebuilt from the installed snapshot: a range query
+    // plans and executes correctly, returning every matching record.
+    let engine = &cluster.nodes[follower].engine;
+    let q = FindQuery {
+        filter: Some(Filter::Compare {
+            field: "v".into(),
+            op: CompareOp::Lte,
+            value: auradb::core::Value::Int(30),
+        }),
+        ..FindQuery::new("C")
+    };
+    let plan = engine.explain(&q).unwrap();
+    assert!(
+        plan.estimated_rows > 0,
+        "planner stats should estimate matching rows after install: {plan:?}"
+    );
+    let rows = engine.find(&q).unwrap();
+    assert_eq!(
+        rows.len(),
+        30,
+        "range query should return every record with v <= 30"
+    );
+    cluster.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 6)]
+async fn snapshot_install_preserves_mvcc_timestamp_order() {
+    let (cluster, follower, target) =
+        snapshot_install_scenario_sized(20, 150, Duration::from_secs(30)).await;
+    cluster
+        .wait_indices_have(&[follower], target, Duration::from_secs(30))
+        .await;
+    // After the install, the follower's applied index equals the snapshot
+    // boundary and continues to advance monotonically as post-boundary
+    // AppendEntries arrive — the MVCC commit watermark (commit_ts_base + index)
+    // never goes backwards across the boundary.
+    let all: Vec<usize> = (0..3).collect();
+    let before = cluster.nodes[follower].peer.status().applied_index;
+    for id in (target as i64 + 1)..=(target as i64 + 15) {
+        cluster.write_via_leader(&all, id, id).await;
+    }
+    cluster
+        .wait_indices_have(&[follower], target + 15, Duration::from_secs(30))
+        .await;
+    let after = cluster.nodes[follower].peer.status().applied_index;
+    assert!(
+        after > before,
+        "applied index must advance monotonically after the snapshot boundary ({before} -> {after})"
+    );
+    // Every record id is present exactly once (monotonic, gap-free apply).
+    let rows = cluster.nodes[follower]
+        .engine
+        .find(&FindQuery::new("C"))
+        .unwrap();
+    assert_eq!(rows.len(), target + 15, "no missing or duplicated records");
+    cluster.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 6)]
+async fn snapshot_install_then_append_entries_resume() {
+    let (cluster, follower, target) =
+        snapshot_install_scenario_sized(20, 150, Duration::from_secs(30)).await;
+    cluster
+        .wait_indices_have(&[follower], target, Duration::from_secs(30))
+        .await;
+    // Normal AppendEntries replication resumes after the install.
+    let all: Vec<usize> = (0..3).collect();
+    for id in (target as i64 + 1)..=(target as i64 + 12) {
+        cluster.write_via_leader(&all, id, id).await;
+    }
+    cluster
+        .wait_indices_have(&[follower], target + 12, Duration::from_secs(30))
+        .await;
+    cluster.shutdown().await;
+}
+
+/// Like the sized scenario, but the leader keeps committing writes *after* the
+/// follower restarts (concurrent with its snapshot install), then we drive to a
+/// final, higher target. Returns the cluster, follower index, and final count.
+async fn snapshot_install_concurrent_scenario() -> (TestCluster, usize, usize) {
+    let (cluster, follower, target) =
+        snapshot_install_scenario_sized(20, 150, Duration::from_secs(30)).await;
+    // Commit a further run via the whole cluster while the follower is installing
+    // the snapshot and resuming AppendEntries — the two proceed concurrently on
+    // the multi-threaded runtime.
+    let all: Vec<usize> = (0..3).collect();
+    let final_target = target + 60;
+    for id in (target as i64 + 1)..=(final_target as i64) {
+        cluster.write_via_leader(&all, id, id).await;
+    }
+    (cluster, follower, final_target)
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 8)]
+async fn snapshot_install_with_concurrent_leader_writes() {
+    let (cluster, follower, final_target) = snapshot_install_concurrent_scenario().await;
+    cluster
+        .wait_indices_have(&[follower], final_target, Duration::from_secs(40))
+        .await;
+    cluster.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 8)]
+async fn snapshot_install_boundary_stable_while_writes_continue() {
+    let (cluster, follower, final_target) = snapshot_install_concurrent_scenario().await;
+    cluster
+        .wait_indices_have(&[follower], final_target, Duration::from_secs(40))
+        .await;
+    // The follower installed a snapshot at a stable boundary that is consistent
+    // with its applied state even though the leader kept writing: the recorded
+    // boundary is within the committed range it eventually reached.
+    let diag = cluster.nodes[follower].peer.snapshot_diagnostics();
+    assert!(
+        diag.last_included_index > 0,
+        "a snapshot install should have been recorded: {diag:?}"
+    );
+    let applied = cluster.nodes[follower].peer.status().applied_index;
+    assert!(
+        diag.last_included_index <= applied,
+        "the install boundary ({}) must not exceed the applied index ({applied})",
+        diag.last_included_index
+    );
+    cluster.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 8)]
+async fn snapshot_install_no_duplicate_apply_after_concurrent_writes() {
+    let (cluster, follower, final_target) = snapshot_install_concurrent_scenario().await;
+    cluster
+        .wait_indices_have(&[follower], final_target, Duration::from_secs(40))
+        .await;
+    // Exactly `final_target` distinct records, no duplicates, and no apply errors
+    // (an Insert re-applied over the snapshot boundary would conflict and count).
+    assert_eq!(
+        cluster.record_count(follower),
+        final_target,
+        "follower must hold each record exactly once"
+    );
+    assert_eq!(
+        cluster.nodes[follower].peer.metrics().apply_errors,
+        0,
+        "no duplicate/conflicting apply across the snapshot boundary"
+    );
+    cluster.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 8)]
+async fn snapshot_install_follower_converges_after_concurrent_writes() {
+    let (cluster, follower, final_target) = snapshot_install_concurrent_scenario().await;
+    cluster
+        .wait_indices_have(&[follower], final_target, Duration::from_secs(40))
+        .await;
+    // The follower converges to the same record set as the rest of the cluster.
+    let live: Vec<usize> = (0..3).collect();
+    let max_applied = live
+        .iter()
+        .map(|&i| cluster.nodes[i].peer.status().applied_index)
+        .max()
+        .unwrap();
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        if cluster.nodes[follower].peer.status().applied_index >= max_applied {
+            break;
+        }
+        if Instant::now() >= deadline {
+            panic!("follower did not converge to applied index {max_applied}");
+        }
+        tokio::time::sleep(Duration::from_millis(25)).await;
+    }
     cluster.shutdown().await;
 }
 

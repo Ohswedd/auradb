@@ -121,6 +121,28 @@ connector conformance **15/15** — no connector changes are required and AWP st
 at v1. The wire additions in v0.6.0 (additive fail-stop diagnostics fields on the
 health report's `cluster` section) are ignored by the 0.3.x connector.
 
+### v0.6.1 snapshot install and published-cluster smoke hardening
+
+v0.6.1 keeps every scenario above and adds larger and concurrent-write
+snapshot-install coverage (data, index, planner-stats, and MVCC-timestamp
+convergence; no duplicate apply under concurrent leader writes) and
+snapshot-needed / follower-lag diagnostics with a live `auradb cluster doctor
+--addr` (`crates/auradb-replication/tests/multi_node.rs`,
+`crates/auradb-cli/tests/cluster_diagnostics.rs`). The connector leader-hint UX
+review was **docs-only** (Option A): the `not_leader` leader-hint message and the
+no-infinite-retry contract are pinned by
+`crates/auradb-server/tests/not_leader.rs`
+(`connector_not_leader_message_includes_leader_hint`, `connector_no_infinite_retry`).
+
+For v0.6.1, local validation used the stdlib AWP harness
+(`tests/conformance/python/run_conformance.py`, 18/18 against a v0.6.1 server
+whose `auradb version` reports `0.6.1`) and the Rust conformance crate
+(`auradb-conformance`). Published **Aura Connector 0.3.0** conformance is covered
+by CI (`conformance.yml`) and must pass before release — no connector changes are
+required and AWP stays at v1. The additive v0.6.1 snapshot/lag diagnostics fields
+on the health report's `cluster` section and per-peer status are ignored by the
+0.3.x connector.
+
 ## Running
 
 Rust (no server needed - the test spawns one):

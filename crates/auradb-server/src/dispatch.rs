@@ -80,6 +80,15 @@ impl ServerContext {
                 pm.snapshots_installed,
                 pm.snapshots_rejected,
             );
+            self.metrics.set_snapshot_metrics(
+                pm.snapshot_needed,
+                pm.snapshot_bytes_sent,
+                pm.snapshot_bytes_installed,
+                pm.snapshot_in_progress,
+                node.snapshot_diagnostics()
+                    .map(|d| d.last_error.is_some())
+                    .unwrap_or(false),
+            );
         }
     }
 }
@@ -100,8 +109,24 @@ pub fn cluster_health(ctx: &ServerContext) -> Option<auradb_protocol::ClusterHea
             connect_attempts: p.connect_attempts,
             match_index: p.match_index,
             next_index: p.next_index,
+            lag_entries: p.lag_entries,
+            needs_snapshot: p.needs_snapshot,
+            snapshot_in_progress: p.snapshot_in_progress,
+            catch_up_state: p.catch_up_state.as_str().to_string(),
         })
         .collect();
+    let snapshot = node
+        .snapshot_diagnostics()
+        .map(|d| auradb_protocol::ClusterSnapshotHealth {
+            last_included_index: d.last_included_index,
+            last_included_term: d.last_included_term,
+            last_install_unix: d.last_install_unix,
+            last_error: d.last_error,
+            bytes_sent: d.bytes_sent,
+            bytes_installed: d.bytes_installed,
+            in_progress: d.in_progress,
+            needed_total: d.needed_total,
+        });
     Some(auradb_protocol::ClusterHealth {
         enabled: status.enabled,
         node_id: status.node_id.map(|id| id.to_string()),
@@ -119,6 +144,7 @@ pub fn cluster_health(ctx: &ServerContext) -> Option<auradb_protocol::ClusterHea
         preview_multi_node: node.is_multi_node(),
         quorum_available: node.quorum_available(),
         peers,
+        snapshot,
     })
 }
 

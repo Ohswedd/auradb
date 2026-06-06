@@ -229,6 +229,48 @@ the Raft log. **Restoring directly into a live multi-node cluster is not
 supported** — restore into single-node, then bootstrap a fresh preview cluster if
 you need one. See [UPGRADING.md](UPGRADING.md) and [STORAGE_ENGINE.md](STORAGE_ENGINE.md).
 
+### Cluster backup and restore dry-run (v0.6.1)
+
+v0.6.1 adds two **dry-run planners** that inspect and report — they **never write
+data**:
+
+```bash
+# Inspect a data dir + config and report what a logical backup would capture.
+auradb cluster backup-plan --data-dir /path/to/data [--config <f>] [--json]
+
+# Inspect a JSONL logical dump and report what a restore would do.
+auradb cluster restore-plan --input cluster-backup.jsonl [--json]
+```
+
+- `cluster backup-plan` reports the source mode
+  (`leader-logical-backup` for a cluster node, else
+  `local-data-dir-logical-backup`); what is **included** (latest committed state,
+  schema, collection and record counts; indexes rebuilt on restore); what is
+  **excluded** (the Raft log and compaction state, cluster membership/peer
+  metadata, uncommitted entries, historical MVCC versions); the restore target
+  (single-node restore into a fresh data dir, optionally bootstrapping a fresh
+  single-node preview cluster); referenced secrets (auth token, peer auth token,
+  TLS material) shown **redacted** and noted as **not** included in the backup;
+  and warnings (cannot restore directly into a live multi-node cluster; run from a
+  stable leader with writes quiesced; verify after restore).
+- `cluster restore-plan` inspects a JSONL logical dump and reports its
+  schema/record counts, collections, restore target, exclusions, and the same
+  "no live multi-node restore" warning.
+
+These planners describe the existing logical backup/restore flow above; they do
+not change it. See [CLI.md](CLI.md) and [SECURITY.md](SECURITY.md).
+
+### Multi-arch images and published-image smoke (v0.6.1)
+
+The release-tag workflow builds and pushes a multi-arch (`linux/amd64` +
+`linux/arm64`) manifest to `ghcr.io/ohswedd/auradb:0.6.1` and `:latest`, so a
+`docker pull` on Apple Silicon selects the arm64 image automatically. Verify the
+manifest with `docker buildx imagetools inspect ghcr.io/ohswedd/auradb:0.6.1`. A
+manual `published-image-smoke` CI job inspects the manifest and then runs
+`scripts/smoke_cluster_compose.sh`, which prints the image used, node ports, the
+leader, quorum, per-peer states, and the teardown result (and honors
+`AURADB_IMAGE`).
+
 Single-node mode remains the recommended production path; use the preview for
 local testing and early validation only. See [CLUSTERING.md](CLUSTERING.md),
 [OBSERVABILITY.md](OBSERVABILITY.md), and

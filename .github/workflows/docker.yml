@@ -17,8 +17,19 @@ jobs:
     steps:
       - uses: actions/checkout@v6
 
-      - name: Build image
-        run: docker build -t auradb:ci .
+      - name: Set up Buildx
+        uses: docker/setup-buildx-action@v3
+
+      # PR / branch builds verify the image builds for linux/amd64 through buildx
+      # and load it locally for the smoke tests, without publishing. The arm64
+      # leg of the multi-arch manifest is built only by the tag publish job.
+      - name: Build image (linux/amd64, no push)
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: linux/amd64
+          load: true
+          tags: auradb:ci
 
       - name: Smoke test (version)
         run: docker run --rm auradb:ci auradb version
@@ -67,13 +78,20 @@ jobs:
             type=ref,event=tag
             type=sha,prefix=sha-,format=short
 
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+
       - name: Set up Buildx
         uses: docker/setup-buildx-action@v3
 
-      - name: Build and push
+      - name: Build and push multi-arch manifest
         uses: docker/build-push-action@v6
         with:
           context: .
+          platforms: linux/amd64,linux/arm64
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
+
+      - name: Verify multi-arch manifest
+        run: docker buildx imagetools inspect ${{ env.IMAGE }}:latest

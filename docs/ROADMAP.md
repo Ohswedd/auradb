@@ -4,9 +4,27 @@ This roadmap describes where AuraDB is headed beyond the first single-node
 release. It is a statement of direction, not a delivery commitment. Items are
 grouped by theme and listed roughly in the order we expect to approach them.
 
-## Current release: 0.6.0
+## Current release: 0.6.1
 
-AuraDB 0.6.0 **improves the controlled multi-node preview and validates
+AuraDB 0.6.1 **hardens snapshot install and published-cluster smoke** for the
+controlled multi-node preview. It adds multi-architecture Docker images
+(`linux/amd64` + `linux/arm64`), larger and concurrent-write snapshot-install
+validation, snapshot-needed and follower-lag diagnostics (per-peer
+`lag_entries` / `needs_snapshot` / `catch_up_state`, cluster snapshot
+diagnostics, and a live `auradb cluster doctor --addr`), additional
+snapshot-install metrics, cluster backup/restore **dry-run** planning
+(`auradb cluster backup-plan` / `restore-plan`), and a published-image cluster
+smoke checklist. It is **not production HA** and makes **no new
+production-clustering claims** — there is no production automatic failover,
+linearizable follower read, distributed transaction, dynamic membership,
+sharding, or multi-region. There is **no format or wire change** (storage
+unchanged; AWP 1 with additive snapshot/lag diagnostics fields), so Aura
+Connector 0.3.x remains compatible and no connector release is required.
+**Single-node mode remains the recommended production mode.**
+
+### Delivered in 0.6.0
+
+AuraDB 0.6.0 **improved the controlled multi-node preview and validated
 fail-stop recovery.** It adds a leader kill / automatic re-election preview (a
 stopped leader is taken over by the surviving majority; the old node rejoins as a
 follower and catches up), the first real **peer snapshot install over the wire**

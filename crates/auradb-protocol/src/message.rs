@@ -210,6 +210,34 @@ pub struct ClusterHealth {
     /// Empty for single-node clusters and older servers.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub peers: Vec<ClusterPeerHealth>,
+    /// Snapshot-install diagnostics (multi-node preview only). Additive (v0.6.1);
+    /// `None` for single-node clusters and older servers.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub snapshot: Option<ClusterSnapshotHealth>,
+}
+
+/// Snapshot-install diagnostics carried in [`ClusterHealth`] for the multi-node
+/// preview. Additive in AWP for AuraDB 0.6.1; older clients ignore it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ClusterSnapshotHealth {
+    /// Boundary index of the most recently installed snapshot (0 if none).
+    pub last_included_index: u64,
+    /// Boundary term of the most recently installed snapshot (0 if none).
+    pub last_included_term: u64,
+    /// Unix seconds at which the most recent snapshot install completed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_install_unix: Option<u64>,
+    /// Reason the most recent snapshot install was rejected, if any.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_error: Option<String>,
+    /// Cumulative snapshot payload bytes shipped to followers as a leader.
+    pub bytes_sent: u64,
+    /// Cumulative snapshot payload bytes installed from a leader as a follower.
+    pub bytes_installed: u64,
+    /// Peers currently behind the compacted prefix (gauge).
+    pub in_progress: u64,
+    /// Cumulative follower-needs-snapshot detections.
+    pub needed_total: u64,
 }
 
 /// Per-peer reachability and replication state, carried in [`ClusterHealth`] for
@@ -236,6 +264,27 @@ pub struct ClusterPeerHealth {
     /// The leader's next index to send to the peer, if known.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub next_index: Option<u64>,
+    /// Replication lag for this peer in entries (leader commit index minus the
+    /// peer's match index). Additive (v0.6.1); `None` when not the leader.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub lag_entries: Option<u64>,
+    /// Whether the peer has fallen behind the compacted prefix and needs a
+    /// snapshot install. Additive (v0.6.1); defaults to false for older servers.
+    #[serde(default)]
+    pub needs_snapshot: bool,
+    /// Whether a snapshot is currently being installed on this peer. Additive
+    /// (v0.6.1); defaults to false for older servers.
+    #[serde(default)]
+    pub snapshot_in_progress: bool,
+    /// The peer's catch-up state code (`normal`, `probing`, `snapshot_needed`,
+    /// `snapshot_installing`, `caught_up`, or `unknown`). Additive (v0.6.1);
+    /// defaults to `unknown` for older servers.
+    #[serde(default = "default_catch_up_state")]
+    pub catch_up_state: String,
+}
+
+fn default_catch_up_state() -> String {
+    "unknown".to_string()
 }
 
 /// MVCC health and version-pressure summary carried in [`HealthReport`].

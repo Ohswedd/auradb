@@ -347,3 +347,66 @@ async fn not_leader_does_not_retry_forever() {
     }
     shutdown.notify_one();
 }
+
+// ----- connector leader-hint UX contract (v0.6.1 review) -----
+//
+// The v0.6.1 connector review chose Option A (docs-only): Aura Connector 0.3.x
+// stays compatible but is not cluster-routing-aware, so a client routes writes to
+// the leader manually using the hint in the `not_leader` message. These tests pin
+// the server-side contract that manual routing depends on.
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn connector_not_leader_message_includes_leader_hint() {
+    // The structured error a connector sees names the current leader so a client
+    // (or operator) can redirect the write — the basis for manual leader routing.
+    let dir = tempfile::tempdir().unwrap();
+    let (addr, shutdown) = start_follower(dir.path()).await;
+    let mut stream = TcpStream::connect(&addr).await.unwrap();
+    hello(&mut stream).await;
+
+    write_frame(&mut stream, &insert_frame(2, 1)).await.unwrap();
+    let resp = read_frame(&mut stream, DEFAULT_MAX_PAYLOAD)
+        .await
+        .unwrap()
+        .unwrap();
+    let payload: auradb_protocol::ErrorPayload = resp.decode_json().unwrap();
+    assert_eq!(payload.code, ErrorCode::NotLeader);
+    assert_eq!(payload.code.as_str(), "not_leader", "stable wire code");
+    assert!(
+        payload
+            .message
+            .contains("current leader is node 00000000000000aa"),
+        "the not_leader message must carry the leader hint: {}",
+        payload.message
+    );
+    shutdown.notify_one();
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn connector_no_infinite_retry() {
+    // The server returns exactly one terminal `not_leader` per write and never
+    // loops internally, so a connector is never left hanging: repeated writes each
+    // get a prompt, terminal error rather than a blocked socket.
+    let dir = tempfile::tempdir().unwrap();
+    let (addr, shutdown) = start_follower(dir.path()).await;
+    let mut stream = TcpStream::connect(&addr).await.unwrap();
+    hello(&mut stream).await;
+
+    for req_id in 2..=5 {
+        write_frame(&mut stream, &insert_frame(req_id, req_id as i64))
+            .await
+            .unwrap();
+        let resp = tokio::time::timeout(
+            std::time::Duration::from_secs(3),
+            read_frame(&mut stream, DEFAULT_MAX_PAYLOAD),
+        )
+        .await
+        .expect("each write returns promptly; the server never retries forever")
+        .unwrap()
+        .unwrap();
+        assert_eq!(resp.opcode, Opcode::Error);
+        let payload: auradb_protocol::ErrorPayload = resp.decode_json().unwrap();
+        assert_eq!(payload.code, ErrorCode::NotLeader);
+    }
+    shutdown.notify_one();
+}
