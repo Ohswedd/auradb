@@ -4,6 +4,41 @@ All notable changes to AuraDB are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and the project uses
 [Semantic Versioning](https://semver.org/).
 
+## [0.7.0] - 2026-06-06
+
+Connector cluster ergonomics. This release coordinates with Aura Connector
+v0.4.0 to give Python clients a clean, safe, cluster-aware experience for the
+controlled multi-node **preview**. The `not_leader` response now carries a
+stable, structured payload — the leader's client address, the leader and current
+node ids, term, role, and a usable `leader_hint` — alongside the existing human
+message, so a connector can redirect to the leader without parsing text.
+
+This is **not** production HA. There is no production automatic failover claim,
+no linearizable follower reads, no distributed transactions, no dynamic
+membership, and no sharding or multi-region. Multi-node mode remains an
+experimental, opt-in preview; **single-node mode remains the recommended
+production mode.** All v0.6.2 behavior, the storage format, and the Aura Wire
+Protocol (AWP v1) are preserved — the new `not_leader` fields are purely additive
+and older clients ignore them.
+
+### Added
+- Stable, structured `not_leader` payload: an additive `not_leader` object on the
+  error frame carrying `current_node_id`, `leader_node_id`, `leader_client_addr`,
+  `leader_hint`, `term`, and `role`, built from the node's current cluster view.
+  Fields are present only when genuinely known and never carry secrets.
+- Connector cluster conformance runner
+  (`tests/conformance/python/run_connector_cluster.py`) covering leader writes,
+  follower `not_leader`, the reconnect helper, the bounded redirect helper, and
+  transaction-safe redirect rejection against Aura Connector v0.4.x.
+- A Docker-cluster Python connector example (`examples/cluster/python_connector.py`).
+- Cluster-aware documentation for Aura Connector v0.4.x.
+
+### Changed
+- Improved client-facing cluster-preview error ergonomics: the `not_leader` error
+  is enriched with machine-readable leader-routing hints at dispatch.
+- Updated the Aura Connector compatibility matrix for the cluster ergonomics
+  (Aura Connector 0.4.x ↔ AuraDB 0.7.x).
+
 ## [0.6.2] - 2026-06-06
 
 Repeated chaos and larger-state recovery hardening. This patch release makes the

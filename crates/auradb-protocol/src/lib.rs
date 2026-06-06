@@ -22,6 +22,6 @@ pub use frame::{
 pub use message::{
     AuthRequest, AuthResult, ClusterHealth, ClusterPeerHealth, ClusterSnapshotHealth,
     CursorCloseRequest, CursorFetchRequest, ErrorPayload, HealthReport, HealthStatus, HelloAck,
-    HelloRequest, MvccHealth,
+    HelloRequest, MvccHealth, NotLeaderDetails,
 };
 pub use opcode::Opcode;

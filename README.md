@@ -7,7 +7,7 @@
 [![CI](https://github.com/Ohswedd/auradb/actions/workflows/ci.yml/badge.svg)](https://github.com/Ohswedd/auradb/actions/workflows/ci.yml)
 [![Security](https://github.com/Ohswedd/auradb/actions/workflows/security.yml/badge.svg)](https://github.com/Ohswedd/auradb/actions/workflows/security.yml)
 [![Docker](https://github.com/Ohswedd/auradb/actions/workflows/docker.yml/badge.svg)](https://github.com/Ohswedd/auradb/actions/workflows/docker.yml)
-[![Release](https://img.shields.io/badge/release-v0.6.2-green.svg)](CHANGELOG.md)
+[![Release](https://img.shields.io/badge/release-v0.7.0-green.svg)](CHANGELOG.md)
 [![Rust](https://img.shields.io/badge/rust-1.85%2B-orange.svg)](https://www.rust-lang.org)
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
 
@@ -54,6 +54,15 @@ groundwork (a durable
 consensus core, a replicated commit path, log compaction boundaries, and snapshot
 restore hardening), and changes no on-disk or wire format.
 
+**AuraDB v0.7.0 adds connector cluster ergonomics** (coordinated with Aura
+Connector v0.4.0): the `not_leader` response carries an additive, structured
+`not_leader` object — the leader's client address, the leader/current node ids,
+term, role, and a usable `leader_hint` — so a connector can redirect to the
+leader without parsing the message. The wire protocol (AWP 1) is unchanged and
+older connectors ignore the new fields. It remains _not_ production HA;
+single-node mode stays the recommended production mode. See
+[docs/V0_7_RELEASE_NOTES.md](docs/V0_7_RELEASE_NOTES.md).
+
 AuraDB 0.4.0 adds the replication and Raft foundation for future clustered
 deployments, on top of the 0.3.x MVCC and query-planner foundations: each record
 keeps a chain of committed versions, transactions read from a snapshot pinned at
@@ -98,8 +107,8 @@ Aura-Connector-compatible Query IR. The conformance
 suite ([`crates/auradb-conformance`](crates/auradb-conformance)) exercises every
 capability over the wire, and a Python harness lives in
 [`tests/conformance/python`](tests/conformance/python). The published Aura
-Connector 0.3.x ships a native AuraDB-over-TCP backend that speaks AWP 1
-(including auth and TLS); see
+Connector 0.4.x ships a native AuraDB-over-TCP backend that speaks AWP 1
+(including auth and TLS) and adds cluster-preview ergonomics; see
 [`docs/AURA_CONNECTOR_COMPATIBILITY.md`](docs/AURA_CONNECTOR_COMPATIBILITY.md)
 and [`docs/COMPATIBILITY.md`](docs/COMPATIBILITY.md).
 
@@ -315,18 +324,22 @@ echoed in error frames, and `auradb doctor` prints a redacted security summary.
 
 ## Connect with Aura Connector
 
-Aura Connector talks to AuraDB over AWP. The published Aura Connector 0.3.x
+Aura Connector talks to AuraDB over AWP. The published Aura Connector 0.4.x
 ships a native AuraDB-over-TCP backend that speaks AWP 1, including auth and TLS.
 Point it at the server address:
 
 ```bash
-python -m pip install "aura-connector>=0.3,<0.4"
+python -m pip install "aura-connector>=0.4,<0.5"
 python tests/conformance/python/run_connector_smoke.py --addr 127.0.0.1:7171 \
   --auth-token "your-secret" --tls-ca .local/certs/ca.crt
 ```
 
-Aura Connector 0.2.x uses a different internal framing and is not wire
-compatible; use 0.3.x. See
+For the multi-node preview, Aura Connector 0.4.x maps a `not_leader` response to a
+dedicated `AuraNotLeaderError` and offers safe `connect_to_leader` / bounded
+`with_leader_redirect` helpers; the cluster conformance runner is
+`tests/conformance/python/run_connector_cluster.py`. Aura Connector 0.3.x stays
+compatible (it routes the leader manually). Aura Connector 0.2.x uses a different
+internal framing and is not wire compatible. See
 [`docs/AURA_CONNECTOR_COMPATIBILITY.md`](docs/AURA_CONNECTOR_COMPATIBILITY.md).
 
 The Rust conformance client in `crates/auradb-conformance` stands in for the

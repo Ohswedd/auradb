@@ -14,9 +14,9 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: "Published image tag to smoke against (e.g. 0.6.2)"
+        description: "Published image tag to smoke against (e.g. 0.7.0)"
         required: false
-        default: "0.6.2"
+        default: "0.7.0"
 
 env:
   CARGO_TERM_COLOR: always
@@ -109,6 +109,10 @@ jobs:
       - name: Build CLI
         run: cargo build -p auradb-cli
 
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
       - name: Start a three-node loopback cluster and elect a leader
         run: |
           set -eu
@@ -122,6 +126,45 @@ jobs:
           ./target/debug/auradb cluster status --addr 127.0.0.1:7171 --json
           ./target/debug/auradb status --addr 127.0.0.1:7171 --json
           ./target/debug/auradb cluster leader --addr 127.0.0.1:7171
+
+      - name: Aura Connector cluster conformance (v0.4.x)
+        # Drives Aura Connector v0.4.x against the live loopback cluster: leader
+        # write, follower not_leader exposing the leader address, reconnect helper,
+        # bounded redirect, and transaction-not-redirected. The connector resolves
+        # leader/follower client addresses from `auradb cluster leader`. Until Aura
+        # Connector 0.4.0 is published, the install or the runner reports it is
+        # missing/too old (exit 2) and this step skips with a clear message rather
+        # than failing — see docs/CONFORMANCE.md.
+        env:
+          AURA_CONNECTOR_MIN_VERSION: "0.4.0"
+        run: |
+          set -eu
+          if ! python -m pip install --upgrade "aura-connector>=0.4,<0.5"; then
+            echo "Aura Connector >=0.4,<0.5 not installable yet; skipping cluster conformance."
+            exit 0
+          fi
+          # Resolve the leader's client address and pick a follower from the known
+          # loopback client ports.
+          leader=$(./target/debug/auradb cluster leader --addr 127.0.0.1:7171 --json \
+            | python -c "import json,sys; print(json.load(sys.stdin).get('leader_client_addr') or '')")
+          if [ -z "$leader" ]; then
+            echo "leader client address not reported; skipping."
+            exit 0
+          fi
+          follower=""
+          for cand in 127.0.0.1:7171 127.0.0.1:7181 127.0.0.1:7191; do
+            if [ "$cand" != "$leader" ]; then follower="$cand"; break; fi
+          done
+          echo "leader=$leader follower=$follower"
+          set +e
+          python tests/conformance/python/run_connector_cluster.py --leader "$leader" --follower "$follower"
+          rc=$?
+          set -e
+          if [ "$rc" -eq 2 ]; then
+            echo "Aura Connector 0.4.x not available; skipping cluster conformance."
+            exit 0
+          fi
+          exit "$rc"
 
       - name: Tear down
         if: always()
@@ -142,11 +185,11 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
 
       - name: Build the auradb image for the Compose cluster
-        run: docker build -t auradb:0.6.2 .
+        run: docker build -t auradb:0.7.0 .
 
       - name: Generate dev certs, run the cluster, and tear it down
         env:
-          AURADB_IMAGE: auradb:0.6.2
+          AURADB_IMAGE: auradb:0.7.0
         run: bash scripts/smoke_cluster_compose.sh
 
   published-image-smoke:

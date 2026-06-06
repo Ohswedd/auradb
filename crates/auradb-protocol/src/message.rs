@@ -70,6 +70,44 @@ pub struct ErrorPayload {
     /// is unchanged — this is a purely additive JSON field.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub retryable: Option<bool>,
+    /// Structured leader-routing hints for a `not_leader` error, when cluster
+    /// state is known. Present only on `not_leader` responses; `None` for every
+    /// other error and for single-node servers. Additive (AuraDB 0.7.0): the
+    /// human `message` already carries the same information for older clients,
+    /// and the wire protocol version is unchanged. A connector reads these fields
+    /// to redirect to the leader without parsing the message.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub not_leader: Option<NotLeaderDetails>,
+}
+
+/// Machine-readable leader-routing hints accompanying a `not_leader` error.
+///
+/// Every field is honest: an address or id is reported only when the node
+/// actually knows it (for example, a follower that has not yet recognized a
+/// leader omits the leader fields), never guessed. `leader_hint` is the single
+/// best usable client address for a redirect, mirroring `leader_client_addr`
+/// when one is declared.
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub struct NotLeaderDetails {
+    /// This (non-leader) node's id (hex), when initialized.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub current_node_id: Option<String>,
+    /// The recognized leader's id (hex), when known.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub leader_node_id: Option<String>,
+    /// The recognized leader's client-facing address, when an operator declared
+    /// one for that peer.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub leader_client_addr: Option<String>,
+    /// The single best usable leader address for a client redirect, when known.
+    /// Mirrors `leader_client_addr` today; present as a stable field a client can
+    /// read without knowing how the address was derived.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub leader_hint: Option<String>,
+    /// The current Raft term as seen by this node.
+    pub term: u64,
+    /// This node's consensus role (`leader` / `follower` / `candidate`).
+    pub role: String,
 }
 
 /// The retryability hint for a stable error code, or `None` when retryability is
@@ -96,12 +134,25 @@ fn retryable_for(code: ErrorCode) -> Option<bool> {
 
 impl ErrorPayload {
     /// Build an error payload from an engine [`Error`].
+    ///
+    /// The structured `not_leader` hints are left unset here: this layer sees only
+    /// the engine error, not live cluster state. The server's dispatch layer
+    /// enriches a `not_leader` payload via [`ErrorPayload::with_not_leader`] from
+    /// the cluster node's current view.
     pub fn from_error(err: &Error) -> Self {
         ErrorPayload {
             code: err.code(),
             message: err.to_string(),
             retryable: retryable_for(err.code()),
+            not_leader: None,
         }
+    }
+
+    /// Attach structured leader-routing hints (for a `not_leader` error). Returns
+    /// `self` for chaining at the call site.
+    pub fn with_not_leader(mut self, details: Option<NotLeaderDetails>) -> Self {
+        self.not_leader = details;
+        self
     }
 
     /// Encode this payload as an [`Opcode::Error`] frame for `request_id`.
@@ -333,6 +384,83 @@ mod tests {
         assert_eq!(decoded.opcode, Opcode::Error);
         let back: ErrorPayload = decoded.decode_json().unwrap();
         assert_eq!(back, payload);
+    }
+
+    #[test]
+    fn not_leader_payload_has_stable_shape() {
+        // A fully-populated not_leader payload serializes to the stable field set a
+        // connector reads, with the structured hints nested under `not_leader`.
+        let payload = ErrorPayload::from_error(&Error::NotLeader("not the leader".into()))
+            .with_not_leader(Some(NotLeaderDetails {
+                current_node_id: Some("0000000000000001".into()),
+                leader_node_id: Some("00000000000000aa".into()),
+                leader_client_addr: Some("127.0.0.1:7373".into()),
+                leader_hint: Some("127.0.0.1:7373".into()),
+                term: 7,
+                role: "follower".into(),
+            }));
+        let json = serde_json::to_value(&payload).unwrap();
+        assert_eq!(json["code"], "not_leader");
+        assert_eq!(json["retryable"], true);
+        let nl = &json["not_leader"];
+        assert_eq!(nl["current_node_id"], "0000000000000001");
+        assert_eq!(nl["leader_node_id"], "00000000000000aa");
+        assert_eq!(nl["leader_client_addr"], "127.0.0.1:7373");
+        assert_eq!(nl["leader_hint"], "127.0.0.1:7373");
+        assert_eq!(nl["term"], 7);
+        assert_eq!(nl["role"], "follower");
+        // Round-trips losslessly.
+        let back: ErrorPayload = serde_json::from_value(json).unwrap();
+        assert_eq!(back, payload);
+    }
+
+    #[test]
+    fn not_leader_payload_omits_unknown_fields_safely() {
+        // A follower that does not yet know the leader omits the unknown fields
+        // rather than emitting nulls or guesses; the optional addresses are absent.
+        let payload = ErrorPayload::from_error(&Error::NotLeader("no leader yet".into()))
+            .with_not_leader(Some(NotLeaderDetails {
+                term: 3,
+                role: "follower".into(),
+                ..Default::default()
+            }));
+        let json = serde_json::to_value(&payload).unwrap();
+        let nl = &json["not_leader"];
+        assert!(nl.get("leader_client_addr").is_none());
+        assert!(nl.get("leader_node_id").is_none());
+        assert!(nl.get("leader_hint").is_none());
+        assert!(nl.get("current_node_id").is_none());
+        // term and role are always present.
+        assert_eq!(nl["term"], 3);
+        assert_eq!(nl["role"], "follower");
+        // A non-cluster server omits the whole object.
+        let plain = ErrorPayload::from_error(&Error::NotLeader("x".into()));
+        let plain_json = serde_json::to_value(&plain).unwrap();
+        assert!(plain_json.get("not_leader").is_none());
+    }
+
+    #[test]
+    fn not_leader_payload_contains_no_secrets() {
+        // The payload carries only routing metadata — no token, password, or other
+        // credential material, by construction.
+        let payload = ErrorPayload::from_error(&Error::NotLeader(
+            "this node is not the leader; current leader is node 00000000000000aa".into(),
+        ))
+        .with_not_leader(Some(NotLeaderDetails {
+            current_node_id: Some("0000000000000001".into()),
+            leader_node_id: Some("00000000000000aa".into()),
+            leader_client_addr: Some("127.0.0.1:7373".into()),
+            leader_hint: Some("127.0.0.1:7373".into()),
+            term: 7,
+            role: "follower".into(),
+        }));
+        let json = serde_json::to_string(&payload).unwrap().to_lowercase();
+        for needle in ["token", "password", "secret", "authorization", "bearer"] {
+            assert!(
+                !json.contains(needle),
+                "payload must not contain {needle:?}: {json}"
+            );
+        }
     }
 
     #[test]

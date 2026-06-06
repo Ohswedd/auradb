@@ -10,7 +10,8 @@ use auradb_core::{Error, Result, ServerCapabilities};
 use auradb_observability::Metrics;
 use auradb_protocol::{
     AuthRequest, AuthResult, CursorCloseRequest, CursorFetchRequest, ErrorPayload, Frame,
-    HealthReport, HealthStatus, HelloAck, HelloRequest, MvccHealth, Opcode, PROTOCOL_VERSION,
+    HealthReport, HealthStatus, HelloAck, HelloRequest, MvccHealth, NotLeaderDetails, Opcode,
+    PROTOCOL_VERSION,
 };
 use serde::{Deserialize, Serialize};
 
@@ -149,6 +150,23 @@ pub fn cluster_health(ctx: &ServerContext) -> Option<auradb_protocol::ClusterHea
     })
 }
 
+/// Build the structured `not_leader` leader-routing hints from the cluster node's
+/// current view, or `None` when cluster mode is disabled. Every field is honest:
+/// a leader address or id is reported only when actually known, never guessed.
+pub fn not_leader_details(ctx: &ServerContext) -> Option<NotLeaderDetails> {
+    let node = ctx.cluster.as_ref()?;
+    let status = node.status();
+    let leader_addr = node.leader_client_addr();
+    Some(NotLeaderDetails {
+        current_node_id: status.node_id.map(|id| id.to_string()),
+        leader_node_id: status.leader_id.map(|id| id.to_string()),
+        leader_client_addr: leader_addr.clone(),
+        leader_hint: leader_addr,
+        term: status.term,
+        role: status.role.to_string(),
+    })
+}
+
 /// Per-connection mutable state.
 #[derive(Default)]
 pub struct Session {
@@ -228,7 +246,15 @@ pub fn respond(ctx: &ServerContext, session: &mut Session, frame: Frame) -> Fram
                 _ => {}
             }
             tracing::warn!(request_id = frame.request_id.0, code = %err.code(), error = %err, "request failed");
-            ErrorPayload::from_error(&err).to_frame(frame.request_id, frame.txn_id)
+            let payload = ErrorPayload::from_error(&err);
+            let payload = if err.code() == auradb_core::ErrorCode::NotLeader {
+                // Enrich with structured leader-routing hints from the node's current
+                // view so a connector can redirect without parsing the message.
+                payload.with_not_leader(not_leader_details(ctx))
+            } else {
+                payload
+            };
+            payload.to_frame(frame.request_id, frame.txn_id)
         }
     }
 }

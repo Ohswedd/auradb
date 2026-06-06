@@ -284,6 +284,66 @@ async fn not_leader_error_contains_leader_client_addr() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn not_leader_payload_includes_leader_client_addr_when_known() {
+    // The structured not_leader payload carries the leader's client address (and a
+    // usable `leader_hint`), the leader/current node ids, role, and term — so a
+    // connector can redirect without parsing the human message.
+    let nodes = start_cluster().await;
+    let leader = wait_for_leader(&nodes, Duration::from_secs(15)).await;
+    let follower = (0..nodes.len()).find(|&i| i != leader).unwrap();
+
+    let resp = awp_insert(&nodes[follower].client_addr, 3, 2).await;
+    assert_eq!(resp.opcode, Opcode::Error);
+    let payload: auradb_protocol::ErrorPayload = resp.decode_json().unwrap();
+    assert_eq!(payload.code, auradb_core::ErrorCode::NotLeader);
+    assert_eq!(
+        payload.retryable,
+        Some(true),
+        "retryable true when leader known"
+    );
+
+    let details = payload
+        .not_leader
+        .expect("structured not_leader hints present");
+    let leader_client = nodes[leader].client_addr.as_str();
+    assert_eq!(details.leader_client_addr.as_deref(), Some(leader_client));
+    assert_eq!(details.leader_hint.as_deref(), Some(leader_client));
+    assert_eq!(details.role, "follower");
+
+    let leader_id = nodes[leader].server.cluster_status().unwrap().node_id;
+    let follower_id = nodes[follower].server.cluster_status().unwrap().node_id;
+    assert_eq!(details.leader_node_id, leader_id.map(|id| id.to_string()));
+    assert_eq!(
+        details.current_node_id,
+        follower_id.map(|id| id.to_string())
+    );
+
+    shutdown_all(&nodes);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn not_leader_payload_contains_no_secrets() {
+    // The structured payload over a live cluster carries only routing metadata,
+    // never credential material.
+    let nodes = start_cluster().await;
+    let leader = wait_for_leader(&nodes, Duration::from_secs(15)).await;
+    let follower = (0..nodes.len()).find(|&i| i != leader).unwrap();
+
+    let resp = awp_insert(&nodes[follower].client_addr, 3, 2).await;
+    let json = serde_json::to_string(&resp.decode_json::<auradb_protocol::ErrorPayload>().unwrap())
+        .unwrap()
+        .to_lowercase();
+    for needle in ["token", "password", "secret", "bearer"] {
+        assert!(
+            !json.contains(needle),
+            "payload must not contain {needle:?}"
+        );
+    }
+
+    shutdown_all(&nodes);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn cluster_status_reports_leader_client_addr() {
     let nodes = start_cluster().await;
     let leader = wait_for_leader(&nodes, Duration::from_secs(15)).await;

@@ -157,6 +157,28 @@ the 0.3.x connector ignores — **no connector release is required** and AWP sta
 at v1. Published Aura Connector 0.3.0 conformance remains a required CI gate
 (`conformance.yml`).
 
+### v0.7.0 connector cluster ergonomics
+
+v0.7.0 is a coordinated server + connector release (Aura Connector v0.4.0). The
+`not_leader` error frame gains an additive, structured `not_leader` object (leader
+client address, leader/current node ids, term, role, and a usable `leader_hint`),
+built from the node's current cluster view; fields are present only when known and
+carry no secrets. The wire shape is covered by `auradb-protocol` unit tests, the
+populated case by `crates/auradb-server/tests/cluster_preview.rs`
+(`not_leader_payload_includes_leader_client_addr_when_known`,
+`not_leader_payload_contains_no_secrets`), and the authenticated-session path by
+`crates/auradb-server/tests/not_leader.rs` (`not_leader_payload_safe_over_tls_auth`).
+
+A connector-driven cluster conformance runner,
+`tests/conformance/python/run_connector_cluster.py`, drives Aura Connector v0.4.x
+against a live preview cluster: a leader write, a follower `not_leader` exposing
+the leader address, the reconnect helper, the bounded redirect helper, and a
+transaction that is never auto-redirected. It is gated on
+`AURADB_CLUSTER_LEADER_DSN` / `AURADB_CLUSTER_FOLLOWER_DSN` (with optional
+`AURADB_CLUSTER_TOKEN` / `AURADB_CLUSTER_CA`) and skips cleanly otherwise. AWP
+stays at v1; Aura Connector 0.3.x remains compatible (it ignores the new object
+and routes the leader manually).
+
 ## Running
 
 Rust (no server needed - the test spawns one):

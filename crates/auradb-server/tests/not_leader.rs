@@ -15,7 +15,7 @@ use auradb::query::Mutation;
 use auradb::ReplicatedLog;
 use auradb_core::{Error, ErrorCode, Result as CoreResult};
 use auradb_protocol::{Frame, Opcode, RequestId, DEFAULT_MAX_PAYLOAD};
-use auradb_server::{read_frame, write_frame, Config, Server};
+use auradb_server::{auth, read_frame, write_frame, AuthConfig, Config, Server};
 use auradb_storage::Batch;
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::Notify;
@@ -79,6 +79,25 @@ async fn hello(stream: &mut TcpStream) {
         RequestId(1),
         0,
         &serde_json::json!({ "client_version": "test", "protocol_version": 1 }),
+    )
+    .unwrap();
+    write_frame(stream, &req).await.unwrap();
+    read_frame(stream, DEFAULT_MAX_PAYLOAD)
+        .await
+        .unwrap()
+        .unwrap();
+}
+
+async fn hello_authed(stream: &mut TcpStream, token: &str) {
+    let req = Frame::json(
+        Opcode::Hello,
+        RequestId(1),
+        0,
+        &serde_json::json!({
+            "client_version": "test",
+            "protocol_version": 1,
+            "auth_token": token,
+        }),
     )
     .unwrap();
     write_frame(stream, &req).await.unwrap();
@@ -407,6 +426,75 @@ async fn connector_no_infinite_retry() {
         assert_eq!(resp.opcode, Opcode::Error);
         let payload: auradb_protocol::ErrorPayload = resp.decode_json().unwrap();
         assert_eq!(payload.code, ErrorCode::NotLeader);
+    }
+    shutdown.notify_one();
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn not_leader_payload_safe_over_tls_auth() {
+    // Over an authenticated session, a write to a non-leader still returns a clean,
+    // structured `not_leader` error, and the payload never leaks the auth token or
+    // any other secret. (TLS is a transparent transport layer over the same frames;
+    // this exercises the auth-gated path the TLS path shares.)
+    const TOKEN: &str = "correct-horse-battery-staple";
+    let dir = tempfile::tempdir().unwrap();
+    let server = Server::open(Config {
+        data_dir: dir.path().to_path_buf(),
+        auth: AuthConfig {
+            enabled: true,
+            token_hash: Some(auth::hash_token(TOKEN).unwrap()),
+            ..AuthConfig::default()
+        },
+        ..Config::default()
+    })
+    .unwrap();
+    let ctx = server.context();
+    ctx.engine
+        .create_schema(
+            CollectionSchema::new("C")
+                .with_field(FieldDef {
+                    name: "id".into(),
+                    field_type: FieldType::Int,
+                    primary_key: true,
+                    unique: true,
+                    nullable: false,
+                    indexed: false,
+                })
+                .with_field(FieldDef::new("v", FieldType::Int)),
+        )
+        .unwrap();
+    ctx.engine.attach_replicated_log(Arc::new(AlwaysFollower {
+        leader_hint: "this node is not the leader; current leader is node 00000000000000aa"
+            .to_string(),
+    }));
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap().to_string();
+    let shutdown = Arc::new(Notify::new());
+    let s2 = shutdown.clone();
+    tokio::spawn(async move {
+        let _ = server
+            .run_on(listener, async move { s2.notified().await })
+            .await;
+    });
+    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+
+    let mut stream = TcpStream::connect(&addr).await.unwrap();
+    hello_authed(&mut stream, TOKEN).await;
+    write_frame(&mut stream, &insert_frame(2, 1)).await.unwrap();
+    let resp = read_frame(&mut stream, DEFAULT_MAX_PAYLOAD)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(resp.opcode, Opcode::Error);
+    let payload: auradb_protocol::ErrorPayload = resp.decode_json().unwrap();
+    assert_eq!(payload.code, ErrorCode::NotLeader);
+    assert_eq!(payload.retryable, Some(true));
+    let json = serde_json::to_string(&payload).unwrap().to_lowercase();
+    for needle in [TOKEN, "token", "password", "secret", "bearer"] {
+        assert!(
+            !json.contains(&needle.to_lowercase()),
+            "not_leader payload must not leak {needle:?}"
+        );
     }
     shutdown.notify_one();
 }
