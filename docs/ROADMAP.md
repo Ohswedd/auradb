@@ -4,9 +4,30 @@ This roadmap describes where AuraDB is headed beyond the first single-node
 release. It is a statement of direction, not a delivery commitment. Items are
 grouped by theme and listed roughly in the order we expect to approach them.
 
-## Current release: 0.6.1
+## Current release: 0.6.2
 
-AuraDB 0.6.1 **hardens snapshot install and published-cluster smoke** for the
+AuraDB 0.6.2 **hardens repeated chaos and larger-state recovery** for the
+controlled multi-node preview. It adds repeated leader restart / re-election
+cycles (a node is killed, the majority re-elects, the old leader rejoins and
+catches up, repeated across cycles), larger multi-model data-set recovery
+validation (scalar, secondary-indexed, full-text, document-path, and vector
+fields converge after a follower restart and full-cluster restart), multi-model
+snapshot install, peer reconnect-storm testing, deterministic
+network-interruption (partition/heal) simulations, and recovery diagnostics
+(`leader_changes` in `auradb cluster status --addr`, plus reconnect-storm and
+repeated-leader-change warnings in `auradb cluster doctor --addr`). It is **not
+production HA** and makes **no new production-clustering claims** — there is no
+production automatic failover, linearizable follower read, distributed
+transaction, dynamic membership, sharding, or multi-region. There is **no format
+change** (storage unchanged) and the only wire change is the additive
+`leader_changes` health field (AWP 1), so Aura Connector 0.3.x remains compatible
+and no connector release is required. **Single-node mode remains the recommended
+production mode.** Connector cluster-routing ergonomics remain planned for a
+future (v0.7.0) coordinated connector release.
+
+### Delivered in 0.6.1
+
+AuraDB 0.6.1 **hardened snapshot install and published-cluster smoke** for the
 controlled multi-node preview. It adds multi-architecture Docker images
 (`linux/amd64` + `linux/arm64`), larger and concurrent-write snapshot-install
 validation, snapshot-needed and follower-lag diagnostics (per-peer

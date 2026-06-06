@@ -181,6 +181,50 @@ Confirm the follower converges (`lag_entries` falls toward zero,
 others converge usually means it is unreachable (`connected: false`) or has
 fallen below the compacted prefix (see the snapshot section above).
 
+## Repeated fail-stop and leadership instability (v0.6.2)
+
+A single clean failover is expected: kill the leader, the majority elects a new
+one, the old node rejoins as a follower and catches up. **Repeated** leadership
+changes are not — they point to instability rather than a one-off recovery.
+
+- `cluster status --addr` now reports `leader_changes`, the cumulative count of
+  leadership changes this node has observed since it started. A value that keeps
+  climbing across a steady cluster is the signal to investigate.
+- `cluster doctor --addr` warns (**"leadership has changed N times … repeated
+  leader changes suggest instability"**) once that count crosses a threshold.
+
+Common causes and what to check:
+
+- **An overloaded or CPU-starved leader** misses its own heartbeat deadlines, so
+  followers time out and campaign. Check leader CPU and `heartbeat_latency_ms`.
+- **A flaky peer link** drops heartbeats intermittently. Check per-peer
+  `connected` / `connect_attempts` and the reconnect-storm guidance below.
+- **Election-timeout contention** under heavy load. Repeated `election_timeouts`
+  with no committed progress is the tell.
+
+After the cause is fixed, `leader_changes` stops climbing and a single stable
+leader holds (`role: leader` on exactly one node, recognized by a majority).
+
+## A peer reconnect storm (v0.6.2)
+
+A peer that flaps — disconnecting and reconnecting repeatedly — shows up as a
+**rising `connect_attempts` against a peer that is still `connected: false`**.
+The outbound dialer uses bounded backoff (it does not spin), so the attempt count
+rises slowly; a count in the tens against a peer that never connects means the
+peer's address is wrong, its listener is down, or its peer auth/TLS is
+misconfigured.
+
+- `cluster doctor --addr` warns (**"peer … is in a reconnect storm: N connection
+  attempts and still not connected"**) once the attempt count crosses a
+  threshold while the peer remains disconnected.
+- Replication resumes automatically the moment the peer becomes reachable again,
+  and a follower that was flapping catches up by AppendEntries (or a snapshot
+  install if it fell below the compacted prefix) with **no duplicate apply**.
+
+Check the peer's `listen_addr`, that its process is up and bound, and that the
+`peer_auth_token` and cluster TLS material match across nodes (see
+[SECURITY.md](SECURITY.md)).
+
 ## Compacting the Raft log
 
 Over time the durable Raft log grows. Once the engine has durably applied a

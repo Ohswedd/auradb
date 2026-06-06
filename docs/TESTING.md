@@ -228,6 +228,57 @@ not timing-flaky.
 See [CLUSTERING.md](CLUSTERING.md), [RAFT.md](RAFT.md),
 [REPLICATION.md](REPLICATION.md), and [CONFORMANCE.md](CONFORMANCE.md).
 
+## Repeated chaos and larger-state recovery suites (v0.6.2)
+
+> **AuraDB v0.6.2 hardens repeated chaos and larger-state recovery behavior in
+> the controlled multi-node preview. It is not production HA. Single-node mode
+> remains the recommended production mode.**
+
+All of these live in `crates/auradb-replication/tests/multi_node.rs` and build on
+the same cross-process `TestCluster` harness (real loopback nodes, bounded
+polling, deterministic teardown). They assert convergence and safety *outcomes*
+and tolerate intermediate leadership churn.
+
+- **Repeated leader restart / re-election.**
+  `repeated_leader_restart_2_cycles_converges` (required) kills the current
+  leader, lets the majority re-elect, commits through the new leader, restarts the
+  old leader, and repeats — then asserts every node converges on the identical
+  record set with **no duplicate apply** and an incrementing `leader_changes`
+  metric. `repeated_leader_restart_5_cycles_stress` is the `#[ignore]`d stress
+  variant.
+- **Larger multi-model recovery.** `large_dataset_*` stop a follower while the
+  majority commits a larger run of records spanning scalar, secondary-indexed,
+  full-text, document-path, and vector fields, then verify (after restart) that
+  counts, spot reads, the secondary index, full-text search, document-path
+  queries, and vector nearest-neighbor results all match a node that never went
+  down, plus a full-cluster-restart check. CI-safe by default (120 records); the
+  `#[ignore]`d `large_dataset_follower_restart_catches_up_5000_stress` runs the
+  same path at 5,000 records.
+- **Multi-model snapshot install.** `snapshot_install_preserves_full_text_and_doc_path`
+  and `snapshot_install_preserves_vector_records` force a snapshot install (the
+  live majority compacts past the entries the follower needs) and verify the
+  full-text, document-path, and vector state is intact and consistent.
+- **Peer reconnect storm.** `peer_reconnect_storm_replication_recovers` and
+  `peer_reconnect_storm_no_duplicate_apply` disconnect/reconnect a follower
+  repeatedly while the majority commits, asserting recovery, a live connection
+  after the storm, and no duplicate apply.
+- **Network interruption (partition/heal).** Using an in-process transport
+  partition control (`drop_peer_link` / `heal_peer_link`, test-only — no config
+  or CLI surface): `majority_partition_write_succeeds`,
+  `minority_partition_leader_write_times_out`,
+  `partition_heals_and_follower_catches_up`, and
+  `leader_partition_triggers_reelection_and_heals`. The isolated node keeps
+  running (in-memory state preserved), unlike a stop/restart.
+- **Recovery diagnostics.** `crates/auradb-cli/tests/cluster_diagnostics.rs` adds
+  `status_reports_leader_changes`, `doctor_warns_reconnect_storm`, and
+  `doctor_warns_repeated_leader_changes`.
+
+Run the heavy/stress variants on demand:
+
+```bash
+cargo test -p auradb-replication --test multi_node -- --ignored --test-threads=1
+```
+
 ## Snapshot-install and diagnostics hardening suites (v0.6.1)
 
 > **AuraDB v0.6.1 hardens snapshot install and published-cluster smoke for the

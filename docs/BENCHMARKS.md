@@ -203,3 +203,26 @@ auradb bench compare --baseline benches/baseline/v0.6.0.json --current benches/b
 The `v0.6.0.json` baseline is kept as history. As with every benchmark here, the
 numbers are machine-specific and used only for same-machine regression tracking,
 never as a universal performance claim.
+
+## Repeated chaos and larger-state recovery baseline (v0.6.2)
+
+v0.6.2 refreshes the committed single-node engine baseline to
+`benches/baseline/v0.6.2.json`, captured with the same suite on the release
+machine:
+
+```bash
+cargo run -p auradb-cli -- bench --json --output benches/baseline/v0.6.2.json
+auradb bench compare --baseline benches/baseline/v0.6.1.json --current benches/baseline/v0.6.2.json
+```
+
+**Cluster recovery latencies are not committed as benchmark numbers.** Leader
+write latency, follower catch-up latency, snapshot-install latency, reconnect
+recovery time, and cluster status latency are all highly **topology-specific**
+(node count, link latency, runner contention, data-set size), so a single
+committed number would be misleading. Instead they are exercised — and bounded —
+as deterministic test *measurements* in the cross-process preview suite
+(`crates/auradb-replication/tests/multi_node.rs`), which uses bounded polling
+deadlines rather than asserting fixed latencies. The committed `bench` baseline
+remains the single-node engine throughput suite. As always, the numbers are
+machine-specific and used only for same-machine regression tracking, never as a
+universal performance claim.

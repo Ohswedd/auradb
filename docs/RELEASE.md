@@ -1,7 +1,7 @@
 # Release guide
 
 This guide describes how a maintainer cuts an AuraDB release. The current release
-is `0.6.1`.
+is `0.6.2`.
 
 ## Pre-release checklist
 
@@ -31,29 +31,29 @@ is `0.6.1`.
       timing), or rely on the cluster CI workflow when Docker is unavailable:
 
       ```bash
-      docker build -t auradb:0.6.1 .
-      AURADB_IMAGE=auradb:0.6.1 bash scripts/smoke_cluster_compose.sh
+      docker build -t auradb:0.6.2 .
+      AURADB_IMAGE=auradb:0.6.2 bash scripts/smoke_cluster_compose.sh
       ```
 
 - [ ] **Published-image smoke (post-release verification).** After the release
       tag has published the image to GHCR, verify it with the same smoke:
 
       ```bash
-      AURADB_IMAGE=ghcr.io/ohswedd/auradb:0.6.1 bash scripts/smoke_cluster_compose.sh
+      AURADB_IMAGE=ghcr.io/ohswedd/auradb:0.6.2 bash scripts/smoke_cluster_compose.sh
       ```
 
-### Published GHCR cluster smoke checklist (v0.6.1)
+### Published GHCR cluster smoke checklist (v0.6.2)
 
 Run this after the release tag has published the image. The manual
 `published-image-smoke` job in `.github/workflows/cluster.yml` performs the same
 steps in CI.
 
 - [ ] **Wait for the GHCR publish to complete** (the `Docker` workflow's `publish`
-      job on the `v0.6.1` tag).
+      job on the `v0.6.2` tag).
 - [ ] **Inspect the multi-arch manifest** and confirm both platforms are present:
 
       ```bash
-      docker buildx imagetools inspect ghcr.io/ohswedd/auradb:0.6.1
+      docker buildx imagetools inspect ghcr.io/ohswedd/auradb:0.6.2
       # expect: linux/amd64 and linux/arm64
       ```
 
@@ -61,27 +61,27 @@ steps in CI.
       x86_64):
 
       ```bash
-      docker pull --platform linux/amd64 ghcr.io/ohswedd/auradb:0.6.1
-      docker pull --platform linux/arm64 ghcr.io/ohswedd/auradb:0.6.1
-      docker run --rm ghcr.io/ohswedd/auradb:0.6.1 auradb version   # prints auradb 0.6.1
+      docker pull --platform linux/amd64 ghcr.io/ohswedd/auradb:0.6.2
+      docker pull --platform linux/arm64 ghcr.io/ohswedd/auradb:0.6.2
+      docker run --rm ghcr.io/ohswedd/auradb:0.6.2 auradb version   # prints auradb 0.6.2
       ```
 
 - [ ] **Run the Compose smoke against the published image.** The script prints
       the image, node ports, leader, quorum, peer states, and teardown result:
 
       ```bash
-      AURADB_IMAGE=ghcr.io/ohswedd/auradb:0.6.1 bash scripts/smoke_cluster_compose.sh
+      AURADB_IMAGE=ghcr.io/ohswedd/auradb:0.6.2 bash scripts/smoke_cluster_compose.sh
       ```
 
 - [ ] **Confirm the release notes state the preview limits** (not production HA;
       single-node remains the recommended production mode) — see
       [V0_6_1_RELEASE_NOTES.md](V0_6_1_RELEASE_NOTES.md).
 
-### Multi-arch Docker publish (v0.6.1)
+### Multi-arch Docker publish (v0.6.2)
 
-- [ ] The `Docker` workflow's `publish` job (on the `v0.6.1` tag) builds a
+- [ ] The `Docker` workflow's `publish` job (on the `v0.6.2` tag) builds a
       `linux/amd64,linux/arm64` manifest with Buildx + QEMU and pushes it to
-      `ghcr.io/ohswedd/auradb:0.6.1` and `:latest`.
+      `ghcr.io/ohswedd/auradb:0.6.2` and `:latest`.
 - [ ] PR/branch builds build `linux/amd64` through buildx **without** publishing.
 - [ ] Local validation built `linux/amd64` only
       (`docker buildx build --platform linux/amd64 --load`); the arm64 image is

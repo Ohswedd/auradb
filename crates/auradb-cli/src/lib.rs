@@ -1030,6 +1030,7 @@ pub fn format_cluster_status_text(addr: &str, cluster: &auradb_protocol::Cluster
     ));
     out.push_str(&format!("role: {}\n", cluster.role));
     out.push_str(&format!("term: {}\n", cluster.term));
+    out.push_str(&format!("leader_changes: {}\n", cluster.leader_changes));
     out.push_str(&format!(
         "leader_id: {}\n",
         cluster.leader_id.as_deref().unwrap_or("(unknown)")
@@ -1156,6 +1157,30 @@ pub fn cluster_health_warnings(cluster: &auradb_protocol::ClusterHealth) -> Vec<
             "follower {id} is lagging by {lag} entries; check its connectivity and apply rate"
         ));
     }
+    // Reconnect storm: a peer that is still disconnected after many outbound
+    // connection attempts is flapping or persistently unreachable. A rising
+    // attempt count against a peer that never connects is the signature.
+    for p in &cluster.peers {
+        if !p.connected && p.connect_attempts >= RECONNECT_STORM_WARN {
+            warnings.push(format!(
+                "peer {} is in a reconnect storm: {} connection attempts and still not \
+                 connected; check its address, listener, and peer auth/TLS",
+                p.node_id, p.connect_attempts
+            ));
+        }
+    }
+
+    // Repeated leader changes: a high cumulative count points to leadership
+    // flapping (election storms, an overloaded leader, or a flaky link) rather
+    // than a single clean failover.
+    if cluster.preview_multi_node && cluster.leader_changes >= LEADER_CHANGE_WARN {
+        warnings.push(format!(
+            "leadership has changed {} times on this node; repeated leader changes suggest \
+             instability (election storms, an overloaded leader, or a flaky peer link)",
+            cluster.leader_changes
+        ));
+    }
+
     // Quorum impact: warn when disconnected peers threaten the majority.
     let voters = cluster.peer_count + 1;
     let needed = voters / 2 + 1;
@@ -1168,6 +1193,14 @@ pub fn cluster_health_warnings(cluster: &auradb_protocol::ClusterHealth) -> Vec<
     }
     warnings
 }
+
+/// Outbound connection attempts to a still-disconnected peer at or above which
+/// `cluster doctor`/`status` flags a reconnect storm.
+const RECONNECT_STORM_WARN: u64 = 20;
+
+/// Cumulative leader changes at or above which `cluster doctor`/`status` flags
+/// leadership instability.
+const LEADER_CHANGE_WARN: u64 = 10;
 
 /// Per-peer lag (in entries) at or above which `cluster status`/`doctor` warns.
 const FOLLOWER_LAG_WARN: u64 = 10;

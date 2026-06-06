@@ -175,6 +175,22 @@ history. The counters `auradb_cluster_snapshots_sent_total`,
 `auradb_cluster_snapshots_rejected_total` track the path. It is a preview, not a
 production-grade snapshot subsystem.
 
+## Larger-state and multi-model recovery (v0.6.2)
+
+v0.6.2 validates recovery at larger sizes and across **all** field and index
+kinds, over the **unchanged** v0.6.0/v0.6.1 replication and snapshot-install
+paths. A follower is stopped while the majority commits a larger run of records
+spanning scalar, secondary-indexed, full-text, document-path, and vector fields;
+after it restarts it catches up by AppendEntries (or a snapshot install, when the
+live majority has compacted past the entries it needs), and its counts, spot
+reads, secondary index, full-text search, document-path queries, vector
+nearest-neighbor results, and planner-used indexes are verified to match the rest
+of the cluster — then re-verified after a full-cluster restart. The CI-safe size
+is 120 records, with an `#[ignore]`d 5,000-record stress variant. Because MVCC
+`commit_ts == Raft log index`, apply stays idempotent and monotonic across the
+catch-up and snapshot boundaries, so there is **no duplicate apply** even under
+concurrent leader writes. See [TESTING.md](TESTING.md).
+
 ## Snapshot install diagnostics (v0.6.1)
 
 v0.6.1 makes the snapshot-install path observable; the wire transfer itself is

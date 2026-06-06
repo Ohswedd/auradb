@@ -1,5 +1,33 @@
 # Upgrading
 
+## From v0.6.1 to v0.6.2
+
+> **AuraDB v0.6.2 hardens repeated chaos and larger-state recovery behavior in
+> the controlled multi-node preview. It is not production HA. Single-node mode
+> remains the recommended production mode.**
+
+v0.6.2 is a patch release and a **drop-in** binary replacement from v0.6.x: no
+data migration, no config change, and no connector change. Storage stays at v2 and
+the Aura Wire Protocol stays at AWP 1. The only wire change is the additive
+`leader_changes` field on the cluster health report, which older clients ignore;
+Aura Connector 0.3.x remains fully compatible.
+
+If you do nothing, behavior is unchanged. What is new in v0.6.2:
+
+- **Recovery diagnostics.** `auradb cluster status --addr` now reports
+  `leader_changes` (a cumulative leadership-instability signal), and
+  `auradb cluster doctor --addr` adds two warnings: a peer **reconnect storm**
+  (a peer still disconnected after many connection attempts) and **repeated
+  leader changes**.
+- **Hardened recovery test coverage** (repeated leader restart, larger
+  multi-model recovery, multi-model snapshot install, reconnect storms, and
+  network-interruption partition/heal simulations). These are tests and
+  diagnostics only — there is no behavior change to the running server.
+
+**Downgrade.** v0.6.1 and v0.6.2 share the same on-disk and wire formats, so a
+v0.6.2 data directory can be reopened by v0.6.1. As always, back up the data
+directory first.
+
 ## From v0.6.0 to v0.6.1
 
 > **AuraDB v0.6.1 hardens snapshot install and published-cluster smoke for the

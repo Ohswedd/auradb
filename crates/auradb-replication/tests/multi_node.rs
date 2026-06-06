@@ -13,8 +13,8 @@ use std::net::TcpListener as StdTcpListener;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use auradb::core::{CollectionSchema, Document, FieldDef, FieldType, Value};
-use auradb::query::{CompareOp, Filter, FindQuery, Mutation};
+use auradb::core::{CollectionSchema, Document, FieldDef, FieldType, IndexDef, IndexKind, Value};
+use auradb::query::{CompareOp, Filter, FindQuery, Mutation, VectorSearch};
 use auradb::Engine;
 use auradb_cluster::{
     ClusterConfig, ClusterId, ClusterIdentity, ClusterMetadata, NodeId, NodeMetadata, NodeRole,
@@ -103,6 +103,12 @@ impl TestCluster {
     /// Start an `n`-node cluster. Every node shares one cluster id, has a
     /// distinct node id, and lists the others as static peers.
     async fn start(n: usize) -> TestCluster {
+        Self::start_with(n, schema()).await
+    }
+
+    /// Start an `n`-node cluster whose collection uses `collection_schema` (the
+    /// scalar [`schema`] or the multi-model [`rich_schema`]).
+    async fn start_with(n: usize, collection_schema: CollectionSchema) -> TestCluster {
         let cluster_id = ClusterId::new(0xC0FFEE).unwrap();
         let ports = reserve_ports(n);
         let ids: Vec<NodeId> = (1..=n as u64).map(NodeId::from_raw).collect();
@@ -112,7 +118,7 @@ impl TestCluster {
         for i in 0..n {
             let dir = tempfile::tempdir().unwrap();
             let engine = Engine::open(dir.path().join("data")).unwrap();
-            engine.create_schema(schema()).unwrap();
+            engine.create_schema(collection_schema.clone()).unwrap();
             let cfg = node_config(&ids, &addrs, i, cluster_id);
             let id = identity(cluster_id, ids[i]);
             let peer =
@@ -1464,4 +1470,818 @@ async fn install_snapshot_failure_preserves_existing_state() {
         "a rejected snapshot must not modify existing follower state"
     );
     peer.shutdown().await;
+}
+
+// =====================================================================
+// v0.6.2: repeated chaos and larger-state recovery hardening.
+//
+// These build on the same `TestCluster` harness above. They add: repeated
+// leader restart / re-election cycles, larger multi-model data-set recovery,
+// multi-model snapshot install, a peer reconnect storm, and deterministic
+// network-interruption (partition/heal) simulations. As with the rest of the
+// file, they assert convergence and safety *outcomes* with bounded polling and
+// tolerate intermediate leadership churn rather than depending on a particular
+// election race.
+// =====================================================================
+
+/// A multi-model collection "C": scalar (`id`, `v`), a secondary-indexed string
+/// (`title`), a full-text-indexed body (`body`), a document field with a
+/// document-path index (`profile.tag`), and a vector field (`embedding`). It is
+/// a drop-in replacement for [`schema`] — the primary key is still `id` and the
+/// collection is still "C", so every existing `TestCluster` helper works.
+const RICH_DIM: usize = 4;
+
+fn rich_schema() -> CollectionSchema {
+    CollectionSchema::new("C")
+        .with_field(FieldDef {
+            name: "id".into(),
+            field_type: FieldType::Int,
+            primary_key: true,
+            unique: true,
+            nullable: false,
+            indexed: false,
+        })
+        .with_field(FieldDef {
+            name: "v".into(),
+            field_type: FieldType::Int,
+            primary_key: false,
+            unique: false,
+            nullable: false,
+            indexed: true,
+        })
+        .with_field(FieldDef {
+            name: "title".into(),
+            field_type: FieldType::String,
+            primary_key: false,
+            unique: false,
+            nullable: false,
+            indexed: true,
+        })
+        .with_field(FieldDef::new("body", FieldType::String))
+        .with_field(FieldDef::new("profile", FieldType::Document))
+        .with_field(FieldDef::new(
+            "embedding",
+            FieldType::Vector { dim: RICH_DIM },
+        ))
+        .with_index(IndexDef {
+            path: "profile.tag".into(),
+            kind: IndexKind::DocumentPath,
+        })
+        .with_index(IndexDef {
+            path: "body".into(),
+            kind: IndexKind::FullText,
+        })
+}
+
+/// A deterministic multi-model record keyed by `id`: every body contains the
+/// shared token `item` (so a full-text query for it matches all records), the
+/// document path `profile.tag` buckets into five values, and the embedding is a
+/// simple function of `id`.
+fn rich_insert_mutation(id: i64) -> Mutation {
+    let mut fields = Document::new();
+    fields.insert("id".into(), Value::Int(id));
+    fields.insert("v".into(), Value::Int(id));
+    fields.insert("title".into(), Value::Text(format!("Title {id}")));
+    fields.insert(
+        "body".into(),
+        Value::Text(format!("alpha beta item number {id} gamma delta")),
+    );
+    let mut profile = Document::new();
+    profile.insert("tag".into(), Value::Text(format!("tag{}", id % 5)));
+    fields.insert("profile".into(), Value::Object(profile));
+    let embedding: Vec<f32> = vec![id as f32, (id % 7) as f32, (id % 3) as f32, 1.0];
+    fields.insert("embedding".into(), Value::Vector(embedding));
+    Mutation::Insert {
+        collection: "C".into(),
+        fields,
+    }
+}
+
+impl TestCluster {
+    /// Commit a multi-model record through whichever of `live` currently leads,
+    /// retrying on transient conditions. Mirrors [`write_via_leader`] but inserts
+    /// a [`rich_insert_mutation`].
+    async fn write_rich_via_leader(&self, live: &[usize], id: i64) {
+        let deadline = Instant::now() + Duration::from_secs(30);
+        let mut may_have_committed = false;
+        loop {
+            if let Some(li) = self.live_leader_index(live) {
+                let engine = self.nodes[li].engine.clone();
+                let result = tokio::task::spawn_blocking(move || {
+                    engine.apply_mutation(rich_insert_mutation(id))
+                })
+                .await
+                .unwrap();
+                match result {
+                    Ok(_) => return,
+                    Err(auradb::core::Error::UniqueViolation(_)) if may_have_committed => return,
+                    Err(err) => {
+                        let transient = matches!(&err, auradb::core::Error::NotLeader(_))
+                            || matches!(&err, auradb::core::Error::Internal(m)
+                                if m.contains("replication timed out"));
+                        if !transient {
+                            panic!("rich write {id} via leader {li} failed: {err}");
+                        }
+                        may_have_committed = true;
+                    }
+                }
+            }
+            if Instant::now() >= deadline {
+                panic!("could not commit rich write {id} via a leader among {live:?} within 30s");
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+    }
+
+    /// Simulate a two-way network partition isolating node `idx` from every other
+    /// node: each end drops the other's inbound frames. The isolated node keeps
+    /// running (its in-memory Raft state is preserved), unlike [`stop`].
+    fn partition(&self, idx: usize) {
+        for j in 0..self.nodes.len() {
+            if j == idx {
+                continue;
+            }
+            self.nodes[idx].peer.drop_peer_link(self.nodes[j].id);
+            self.nodes[j].peer.drop_peer_link(self.nodes[idx].id);
+        }
+    }
+
+    /// Heal the partition created by [`partition`], resuming delivery in both
+    /// directions for node `idx`.
+    fn heal(&self, idx: usize) {
+        for j in 0..self.nodes.len() {
+            if j == idx {
+                continue;
+            }
+            self.nodes[idx].peer.heal_peer_link(self.nodes[j].id);
+            self.nodes[j].peer.heal_peer_link(self.nodes[idx].id);
+        }
+    }
+
+    /// Run a multi-model query on node `idx` and return the matching ids.
+    fn query_ids(&self, idx: usize, q: &FindQuery) -> std::collections::BTreeSet<i64> {
+        self.nodes[idx]
+            .engine
+            .find(q)
+            .unwrap()
+            .into_iter()
+            .filter_map(|r| match r.fields.get("id") {
+                Some(Value::Int(v)) => Some(*v),
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// Total `leader_changes` observed by any single node (the maximum across
+    /// nodes). A node that restarts resets its own counter, so the cluster-wide
+    /// signal that re-elections happened is "some surviving node saw at least
+    /// one".
+    fn max_leader_changes(&self) -> u64 {
+        (0..self.nodes.len())
+            .map(|i| self.nodes[i].peer.metrics().leader_changes)
+            .max()
+            .unwrap_or(0)
+    }
+
+    /// Sum of apply errors across all nodes (must stay zero: a duplicate or
+    /// conflicting apply would increment it).
+    fn total_apply_errors(&self) -> u64 {
+        (0..self.nodes.len())
+            .map(|i| self.nodes[i].peer.metrics().apply_errors)
+            .sum()
+    }
+}
+
+// ---- Step 3: repeated leader restart and re-election ----
+
+/// Run `cycles` of: commit via the current leader, kill the leader, let the
+/// majority elect a new one, commit again through it, then restart the old
+/// leader and wait for the whole cluster to reconverge. Returns the cluster and
+/// the number of distinct records committed (`2 * cycles`).
+async fn run_repeated_leader_restart(cycles: usize) -> (TestCluster, usize) {
+    let mut cluster = TestCluster::start(3).await;
+    let ids = cluster.ids();
+    let addrs = cluster.addrs();
+    cluster.wait_for_leader(Duration::from_secs(10)).await;
+
+    let mut next_id: i64 = 1;
+    for _ in 0..cycles {
+        let all: Vec<usize> = (0..3).collect();
+        // Commit one record via whoever currently leads, and let it settle on all.
+        cluster.write_via_leader(&all, next_id, next_id).await;
+        let have = next_id as usize;
+        next_id += 1;
+        cluster.wait_all_have(have, Duration::from_secs(15)).await;
+
+        // Kill the current leader; the surviving majority elects a new one.
+        let leader = cluster.wait_for_leader(Duration::from_secs(10)).await;
+        cluster.stop(leader).await;
+        let live: Vec<usize> = (0..3).filter(|&i| i != leader).collect();
+        cluster
+            .wait_for_live_leader(&live, Duration::from_secs(10))
+            .await;
+
+        // Commit through the new leader while the old leader is down.
+        cluster.write_via_leader(&live, next_id, next_id).await;
+        let have = next_id as usize;
+        next_id += 1;
+        cluster
+            .wait_indices_have(&live, have, Duration::from_secs(15))
+            .await;
+
+        // Bring the old leader back; the full cluster reconverges before the next
+        // cycle so each cycle starts from a clean, converged state.
+        cluster.restart(leader, &ids, &addrs).await;
+        cluster.wait_all_have(have, Duration::from_secs(20)).await;
+    }
+    (cluster, 2 * cycles)
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 6)]
+async fn repeated_leader_restart_2_cycles_converges() {
+    let (cluster, total) = run_repeated_leader_restart(2).await;
+
+    // Every node converged on the identical committed record set.
+    let expected: std::collections::BTreeSet<i64> = (1..=total as i64).collect();
+    for i in 0..3 {
+        let got = cluster.query_ids(i, &FindQuery::new("C"));
+        assert_eq!(
+            got, expected,
+            "node {i} did not converge after repeated leader restarts"
+        );
+    }
+
+    // The committed data survived every restart (preserves_committed_data) and
+    // no record was applied twice (no_duplicate_apply).
+    for i in 0..3 {
+        assert_eq!(
+            cluster.record_count(i),
+            total,
+            "node {i} record count diverged"
+        );
+    }
+    assert_eq!(
+        cluster.total_apply_errors(),
+        0,
+        "repeated restarts must not produce duplicate/conflicting applies"
+    );
+
+    // At least one surviving node observed a leadership change (leader-change
+    // metric increments / all_nodes_caught_up).
+    assert!(
+        cluster.max_leader_changes() >= 1,
+        "expected the leader-change metric to increment across re-elections"
+    );
+    cluster.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 8)]
+#[ignore = "stress: 5 kill/elect/restart cycles; run with `cargo test -- --ignored`"]
+async fn repeated_leader_restart_5_cycles_stress() {
+    let (cluster, total) = run_repeated_leader_restart(5).await;
+    let expected: std::collections::BTreeSet<i64> = (1..=total as i64).collect();
+    for i in 0..3 {
+        assert_eq!(cluster.query_ids(i, &FindQuery::new("C")), expected);
+    }
+    assert_eq!(cluster.total_apply_errors(), 0);
+    cluster.shutdown().await;
+}
+
+// ---- Step 4: larger multi-model data-set recovery ----
+
+/// Bring up a multi-model cluster, commit a `baseline` every node shares, stop a
+/// follower, commit up to `target` through the majority, then restart the
+/// follower and wait for it to catch up. Returns the cluster, the follower
+/// index, and `target`.
+async fn run_large_dataset_scenario(baseline: i64, target: i64) -> (TestCluster, usize, usize) {
+    let mut cluster = TestCluster::start_with(3, rich_schema()).await;
+    let ids = cluster.ids();
+    let addrs = cluster.addrs();
+    let leader = cluster.wait_for_leader(Duration::from_secs(10)).await;
+    let all: Vec<usize> = (0..3).collect();
+
+    for id in 1..=baseline {
+        cluster.write_rich_via_leader(&all, id).await;
+    }
+    cluster
+        .wait_all_have(baseline as usize, Duration::from_secs(30))
+        .await;
+
+    let follower = (0..3).find(|&i| i != leader).unwrap();
+    cluster.stop(follower).await;
+    let live: Vec<usize> = (0..3).filter(|&i| i != follower).collect();
+    for id in (baseline + 1)..=target {
+        cluster.write_rich_via_leader(&live, id).await;
+    }
+    cluster
+        .wait_indices_have(&live, target as usize, Duration::from_secs(40))
+        .await;
+
+    cluster.restart(follower, &ids, &addrs).await;
+    cluster
+        .wait_indices_have(&[follower], target as usize, Duration::from_secs(40))
+        .await;
+    (cluster, follower, target as usize)
+}
+
+// CI-safe default size. The full "large" run (5,000 records) is the ignored
+// `large_dataset_follower_restart_catches_up_5000_stress` below; these required
+// tests exercise the identical multi-model catch-up path at a size that keeps
+// the serial cluster suite fast on contended runners.
+const LARGE_BASELINE: i64 = 20;
+const LARGE_TARGET: i64 = 120;
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 6)]
+async fn large_dataset_follower_restart_catches_up() {
+    let (cluster, follower, target) =
+        run_large_dataset_scenario(LARGE_BASELINE, LARGE_TARGET).await;
+    assert_eq!(
+        cluster.record_count(follower),
+        target,
+        "restarted follower holds every multi-model record"
+    );
+    // A spot read of the last-written record returns its fields intact.
+    let q = FindQuery {
+        filter: Some(Filter::Compare {
+            field: "id".into(),
+            op: CompareOp::Eq,
+            value: Value::Int(target as i64),
+        }),
+        ..FindQuery::new("C")
+    };
+    let rows = cluster.nodes[follower].engine.find(&q).unwrap();
+    assert_eq!(rows.len(), 1);
+    assert_eq!(
+        rows[0].fields.get("title"),
+        Some(&Value::Text(format!("Title {target}"))),
+        "spot read returns the catch-up record's fields"
+    );
+    assert_eq!(cluster.total_apply_errors(), 0);
+    cluster.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 6)]
+async fn large_dataset_indexes_consistent_after_catchup() {
+    let (cluster, follower, _target) =
+        run_large_dataset_scenario(LARGE_BASELINE, LARGE_TARGET).await;
+    let live = (0..3).find(|&i| i != follower).unwrap();
+    // The secondary index on `title` returns the same record on the recovered
+    // follower as on a node that never went down, and the planner uses the index.
+    let q = FindQuery {
+        filter: Some(Filter::Compare {
+            field: "title".into(),
+            op: CompareOp::Eq,
+            value: Value::Text("Title 99".into()),
+        }),
+        ..FindQuery::new("C")
+    };
+    assert_eq!(
+        cluster.query_ids(follower, &q),
+        cluster.query_ids(live, &q),
+        "secondary-index lookup must agree across nodes after catch-up"
+    );
+    assert_eq!(cluster.query_ids(follower, &q).len(), 1);
+    let plan = cluster.nodes[follower].engine.explain(&q).unwrap();
+    assert!(
+        plan.used_index.is_some(),
+        "the rebuilt secondary index should be used by the planner: {plan:?}"
+    );
+    cluster.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 6)]
+async fn large_dataset_full_text_consistent_after_catchup() {
+    let (cluster, follower, target) =
+        run_large_dataset_scenario(LARGE_BASELINE, LARGE_TARGET).await;
+    let live = (0..3).find(|&i| i != follower).unwrap();
+    let q = FindQuery {
+        filter: Some(Filter::ContainsText {
+            field: "body".into(),
+            query: "item".into(),
+        }),
+        ..FindQuery::new("C")
+    };
+    let on_follower = cluster.query_ids(follower, &q);
+    assert_eq!(
+        on_follower,
+        cluster.query_ids(live, &q),
+        "full-text results must agree across nodes after catch-up"
+    );
+    assert_eq!(
+        on_follower.len(),
+        target,
+        "every record's body contains the shared token"
+    );
+    cluster.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 6)]
+async fn large_dataset_doc_path_consistent_after_catchup() {
+    let (cluster, follower, _target) =
+        run_large_dataset_scenario(LARGE_BASELINE, LARGE_TARGET).await;
+    let live = (0..3).find(|&i| i != follower).unwrap();
+    let q = FindQuery {
+        filter: Some(Filter::Compare {
+            field: "profile.tag".into(),
+            op: CompareOp::Eq,
+            value: Value::Text("tag2".into()),
+        }),
+        ..FindQuery::new("C")
+    };
+    let on_follower = cluster.query_ids(follower, &q);
+    assert!(
+        !on_follower.is_empty(),
+        "document-path query returns records"
+    );
+    assert_eq!(
+        on_follower,
+        cluster.query_ids(live, &q),
+        "document-path results must agree across nodes after catch-up"
+    );
+    assert!(
+        on_follower.iter().all(|id| id % 5 == 2),
+        "every matched record has the queried tag"
+    );
+    cluster.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 6)]
+async fn large_dataset_vector_consistent_after_catchup() {
+    let (cluster, follower, _target) =
+        run_large_dataset_scenario(LARGE_BASELINE, LARGE_TARGET).await;
+    let live = (0..3).find(|&i| i != follower).unwrap();
+    let q = FindQuery {
+        vector: Some(VectorSearch {
+            field: "embedding".into(),
+            query: vec![10.0, 1.0, 1.0, 1.0],
+            k: 5,
+            metric: "euclidean".into(),
+        }),
+        ..FindQuery::new("C")
+    };
+    let near = cluster.nodes[follower].engine.find(&q).unwrap();
+    assert_eq!(near.len(), 5, "nearest-k returns k records");
+    assert!(near[0].score.is_some(), "vector search returns scores");
+    assert_eq!(
+        cluster.query_ids(follower, &q),
+        cluster.query_ids(live, &q),
+        "vector nearest-k results must agree across nodes after catch-up"
+    );
+    cluster.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 6)]
+async fn large_dataset_cluster_restart_preserves_state() {
+    let (mut cluster, follower, target) =
+        run_large_dataset_scenario(LARGE_BASELINE, LARGE_TARGET).await;
+    let _ = follower;
+    let ids = cluster.ids();
+    let addrs = cluster.addrs();
+
+    // Full cluster restart: stop every node, then bring them all back.
+    for i in 0..3 {
+        cluster.stop(i).await;
+    }
+    for i in 0..3 {
+        cluster.restart(i, &ids, &addrs).await;
+    }
+    cluster.wait_for_leader(Duration::from_secs(15)).await;
+    cluster.wait_all_have(target, Duration::from_secs(20)).await;
+
+    // Every node still holds the full multi-model state and a full-text query
+    // still returns all records.
+    let q = FindQuery {
+        filter: Some(Filter::ContainsText {
+            field: "body".into(),
+            query: "item".into(),
+        }),
+        ..FindQuery::new("C")
+    };
+    for i in 0..3 {
+        assert_eq!(cluster.record_count(i), target, "node {i} lost records");
+        assert_eq!(
+            cluster.query_ids(i, &q).len(),
+            target,
+            "node {i} lost full-text index state after restart"
+        );
+    }
+    cluster.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 8)]
+#[ignore = "stress: 5000 multi-model synchronous commits; run with `cargo test -- --ignored`"]
+async fn large_dataset_follower_restart_catches_up_5000_stress() {
+    let (cluster, follower, target) = run_large_dataset_scenario(50, 5000).await;
+    assert_eq!(cluster.record_count(follower), target);
+    assert_eq!(cluster.total_apply_errors(), 0);
+    cluster.shutdown().await;
+}
+
+// ---- Step 5: multi-model snapshot install ----
+
+/// Like [`run_large_dataset_scenario`] but the live majority compacts its logs
+/// past the entries the follower needs, so the follower can only be brought
+/// current by a snapshot install (not AppendEntries).
+async fn run_rich_snapshot_install_scenario(
+    baseline: i64,
+    target: i64,
+) -> (TestCluster, usize, usize) {
+    let mut cluster = TestCluster::start_with(3, rich_schema()).await;
+    let ids = cluster.ids();
+    let addrs = cluster.addrs();
+    let leader = cluster.wait_for_leader(Duration::from_secs(10)).await;
+    let all: Vec<usize> = (0..3).collect();
+
+    for id in 1..=baseline {
+        cluster.write_rich_via_leader(&all, id).await;
+    }
+    cluster
+        .wait_all_have(baseline as usize, Duration::from_secs(30))
+        .await;
+
+    let follower = (0..3).find(|&i| i != leader).unwrap();
+    cluster.stop(follower).await;
+    let live: Vec<usize> = (0..3).filter(|&i| i != follower).collect();
+    for id in (baseline + 1)..=target {
+        cluster.write_rich_via_leader(&live, id).await;
+    }
+    cluster
+        .wait_indices_have(&live, target as usize, Duration::from_secs(40))
+        .await;
+    for &i in &live {
+        let _ = cluster.nodes[i].peer.compact_log();
+    }
+    cluster.restart(follower, &ids, &addrs).await;
+    cluster
+        .wait_indices_have(&[follower], target as usize, Duration::from_secs(40))
+        .await;
+    (cluster, follower, target as usize)
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 6)]
+async fn snapshot_install_preserves_full_text_and_doc_path() {
+    let (cluster, follower, target) = run_rich_snapshot_install_scenario(20, 150).await;
+    // The install happened (the live nodes compacted the entries it needed). The
+    // follower's engine reaches `target` records inside the install handler a hair
+    // before the install counter is incremented, so poll the counter with a
+    // bounded deadline rather than reading it once right after catch-up.
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        if cluster.nodes[follower].peer.snapshot_counters().1 >= 1 {
+            break;
+        }
+        if Instant::now() >= deadline {
+            panic!("follower should have installed a snapshot");
+        }
+        tokio::time::sleep(Duration::from_millis(25)).await;
+    }
+    let live = (0..3).find(|&i| i != follower).unwrap();
+
+    let ft = FindQuery {
+        filter: Some(Filter::ContainsText {
+            field: "body".into(),
+            query: "item".into(),
+        }),
+        ..FindQuery::new("C")
+    };
+    assert_eq!(
+        cluster.query_ids(follower, &ft).len(),
+        target,
+        "full-text index rebuilt from the installed snapshot covers all records"
+    );
+    assert_eq!(
+        cluster.query_ids(follower, &ft),
+        cluster.query_ids(live, &ft)
+    );
+
+    let dp = FindQuery {
+        filter: Some(Filter::Compare {
+            field: "profile.tag".into(),
+            op: CompareOp::Eq,
+            value: Value::Text("tag3".into()),
+        }),
+        ..FindQuery::new("C")
+    };
+    assert_eq!(
+        cluster.query_ids(follower, &dp),
+        cluster.query_ids(live, &dp),
+        "document-path index must match across nodes after snapshot install"
+    );
+    cluster.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 6)]
+async fn snapshot_install_preserves_vector_records() {
+    let (cluster, follower, _target) = run_rich_snapshot_install_scenario(20, 150).await;
+    let live = (0..3).find(|&i| i != follower).unwrap();
+    let q = FindQuery {
+        vector: Some(VectorSearch {
+            field: "embedding".into(),
+            query: vec![12.0, 2.0, 0.0, 1.0],
+            k: 5,
+            metric: "euclidean".into(),
+        }),
+        ..FindQuery::new("C")
+    };
+    let near = cluster.nodes[follower].engine.find(&q).unwrap();
+    assert_eq!(near.len(), 5);
+    assert!(near[0].score.is_some());
+    assert_eq!(
+        cluster.query_ids(follower, &q),
+        cluster.query_ids(live, &q),
+        "vector records must survive a snapshot install intact"
+    );
+    cluster.shutdown().await;
+}
+
+// ---- Step 6: peer reconnect storm ----
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 6)]
+async fn peer_reconnect_storm_replication_recovers() {
+    let mut cluster = TestCluster::start(3).await;
+    let ids = cluster.ids();
+    let addrs = cluster.addrs();
+    let leader = cluster.wait_for_leader(Duration::from_secs(10)).await;
+    cluster.write_via_leader(&[0, 1, 2], 1, 1).await;
+    cluster.wait_all_have(1, Duration::from_secs(5)).await;
+
+    // Repeatedly disconnect and reconnect one follower while the majority keeps
+    // committing. The leader must stay stable and replication must resume each
+    // time the follower returns.
+    let follower = (0..3).find(|&i| i != leader).unwrap();
+    let live: Vec<usize> = (0..3).filter(|&i| i != follower).collect();
+    let mut next_id: i64 = 2;
+    for _ in 0..5 {
+        cluster.stop(follower).await;
+        cluster.write_via_leader(&live, next_id, next_id).await;
+        next_id += 1;
+        cluster.restart(follower, &ids, &addrs).await;
+        // The follower reconnects and catches up before the next disconnect.
+        cluster
+            .wait_indices_have(&[follower], (next_id - 1) as usize, Duration::from_secs(15))
+            .await;
+    }
+
+    let total = (next_id - 1) as usize;
+    // Replication fully recovered and the follower is connected again.
+    cluster.wait_all_have(total, Duration::from_secs(10)).await;
+    let reconnected = cluster.nodes[follower]
+        .peer
+        .peer_status()
+        .iter()
+        .any(|s| s.connected);
+    assert!(
+        reconnected,
+        "the follower should hold a live peer connection after the storm"
+    );
+    cluster.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 6)]
+async fn peer_reconnect_storm_no_duplicate_apply() {
+    let mut cluster = TestCluster::start(3).await;
+    let ids = cluster.ids();
+    let addrs = cluster.addrs();
+    let leader = cluster.wait_for_leader(Duration::from_secs(10)).await;
+    let follower = (0..3).find(|&i| i != leader).unwrap();
+    let live: Vec<usize> = (0..3).filter(|&i| i != follower).collect();
+
+    let mut next_id: i64 = 1;
+    for _ in 0..5 {
+        cluster.stop(follower).await;
+        cluster.write_via_leader(&live, next_id, next_id).await;
+        next_id += 1;
+        cluster.write_via_leader(&live, next_id, next_id).await;
+        next_id += 1;
+        cluster.restart(follower, &ids, &addrs).await;
+        cluster
+            .wait_indices_have(&[follower], (next_id - 1) as usize, Duration::from_secs(15))
+            .await;
+    }
+
+    let total = (next_id - 1) as usize;
+    // Exactly `total` distinct records on every node, no duplicate/conflicting
+    // apply despite the repeated reconnect/catch-up cycles.
+    for i in 0..3 {
+        assert_eq!(cluster.record_count(i), total, "node {i} record count");
+    }
+    assert_eq!(cluster.total_apply_errors(), 0);
+    cluster.shutdown().await;
+}
+
+// ---- Step 7: network interruption (partition / heal) simulations ----
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 6)]
+async fn majority_partition_write_succeeds() {
+    let cluster = TestCluster::start(3).await;
+    let leader = cluster.wait_for_leader(Duration::from_secs(10)).await;
+    cluster.write_via_leader(&[0, 1, 2], 1, 1).await;
+    cluster.wait_all_have(1, Duration::from_secs(5)).await;
+
+    // Partition one follower away. The leader and the other follower remain a
+    // majority and continue committing.
+    let follower = (0..3).find(|&i| i != leader).unwrap();
+    cluster.partition(follower);
+    let connected: Vec<usize> = (0..3).filter(|&i| i != follower).collect();
+    cluster.write_via_leader(&connected, 2, 2).await;
+    cluster
+        .wait_indices_have(&connected, 2, Duration::from_secs(10))
+        .await;
+
+    // Heal the partition; the isolated follower rejoins and converges.
+    cluster.heal(follower);
+    cluster.wait_for_leader(Duration::from_secs(15)).await;
+    cluster.wait_all_have(2, Duration::from_secs(15)).await;
+    assert_eq!(cluster.total_apply_errors(), 0);
+    cluster.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 6)]
+async fn minority_partition_leader_write_times_out() {
+    let cluster = TestCluster::start(3).await;
+    let leader = cluster.wait_for_leader(Duration::from_secs(10)).await;
+
+    // Isolate the (running) leader from both followers: it is now a minority of
+    // one and cannot reach a majority, so a write through it must not commit.
+    cluster.partition(leader);
+    let write = cluster.write(leader, 9, 9);
+    let outcome = tokio::time::timeout(Duration::from_secs(1), write).await;
+    assert!(
+        outcome.is_err(),
+        "a leader partitioned into a minority must not be able to commit"
+    );
+    assert_eq!(
+        cluster.record_count(leader),
+        0,
+        "the uncommitted write is not visible on the isolated leader"
+    );
+    cluster.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 6)]
+async fn partition_heals_and_follower_catches_up() {
+    let cluster = TestCluster::start(3).await;
+    let leader = cluster.wait_for_leader(Duration::from_secs(10)).await;
+    cluster.write_via_leader(&[0, 1, 2], 1, 1).await;
+    cluster.wait_all_have(1, Duration::from_secs(5)).await;
+
+    // Drop all traffic to/from one follower (its AppendEntries are dropped),
+    // commit a run through the surviving majority, then heal and confirm the
+    // follower's log is repaired to the full committed prefix.
+    let follower = (0..3).find(|&i| i != leader).unwrap();
+    cluster.partition(follower);
+    let connected: Vec<usize> = (0..3).filter(|&i| i != follower).collect();
+    for id in 2..=12 {
+        cluster.write_via_leader(&connected, id, id).await;
+    }
+    cluster
+        .wait_indices_have(&connected, 12, Duration::from_secs(15))
+        .await;
+
+    cluster.heal(follower);
+    cluster.wait_for_leader(Duration::from_secs(15)).await;
+    cluster.wait_all_have(12, Duration::from_secs(20)).await;
+
+    let expected: std::collections::BTreeSet<i64> = (1..=12).collect();
+    for i in 0..3 {
+        assert_eq!(
+            cluster.query_ids(i, &FindQuery::new("C")),
+            expected,
+            "node {i} did not converge after the partition healed"
+        );
+    }
+    assert_eq!(cluster.total_apply_errors(), 0);
+    cluster.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 6)]
+async fn leader_partition_triggers_reelection_and_heals() {
+    let cluster = TestCluster::start(3).await;
+    let leader = cluster.wait_for_leader(Duration::from_secs(10)).await;
+    cluster.write_via_leader(&[0, 1, 2], 1, 1).await;
+    cluster.wait_all_have(1, Duration::from_secs(5)).await;
+
+    // Partition the leader: its heartbeats no longer reach the followers, so the
+    // surviving majority must elect a new leader and keep accepting writes.
+    cluster.partition(leader);
+    let majority: Vec<usize> = (0..3).filter(|&i| i != leader).collect();
+    let new_leader = cluster
+        .wait_for_live_leader(&majority, Duration::from_secs(15))
+        .await;
+    assert_ne!(
+        new_leader, leader,
+        "a new leader takes over the majority side"
+    );
+    cluster.write_via_leader(&majority, 2, 2).await;
+
+    // Heal: the old leader rejoins, discovers the newer term, and the whole
+    // cluster reconverges on a single leader with all records.
+    cluster.heal(leader);
+    cluster.wait_for_leader(Duration::from_secs(20)).await;
+    cluster.wait_all_have(2, Duration::from_secs(20)).await;
+    assert!(
+        cluster.max_leader_changes() >= 1,
+        "the partition should have driven at least one leadership change"
+    );
+    cluster.shutdown().await;
 }

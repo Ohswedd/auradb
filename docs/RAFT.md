@@ -193,6 +193,15 @@ real cross-process cluster:
   per-peer snapshot-needed and lag diagnostics plus metrics over the **unchanged
   v0.6.0 install path**; the transfer itself is not changed. See
   [REPLICATION.md](REPLICATION.md) and [OBSERVABILITY.md](OBSERVABILITY.md).
+- **Repeated chaos and recovery validation (v0.6.2).** v0.6.2 adds repeated
+  leader restart / re-election cycles, deterministic network-interruption
+  (partition/heal) simulations via an in-process transport drop control, and a
+  cumulative `leader_changes` recovery signal — all exercising the **same**
+  election, log-repair, and commit-advancement code paths under repeated failure.
+  Because this Raft does not implement pre-vote, an isolated *running* node's term
+  can advance while it is partitioned; on heal the cluster reconverges (a brief
+  re-election may occur), which is why the recovery tests assert eventual
+  convergence rather than a fixed election outcome. See [TESTING.md](TESTING.md).
 
 The transport is gated behind the two `[cluster]` opt-ins (`enabled = true` and
 `experimental_multi_node = true`) and fails closed on a non-loopback address

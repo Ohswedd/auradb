@@ -2,11 +2,44 @@
 
 This document is the connector-focused companion to the
 [Compatibility Matrix](COMPATIBILITY.md). It records which Aura Connector release
-talks to AuraDB 0.6.1, what it can drive, and what it cannot.
+talks to AuraDB 0.6.2, what it can drive, and what it cannot.
 
-> **AuraDB v0.6.1 hardens snapshot install and published-cluster smoke for the
+> **AuraDB v0.6.2 hardens repeated chaos and larger-state recovery for the
 > controlled multi-node preview. It is _not_ production HA. Single-node mode
 > remains the recommended production mode.**
+
+## Connector leader-hint review (v0.6.2)
+
+For v0.6.2 we again reviewed whether the connector needs a patch and again chose
+**docs-only (Option A)**. The v0.6.2 changes are server-side recovery hardening
+plus one additive `leader_changes` field on the cluster health report; nothing in
+the wire contract or the `not_leader` behavior changed, so **no connector release
+is required** and Aura Connector 0.3.x stays fully compatible. The leader-hint
+behavior reviewed below is unchanged: the `not_leader` contract is still pinned by
+`crates/auradb-server/tests/not_leader.rs` (the connector stays safe on a
+not-leader write and never retries forever), and the server-side recovery a
+connector rides on after a leadership change is covered by the
+repeated-leader-restart tests in `crates/auradb-replication/tests/multi_node.rs`.
+The Python connector conformance smoke
+(`tests/conformance/python/run_connector_smoke.py`) continues to run against a
+live leader in CI.
+
+Manual leader routing, end to end:
+
+```bash
+# 1. Resolve the current leader's client address from any node.
+auradb cluster leader --addr 127.0.0.1:7101 --json
+# -> { "leader_id": "...", "leader_client_addr": "127.0.0.1:7001", ... }
+
+# 2. Point the connector at that client address and issue writes there.
+#    (In Python with Aura Connector 0.3.x:)
+#      client = AuraClient("127.0.0.1:7001")
+#
+# 3. If leadership has moved, a write to the old leader raises an
+#    AuraServerError whose message contains "not_leader" and names the new
+#    leader. Re-resolve with `auradb cluster leader` and reconnect — the server
+#    returns exactly one terminal not_leader and never retries internally.
+```
 
 ## Connector leader-hint UX review (v0.6.1)
 
@@ -55,7 +88,7 @@ human-readable message.
 
 ## Summary
 
-- **Aura Connector 0.3.x remains fully compatible with AuraDB 0.5.1. No connector
+- **Aura Connector 0.3.x remains fully compatible with AuraDB 0.6.2. No connector
   release is required.** Cluster mode and the multi-node preview are server-side
   and ride the existing AWP 1 wire format and Query IR; the `cluster` health
   section (including the additive per-peer diagnostics fields), the optional
@@ -79,6 +112,7 @@ human-readable message.
 
 | AuraDB | Aura Connector | Protocol | Status |
 | ------ | -------------- | -------- | ------ |
+| 0.6.2  | 0.3.x          | AWP 1    | Supported (native AuraDB backend; additive `leader_changes` diagnostics field; manual leader routing) |
 | 0.6.1  | 0.3.x          | AWP 1    | Supported (native AuraDB backend; additive snapshot/lag diagnostics fields; manual leader routing) |
 | 0.6.0  | 0.3.x          | AWP 1    | Supported (native AuraDB backend; additive fail-stop diagnostics fields; targets the leader) |
 | 0.5.1  | 0.3.x          | AWP 1    | Supported (native AuraDB backend; additive diagnostics fields; targets the leader) |
@@ -118,6 +152,13 @@ used the stdlib AWP harness (`run_conformance.py`, 18/18) and the Rust conforman
 crate (`auradb-conformance`); published Aura Connector conformance is covered by
 CI (`conformance.yml`) and must pass before release. The v0.6.1 leader-hint review
 (above) kept the connector as-is (Option A, docs-only).
+
+For **v0.6.2**, the connector contract is again unchanged. The release is
+server-side recovery hardening (repeated leader restart, larger-state recovery,
+multi-model snapshot install, reconnect storms, partition/heal); the only wire
+addition is the additive `leader_changes` field on the cluster health report,
+which the 0.3.x connector ignores. The v0.6.2 leader-hint review kept the
+connector as-is (Option A, docs-only).
 
 ## Required connector extras
 

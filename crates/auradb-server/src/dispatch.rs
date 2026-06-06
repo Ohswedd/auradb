@@ -145,6 +145,7 @@ pub fn cluster_health(ctx: &ServerContext) -> Option<auradb_protocol::ClusterHea
         quorum_available: node.quorum_available(),
         peers,
         snapshot,
+        leader_changes: node.metrics().leader_changes,
     })
 }
 

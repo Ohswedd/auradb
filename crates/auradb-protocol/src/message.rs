@@ -214,6 +214,13 @@ pub struct ClusterHealth {
     /// `None` for single-node clusters and older servers.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub snapshot: Option<ClusterSnapshotHealth>,
+    /// Cumulative number of leader changes this node has observed since it
+    /// started — a recovery-instability signal: a steadily climbing count points
+    /// to leadership flapping (election storms, an overloaded leader, or a flaky
+    /// link). Additive (v0.6.2); defaults to 0 for single-node clusters and
+    /// older servers.
+    #[serde(default)]
+    pub leader_changes: u64,
 }
 
 /// Snapshot-install diagnostics carried in [`ClusterHealth`] for the multi-node

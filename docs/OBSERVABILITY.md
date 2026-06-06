@@ -134,6 +134,16 @@ last error, bytes sent/installed, in-progress gauge, needed-total). The new live
 follower that needs a snapshot, a lagging follower, and quorum at the minimum or
 quorum lost. These are additive fields and ignored by older clients.
 
+New in v0.6.2, `auradb cluster status --addr` reports `leader_changes`, the
+cumulative number of leadership changes this node has observed since it started —
+a recovery-instability signal (a steadily climbing value points to leadership
+flapping rather than a single clean failover). It is an additive AWP field that
+older clients ignore. `auradb cluster doctor --addr` adds two recovery warnings
+built from existing diagnostics: a **peer reconnect storm** (a peer still
+`connected: false` after many outbound `connect_attempts`) and **repeated leader
+changes** (the `leader_changes` count crossing an instability threshold). See
+[CLUSTER_TROUBLESHOOTING.md](CLUSTER_TROUBLESHOOTING.md).
+
 ### JSON output
 
 - `auradb status --json` connects to a running server and emits the address,
