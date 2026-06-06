@@ -171,9 +171,14 @@ not timing-flaky.
   length-delimited, CRC32, 16 MiB payload cap) round-trips and rejects bad
   frames; the `PeerHello` handshake accepts a valid peer and rejects
   wrong-cluster, unknown-node, duplicate-node, and bad-token peers with a
-  structured `PeerError`; a snapshot-install request is answered with the
-  structured *unsupported* response; reconnect uses bounded backoff and shutdown
-  is graceful.
+  structured `PeerError`; reconnect uses bounded backoff and shutdown is
+  graceful.
+- **Peer snapshot install (v0.6.0)** — a follower behind the leader's compacted
+  prefix is restored by a bounded snapshot install
+  (`install_snapshot_restores_follower_after_compaction`) and then resumes
+  AppendEntries (`append_entries_resume_after_snapshot_install`); oversized,
+  wrong-cluster, bad-digest, and future-format snapshots are rejected, and a
+  rejected install preserves existing follower state.
 - **Cross-process replication** — real leader election across processes,
   AppendEntries replication, majority commit (a minority cannot commit), follower
   apply, and follower catch-up after restart.

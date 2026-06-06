@@ -1,11 +1,12 @@
 # Raft Consensus Core
 
-> **AuraDB v0.5.1 hardens the controlled multi-node preview. Single-node mode
-> remains the recommended production mode.** v0.5.1 adds cross-process
-> leader-restart and re-election tests: stopping the leader lets the surviving
-> majority elect a new one, and the restarted old leader rejoins as a follower
-> and catches up. This is preview leader-restart behavior, not production
-> automatic failover. Building
+> **AuraDB v0.6.0 improves the controlled multi-node preview and validates
+> fail-stop recovery. It is _not_ production HA. Single-node mode remains the
+> recommended production mode.** Stopping the leader lets the surviving majority
+> elect a new one, which accepts writes; the restarted old leader rejoins as a
+> follower and catches up — by AppendEntries, or by a v0.6.0 **peer snapshot
+> install** if it fell behind the compacted prefix. This is fail-stop recovery
+> preview behavior, not production automatic failover. Building
 > on the v0.4.x Raft groundwork (log compaction boundaries, durability checks,
 > deterministic multi-node partition tests), v0.5.0 runs Raft over a real
 > cross-process peer transport so server processes can elect a leader and
@@ -183,8 +184,11 @@ real cross-process cluster:
   commit_ts_base + raft_log_index`, unchanged from v0.4.x.
 - **Connection management.** Reconnect uses bounded backoff (50 ms .. 2 s);
   shutdown is graceful.
-- **Snapshot install is not implemented.** A snapshot-install request is answered
-  with a structured *unsupported* response rather than being silently ignored.
+- **Peer snapshot install (v0.6.0).** A follower that has fallen behind the
+  leader's compacted prefix is brought current by a **bounded, single-message**
+  snapshot install over the transport (validated for cluster id, format, digest,
+  boundary, storage format, and size), then resumes AppendEntries. This is a
+  preview transfer, not chunked streaming. See [REPLICATION.md](REPLICATION.md).
 
 The transport is gated behind the two `[cluster]` opt-ins (`enabled = true` and
 `experimental_multi_node = true`) and fails closed on a non-loopback address
@@ -200,8 +204,10 @@ processes over the peer transport. It deliberately does **not** include:
 
 - **Membership changes / joint consensus.** The voter set is fixed; there is no
   `join`, `leave`, or `step-down`. Membership is static.
-- **Streaming snapshot install over the wire.** A snapshot-install request is
-  answered as unsupported; only the snapshot boundary defined in the replication
-  layer is present (see [REPLICATION.md](REPLICATION.md)).
+- **Chunked / streaming snapshot install.** v0.6.0 ships a **bounded,
+  single-message** peer snapshot install (see [REPLICATION.md](REPLICATION.md)),
+  not chunked streaming of arbitrarily large snapshots.
 - **Production-grade peer networking or automatic failover.** The cross-process
-  transport is an experimental preview. See [CLUSTERING.md](CLUSTERING.md).
+  transport is an experimental preview — **not production HA**. Leader kill and
+  re-election are a fail-stop recovery preview, not production automatic failover.
+  See [CLUSTERING.md](CLUSTERING.md).

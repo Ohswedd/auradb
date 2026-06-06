@@ -106,6 +106,21 @@ up), **follower catch-up across 1,000+ entries**, **`not_leader` ergonomics**
 `aura-connector` smoke against the elected leader continues to run in CI; local
 runs require PyPI access and are documented rather than faked when offline.
 
+### v0.6.0 fail-stop recovery and snapshot install
+
+v0.6.0 keeps every scenario above and adds **peer snapshot install** coverage: a
+follower behind the leader's compacted prefix is restored by a bounded
+single-message snapshot install and then resumes AppendEntries, and oversized,
+wrong-cluster, bad-digest, and future-format snapshots are rejected without
+touching follower state (`crates/auradb-replication/tests/multi_node.rs`).
+
+The published **Aura Connector 0.3.0** was installed from PyPI and run locally
+against a v0.6.0 server (the `auradb version` reports `0.6.0`): the AWP protocol
+conformance passed **18/18**, the connector smoke **12/12**, and the full
+connector conformance **15/15** — no connector changes are required and AWP stays
+at v1. The wire additions in v0.6.0 (additive fail-stop diagnostics fields on the
+health report's `cluster` section) are ignored by the 0.3.x connector.
+
 ## Running
 
 Rust (no server needed - the test spawns one):

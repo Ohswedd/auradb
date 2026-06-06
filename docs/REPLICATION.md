@@ -1,11 +1,14 @@
 # Replication
 
-> **AuraDB v0.5.1 hardens the controlled multi-node preview. Single-node mode
-> remains the recommended production mode.** v0.5.1 adds leader-restart and
-> re-election coverage and follower catch-up across 1,000+ entries (preview
-> behavior, not production failover); a follower that would need a snapshot
-> install of compacted entries receives a structured *unsupported* response
-> rather than silent corruption or a hang. Building
+> **AuraDB v0.6.0 improves the controlled multi-node preview and validates
+> fail-stop recovery. It is _not_ production HA. Single-node mode remains the
+> recommended production mode.** v0.6.0 adds the first real **peer snapshot
+> install over the wire**: a follower that has fallen behind the leader's
+> compacted prefix is brought current by a bounded, single-message snapshot
+> (validated for cluster id, format, digest, boundary, storage format, and size),
+> then resumes AppendEntries — replacing the v0.5.x structured *unsupported*
+> response. It also adds a leader kill / re-election preview and larger follower
+> catch-up coverage (preview behavior, not production automatic failover). Building
 > on the v0.4.x replication groundwork (apply idempotency under restart, the
 > snapshot restore boundary), v0.5.0 replicates writes across real server
 > processes: the leader commits on a majority, followers apply committed entries,
@@ -100,11 +103,11 @@ double-applies an entry it already has.
 
 ## The snapshot boundary
 
-This release does **not** ship streaming snapshot transfer between nodes. What it
-does ship is the **boundary**: a versioned snapshot manifest that names the log
-index a snapshot covers and carries a content digest, plus the create/restore seam
-that captures and rebuilds engine state. Defining this now means a later release
-can add over-the-wire snapshot shipping without another on-disk format change.
+The **boundary** is a versioned snapshot manifest that names the log index a
+snapshot covers and carries a content digest, plus the create/restore seam that
+captures and rebuilds engine state. v0.6.0 builds the first real **peer snapshot
+install** on top of this boundary (see below); the boundary's on-disk format is
+unchanged.
 
 The snapshot manifest (`SNAPSHOT_FORMAT_VERSION = 1`) records:
 
@@ -135,6 +138,43 @@ touching the target**. The v0.4.1 manifest fields are additive and optional, so 
 v0.4.0 manifest still decodes. Operators drive this through `auradb snapshot
 create|inspect|restore` (see [CLI.md](CLI.md)).
 
+## Peer snapshot install over the wire (v0.6.0)
+
+When a follower has fallen behind the leader's **compacted** prefix — its next
+index is at or below the leader's last-included index, so AppendEntries can no
+longer serve it — the leader ships a snapshot over the peer transport instead of
+hanging:
+
+1. **Detect.** The driver notices the lagging follower (rate-limited per peer so a
+   still-installing follower is not flooded) and captures a manifest covering the
+   leader's current committed state, tagged with the cluster and node id.
+2. **Transfer.** The manifest is sent as a single `InstallSnapshotRequest`
+   message, base64-framed and capped at `MAX_SNAPSHOT_BYTES` (8 MiB). This is a
+   **bounded, single-message** transfer, not chunked streaming; a dataset whose
+   snapshot exceeds the cap is logged and not shipped.
+3. **Validate.** Before mutating any state, the follower checks the cluster id,
+   manifest format version, payload digest, last-included index/term agreement,
+   storage format version, and the size limit. Any failure is rejected and leaves
+   existing follower state untouched.
+4. **Install.** The follower installs the snapshot into its live engine at the
+   snapshot's commit timestamp (`commit_ts_base + last_included_index`), advances
+   its durable Raft boundary (discarding the subsumed prefix), and acknowledges.
+5. **Resume.** The leader records the install (advancing its match/next index for
+   that peer) and resumes AppendEntries from just past the boundary.
+
+Live log compaction that creates this situation is **operator-initiated**
+(`PeerCluster::compact_log`, the live counterpart to `auradb cluster
+compact-log`); the driver does not compact the log out from under a healthy
+follower on its own.
+
+**Preview limitations.** This is a single-message bounded transfer, not chunked
+streaming, and it targets the fail-stop case where the follower is strictly behind
+the snapshot (it only fell behind) — it does not reconcile divergent follower
+history. The counters `auradb_cluster_snapshots_sent_total`,
+`auradb_cluster_snapshots_installed_total`, and
+`auradb_cluster_snapshots_rejected_total` track the path. It is a preview, not a
+production-grade snapshot subsystem.
+
 ## Replication metrics
 
 When cluster mode is enabled, replication exposes Prometheus metrics (see
@@ -154,12 +194,12 @@ is normally zero because each commit is applied inline.
 
 ## What this release does not do
 
-- The multi-node *server* replication in v0.5.0 is an **experimental preview**,
-  off by default and gated behind two opt-ins; it is not production multi-node
-  clustering and provides no automatic failover. See [CLUSTERING.md](CLUSTERING.md)
-  and [RAFT.md](RAFT.md).
-- No streaming snapshot shipping between nodes: a snapshot-install request is
-  answered as unsupported, and only the snapshot boundary is defined.
+- The multi-node *server* replication is an **experimental preview**, off by
+  default and gated behind two opt-ins; it is **not production HA**, not
+  production multi-node clustering, and provides no production automatic failover.
+  See [CLUSTERING.md](CLUSTERING.md) and [RAFT.md](RAFT.md).
+- Peer snapshot install (v0.6.0) is a **bounded, single-message** transfer, not
+  chunked streaming, and targets the strictly-behind follower case.
 - No follower reads or linearizable reads; followers reject reads by default.
 - No distributed transactions. Cluster mode orders commits through Raft but does
   not change single-node isolation semantics; see [TRANSACTIONS.md](TRANSACTIONS.md).

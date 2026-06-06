@@ -120,9 +120,11 @@ jobs:
         run: pkill -f 'auradb server --config examples/cluster' || true
 
   compose-live-smoke:
-    name: Docker Compose live smoke (manual)
+    name: Docker Compose live smoke (manual, local image)
     # Opt-in only: the live Docker Compose path is not a required check (it is
-    # heavier and image-dependent). Run it on demand via "Run workflow".
+    # heavier than the loopback smoke). Run it on demand via "Run workflow".
+    # Uses a LOCALLY BUILT image (no registry pull), so it never depends on GHCR
+    # publish timing — the recommended preview path.
     if: github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     steps:
@@ -132,9 +134,27 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
 
       - name: Build the auradb image for the Compose cluster
-        # Tag the locally built image as the name docker-compose.cluster.yml
-        # references, so Compose uses it without pulling an unpublished tag.
-        run: docker build -t ghcr.io/ohswedd/auradb:0.5.2 .
+        run: docker build -t auradb:0.6.0 .
 
       - name: Generate dev certs, run the cluster, and tear it down
+        env:
+          AURADB_IMAGE: auradb:0.6.0
+        run: bash scripts/smoke_cluster_compose.sh
+
+  published-image-smoke:
+    name: Docker Compose live smoke (published GHCR image)
+    # Post-release verification: pull the published image and run the same
+    # three-node Compose smoke. Manual only, so unreliable GHCR publish timing
+    # never blocks a PR. Run after a release tag has published the image.
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Generate dev certs, run the cluster against the published image
+        env:
+          AURADB_IMAGE: ghcr.io/ohswedd/auradb:0.6.0
         run: bash scripts/smoke_cluster_compose.sh

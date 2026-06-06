@@ -76,6 +76,9 @@ impl ServerContext {
                 pm.append_entries_failures,
                 pm.heartbeat_latency_ms,
                 pm.quorum_available,
+                pm.snapshots_sent,
+                pm.snapshots_installed,
+                pm.snapshots_rejected,
             );
         }
     }

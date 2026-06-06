@@ -7,7 +7,7 @@
 [![CI](https://github.com/Ohswedd/auradb/actions/workflows/ci.yml/badge.svg)](https://github.com/Ohswedd/auradb/actions/workflows/ci.yml)
 [![Security](https://github.com/Ohswedd/auradb/actions/workflows/security.yml/badge.svg)](https://github.com/Ohswedd/auradb/actions/workflows/security.yml)
 [![Docker](https://github.com/Ohswedd/auradb/actions/workflows/docker.yml/badge.svg)](https://github.com/Ohswedd/auradb/actions/workflows/docker.yml)
-[![Release](https://img.shields.io/badge/release-v0.5.2-green.svg)](CHANGELOG.md)
+[![Release](https://img.shields.io/badge/release-v0.6.0-green.svg)](CHANGELOG.md)
 [![Rust](https://img.shields.io/badge/rust-1.85%2B-orange.svg)](https://www.rust-lang.org)
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
 
@@ -34,12 +34,15 @@ AuraDB 0.5.0 introduces a **controlled, experimental multi-node server preview**
 real AuraDB server processes can form a cross-process cluster, elect a leader, and
 replicate writes through Raft over a dedicated, frame-checked, authenticated peer
 transport. The preview is **off by default** and gated behind two explicit
-`[cluster]` opt-ins. **AuraDB v0.5.1 hardens the controlled multi-node preview.
-Single-node mode remains the recommended production mode.** v0.5.1 is a patch
-release that adds local Docker cluster automation with generated development
-certificates, sharper cluster diagnostics, more honest `not_leader` ergonomics,
-and additional leader-restart and follower-catch-up coverage; it makes no
-production-clustering claims. It builds on the v0.4.x Raft and replication
+`[cluster]` opt-ins. **AuraDB v0.6.0 improves the controlled multi-node preview
+and validates fail-stop recovery. It is _not_ production HA. Single-node mode
+remains the recommended production mode.** v0.6.0 adds a leader kill / automatic
+re-election preview, the first real peer snapshot install over the wire (a
+bounded single-message transfer), larger follower catch-up coverage, sharper
+fail-stop diagnostics, a published-image Docker Compose smoke, and peer
+cert/token rotation and cluster backup/restore runbooks; it makes no
+production-clustering or production-automatic-failover claims. See
+[docs/V0_6_RELEASE_NOTES.md](docs/V0_6_RELEASE_NOTES.md). It builds on the v0.4.x Raft and replication
 groundwork (a durable
 consensus core, a replicated commit path, log compaction boundaries, and snapshot
 restore hardening), and changes no on-disk or wire format.

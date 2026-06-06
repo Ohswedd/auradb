@@ -275,6 +275,19 @@ impl SnapshotManifest {
         Ok(engine)
     }
 
+    /// Validate the manifest and decode its logical state — collection schemas
+    /// and current records — for installing into a live engine (the follower side
+    /// of peer snapshot install, [`Engine::install_snapshot`]). Returns the same
+    /// errors as [`verified_payload`](Self::verified_payload) on a future format
+    /// or a digest mismatch.
+    #[allow(clippy::type_complexity)]
+    pub fn decode_state(&self) -> Result<(Vec<CollectionSchema>, Vec<(String, Document)>)> {
+        let payload = self.verified_payload()?;
+        let data: SnapshotData = serde_json::from_slice(payload)
+            .map_err(|e| ReplicationError::SnapshotMalformed(e.to_string()))?;
+        Ok((data.schemas, data.records))
+    }
+
     /// Encode the manifest to bytes (for storage or transfer).
     pub fn encode(&self) -> Result<Vec<u8>> {
         serde_json::to_vec(self).map_err(|e| ReplicationError::SnapshotMalformed(e.to_string()))

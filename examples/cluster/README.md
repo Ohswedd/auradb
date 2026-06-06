@@ -109,10 +109,14 @@ Because containers communicate over a non-loopback Docker network, this path is 
    ```
 
    Or do steps 1–4 in one shot (generate certs, start, wait for a leader, report
-   status, tear down):
+   status, tear down). Select the image with `AURADB_IMAGE` — a locally built
+   image (the recommended preview path, no registry pull) or the published one:
 
    ```bash
-   bash scripts/smoke_cluster_compose.sh
+   # Local image (build it first: docker build -t auradb:0.6.0 .)
+   AURADB_IMAGE=auradb:0.6.0 bash scripts/smoke_cluster_compose.sh
+   # Or the published image (post-release verification)
+   AURADB_IMAGE=ghcr.io/ohswedd/auradb:0.6.0 bash scripts/smoke_cluster_compose.sh
    ```
 
 4. **Inspect** (client ports are published to the host as `7171`/`7181`/`7191`):

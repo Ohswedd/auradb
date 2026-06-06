@@ -399,6 +399,79 @@ impl Engine {
         inner.apply_replicated_batch(batch, log_index)
     }
 
+    /// Install a state-machine snapshot into this live engine at the snapshot's
+    /// boundary `log_index` (the follower-side of peer snapshot install).
+    ///
+    /// The snapshot's committed state — collection schemas plus their current
+    /// records — replaces what the engine holds and the commit watermark advances
+    /// to `log_index`. This **bypasses** the replication log (the snapshot is
+    /// already-committed leader state), so it is safe to call on a follower whose
+    /// replicated write log is attached, where a normal `apply_mutation` would be
+    /// rejected as `not_leader`. Idempotent: a `log_index` at or below the current
+    /// watermark is ignored.
+    ///
+    /// This targets the preview's fail-stop recovery case where the follower is
+    /// strictly behind the snapshot. It upserts the snapshot's records over any
+    /// existing state rather than reconciling divergent history, which is correct
+    /// when the follower's state is a prefix of the snapshot (a follower that only
+    /// fell behind), and is documented as a preview limitation otherwise.
+    pub fn install_snapshot(
+        &self,
+        schemas: Vec<CollectionSchema>,
+        records: Vec<(String, Document)>,
+        log_index: u64,
+    ) -> Result<()> {
+        let mut inner = self.lock();
+        if log_index <= inner.storage.commit_watermark() {
+            return Ok(());
+        }
+        // Install schemas first so the record upserts below have somewhere to go
+        // and indexes/planner stats are initialized.
+        for schema in schemas {
+            schema.validate_definition()?;
+            let name = schema.name.clone();
+            inner.storage.put_schema(schema.clone())?;
+            let mut idx = CollectionIndexes::from_schema(&schema);
+            idx.rebuild(inner.storage.scan(&CollectionId::new(name.clone())))?;
+            inner.indexes.insert(name.clone(), idx);
+            let stats = CollectionStats::compute(
+                &schema,
+                inner.storage.scan(&CollectionId::new(name.clone())),
+            );
+            inner.planner_stats.collections.insert(name, stats);
+        }
+        // Build one committed batch of record upserts and apply it at the
+        // snapshot boundary, reusing the idempotent committed-apply path that
+        // maintains indexes, planner stats, and the commit watermark.
+        let mut ops = Vec::with_capacity(records.len());
+        for (collection, fields) in records {
+            let schema = inner.schema_for(&collection)?;
+            let cid = CollectionId::new(collection.clone());
+            let id = record_id_for(&schema, &fields, inner.next_id())?;
+            let existing = inner.storage.get(&cid, id).cloned();
+            let version = existing.as_ref().map(|r| r.version + 1).unwrap_or(1);
+            ops.push(LogOp::Put {
+                commit_ts: 0,
+                record: Record {
+                    id,
+                    collection: cid,
+                    fields,
+                    version,
+                    created_txn: TxnId::AUTO,
+                },
+            });
+        }
+        inner.apply_replicated_batch(
+            Batch {
+                txn_id: TxnId::AUTO,
+                ops,
+            },
+            log_index,
+        )?;
+        // Refresh planner statistics so the restored engine plans like a loaded one.
+        inner.analyze_all()
+    }
+
     // ----- schema -----
 
     /// Register or replace a collection schema, rebuilding its indexes.
