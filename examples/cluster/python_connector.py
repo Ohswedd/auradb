@@ -15,8 +15,17 @@ the host you locate the leader by trying the published endpoints — this script
 does exactly that, catching ``AuraNotLeaderError`` and moving to the next endpoint
 rather than blindly auto-retrying a write whose application status is ambiguous.
 
-It requires Aura Connector >= 0.4 (``pip install "aura-connector>=0.4,<0.5"``)
-and prints install guidance if the connector is missing.
+It requires Aura Connector >= 0.4 (``pip install "aura-connector>=0.4,<0.5"``;
+v0.4.1+ is recommended for clearer ``AuraNotLeaderError`` messages and a
+secure-by-default redirect) and prints install guidance if the connector is
+missing.
+
+In a topology where the leader's client address is reachable from the client
+(rather than the host-only published ports here), prefer resolving it with
+``auradb cluster leader --addr <node> --json`` and connecting straight to it, or
+catch ``AuraNotLeaderError`` and call ``client.connect_to_leader(exc)`` /
+``client.with_leader_redirect()``. See the connector's
+``examples/auradb_leader_redirect.py``.
 
 Run (after `docker compose -f docker-compose.cluster.yml up -d` and a leader is
 elected):

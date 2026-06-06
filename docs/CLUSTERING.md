@@ -29,6 +29,16 @@
 > [OBSERVABILITY.md](OBSERVABILITY.md), [OPERATIONS.md](OPERATIONS.md), and
 > [CLI.md](CLI.md).
 
+> **AuraDB v0.7.1 polishes connector ergonomics for the controlled multi-node
+> preview (coordinated with Aura Connector v0.4.1). It is not production HA.
+> Single-node mode remains the recommended production mode.** v0.7.1 is
+> docs/conformance only: it adds no new database architecture and leaves the
+> `not_leader` payload and the wire protocol (AWP 1) byte-for-byte unchanged from
+> v0.7.0. Aura Connector v0.4.1 improves the client-side experience (clearer
+> `AuraNotLeaderError` messages, a secure-by-default redirect, transaction-redirect
+> docs). See [V0_7_1_RELEASE_NOTES.md](V0_7_1_RELEASE_NOTES.md) and
+> [AURA_CONNECTOR_COMPATIBILITY.md](AURA_CONNECTOR_COMPATIBILITY.md).
+
 > **AuraDB v0.7.0 adds connector cluster ergonomics for the controlled multi-node
 > preview. It is not production HA. Single-node mode remains the recommended
 > production mode.** The `not_leader` response now carries an additive, structured

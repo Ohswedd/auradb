@@ -301,6 +301,20 @@ cargo test -p auradb-replication --test multi_node -- --ignored --test-threads=1
   loop forever. Aura Connector 0.3.x is not cluster-routing-aware; route writes to
   the leader manually (resolve via `auradb cluster leader` or the
   `leader_client_addr` status field).
+- **Structured `not_leader` payload contract** (v0.7.x; unchanged in v0.7.1):
+  `crates/auradb-server/tests/cluster_preview.rs`
+  (`not_leader_payload_includes_leader_client_addr_when_known`,
+  `not_leader_payload_contains_no_secrets`) and
+  `crates/auradb-server/tests/not_leader.rs` (`not_leader_payload_safe_over_tls_auth`)
+  pin the additive payload that Aura Connector 0.4.x consumes. v0.7.1 changes no
+  server behavior, so these still pass byte-for-byte.
+- **Published-connector cluster conformance** (v0.7.1, Aura Connector v0.4.1): the
+  `cluster.yml` loopback job installs `aura-connector>=0.4.1,<0.5` and runs
+  `run_connector_smoke.py` and `run_connector_conformance.py` against the leader
+  and `run_connector_cluster.py` across leader + follower. The connector's own
+  env-gated live suite reads `AURADB_CLUSTER_LEADER_DSN` /
+  `AURADB_CLUSTER_FOLLOWER_DSN` (plus optional `AURADB_CLUSTER_TOKEN`,
+  `AURADB_CLUSTER_CA`, `AURADB_CLUSTER_SERVER_NAME`). See [CONFORMANCE.md](CONFORMANCE.md).
 
 The multi-node suites run **serially** (`--test-threads=1`); the heaviest stress
 variants are `#[ignore]`d so the default suite stays stable under CI parallelism.

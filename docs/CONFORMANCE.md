@@ -179,6 +179,30 @@ transaction that is never auto-redirected. It is gated on
 stays at v1; Aura Connector 0.3.x remains compatible (it ignores the new object
 and routes the leader manually).
 
+### v0.7.1 connector ergonomics polish (Aura Connector v0.4.1)
+
+v0.7.1 is a coordinated patch with **Aura Connector v0.4.1**. The server and the
+`not_leader` payload are unchanged from v0.7.0 (byte-for-byte), so the
+compatibility tests above still pin the contract; v0.4.1 only improves the
+client-side experience (clearer `AuraNotLeaderError` messages, secure-by-default
+redirect, transaction-redirect docs).
+
+**Connector selection in CI.** The `cluster.yml` loopback job installs the
+published connector in the `>=0.4.1,<0.5` line and, when it is available, runs
+three scenarios against the live cluster: (1) `run_connector_smoke.py` against the
+leader, (2) `run_connector_conformance.py` against the leader, and (3)
+`run_connector_cluster.py` across leader + follower (`AuraNotLeaderError` message
+carries the leader address; reconnect helper works; redirect is bounded;
+transaction redirect is rejected; auth/TLS preserved when configured).
+
+- **On PR/push**, if the published connector is not installable yet (or reports it
+  is too old), the step **skips with a clear message** rather than failing — so
+  coordinated work does not block on connector publish timing. We do not claim a
+  connector version is published when it is not.
+- **On release/tag conformance**, run `cluster.yml` via *Run workflow* with the
+  `require_published_connector` input set so a missing/too-old connector **fails**
+  the job. Flip it on only once Aura Connector v0.4.1 is published.
+
 ## Running
 
 Rust (no server needed - the test spawns one):
