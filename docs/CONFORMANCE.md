@@ -143,6 +143,20 @@ required and AWP stays at v1. The additive v0.6.1 snapshot/lag diagnostics field
 on the health report's `cluster` section and per-peer status are ignored by the
 0.3.x connector.
 
+### v0.6.2 repeated chaos and larger-state recovery hardening
+
+v0.6.2 keeps every scenario above and adds repeated leader restart / re-election,
+larger multi-model data-set recovery, multi-model snapshot install, peer
+reconnect storms, and network-interruption (partition/heal) simulations
+(`crates/auradb-replication/tests/multi_node.rs`), plus recovery diagnostics
+(`crates/auradb-cli/tests/cluster_diagnostics.rs`). The connector leader-hint
+review was again **docs-only** (Option A): the `not_leader` contract is unchanged
+and still pinned by `crates/auradb-server/tests/not_leader.rs`. The only wire
+change is the additive `leader_changes` field on the cluster health report, which
+the 0.3.x connector ignores — **no connector release is required** and AWP stays
+at v1. Published Aura Connector 0.3.0 conformance remains a required CI gate
+(`conformance.yml`).
+
 ## Running
 
 Rust (no server needed - the test spawns one):

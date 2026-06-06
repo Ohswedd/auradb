@@ -43,6 +43,7 @@ fn health(peers: Vec<ClusterPeerHealth>) -> ClusterHealth {
         quorum_available: true,
         peers,
         snapshot: None,
+        leader_changes: 0,
     }
 }
 
@@ -170,6 +171,48 @@ fn doctor_warns_quorum_lost() {
         warnings
             .iter()
             .any(|w| w.contains("no quorum is currently reachable")),
+        "{warnings:?}"
+    );
+}
+
+// ---- recovery diagnostics (v0.6.2) ----
+
+#[test]
+fn status_reports_leader_changes() {
+    let mut h = health(vec![peer("00000000000000a2", "caught_up")]);
+    h.leader_changes = 3;
+    let text = format_cluster_status_text("127.0.0.1:7171", &h);
+    assert!(text.contains("leader_changes: 3"), "{text}");
+}
+
+#[test]
+fn doctor_warns_reconnect_storm() {
+    // A peer still disconnected after many connection attempts is in a reconnect
+    // storm.
+    let mut p = peer("00000000000000a2", "unknown");
+    p.connected = false;
+    p.connect_attempts = 42;
+    p.match_index = None;
+    p.next_index = None;
+    p.lag_entries = None;
+    let warnings = cluster_health_warnings(&health(vec![p]));
+    assert!(
+        warnings
+            .iter()
+            .any(|w| w.contains("reconnect storm") && w.contains("42")),
+        "{warnings:?}"
+    );
+}
+
+#[test]
+fn doctor_warns_repeated_leader_changes() {
+    let mut h = health(vec![peer("00000000000000a2", "caught_up")]);
+    h.leader_changes = 17;
+    let warnings = cluster_health_warnings(&h);
+    assert!(
+        warnings
+            .iter()
+            .any(|w| w.contains("leadership has changed 17 times")),
         "{warnings:?}"
     );
 }

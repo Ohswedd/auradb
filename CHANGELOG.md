@@ -4,6 +4,71 @@ All notable changes to AuraDB are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and the project uses
 [Semantic Versioning](https://semver.org/).
 
+## [0.6.2] - 2026-06-06
+
+Repeated chaos and larger-state recovery hardening. This patch release makes the
+controlled multi-node **preview** more reliable under repeated failures, larger
+data sets, and recovery-heavy scenarios: repeated leader restart / re-election
+cycles, larger multi-model data-set recovery, multi-model snapshot install, a
+peer reconnect storm, deterministic network-interruption (partition/heal)
+simulations, and recovery-focused diagnostics.
+
+This is **not** production HA. There is no production automatic failover claim,
+no linearizable follower reads, no distributed transactions, no dynamic
+membership, and no sharding or multi-region. Multi-node mode remains an
+experimental, opt-in preview; **single-node mode remains the recommended
+production mode.** All v0.6.1 behavior, the storage format, the Aura Wire
+Protocol (AWP v1), and Aura Connector 0.3.x compatibility are preserved — no
+connector release is required.
+
+### Added
+- Repeated leader restart and re-election testing: a required two-cycle
+  kill-leader/elect/restart test that asserts every node reconverges on the
+  identical committed record set with no duplicate apply and an incrementing
+  leader-change metric, plus an `#[ignore]`d five-cycle stress variant.
+- Larger multi-model data-set recovery validation: a follower is stopped, the
+  majority commits a larger run of records spanning scalar, secondary-indexed,
+  full-text, document-path, and vector fields, and after restart the follower's
+  counts, spot reads, full-text search, document-path queries, vector
+  nearest-neighbor results, and planner-used indexes are verified to match the
+  rest of the cluster — with an `#[ignore]`d 5,000-record stress variant and a
+  full-cluster-restart check.
+- Multi-model snapshot install: snapshot-install catch-up that preserves
+  full-text, document-path, and vector records (the live majority compacts past
+  the entries the follower needs, forcing a snapshot install).
+- Peer reconnect storm testing: a follower is disconnected and reconnected
+  repeatedly while the majority keeps committing; replication recovers each time
+  with no duplicate apply and the follower holds a live peer connection after the
+  storm.
+- Deterministic network-interruption (partition/heal) simulations using an
+  in-process transport partition control: a majority partition continues
+  operating, a leader partitioned into a minority cannot commit, a healed
+  partition repairs a follower's log, and a partitioned leader triggers a
+  re-election and reconverges on heal. The isolated node keeps running (its
+  in-memory state is preserved), unlike a stop/restart.
+- Recovery diagnostics: `auradb cluster status --addr` now reports
+  `leader_changes` (a cumulative leadership-instability signal), and
+  `auradb cluster doctor --addr` warns on a peer reconnect storm (a peer still
+  disconnected after many connection attempts) and on repeated leader changes.
+- Published-image cluster smoke retained and strengthened as a release gate: the
+  release checklist requires inspecting the GHCR multi-arch manifest and running
+  the published-image compose smoke before a release is considered done.
+
+### Changed
+- Improved cluster preview recovery test coverage (repeated fail-stop,
+  larger-state, multi-model snapshot install, reconnect storm, partition/heal).
+- Improved troubleshooting guidance for repeated fail-stop, reconnect-storm, and
+  lagging-peer scenarios.
+- The cross-process preview test harness gained a transport partition control
+  (`drop_peer_link` / `heal_peer_link`) used only by tests and chaos scenarios;
+  it has no configuration or CLI surface.
+
+### Fixed
+- A multi-model snapshot-install test could read the snapshot-install counter a
+  hair before it was incremented (the follower's engine reaches the target record
+  count inside the install handler first); it now polls the counter with a bounded
+  deadline.
+
 ## [0.6.1] - 2026-06-06
 
 Snapshot install and published-cluster smoke hardening. This patch release makes

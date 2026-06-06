@@ -132,6 +132,16 @@ the environment so no secret is committed. See [DEPLOYMENT.md](DEPLOYMENT.md).
 > install validates the cluster id, manifest digest, and storage format before
 > touching follower state, so a wrong-cluster or tampered snapshot is rejected.
 
+> **AuraDB v0.6.2 hardens repeated chaos and larger-state recovery in the
+> controlled multi-node preview. It is _not_ production HA. Single-node mode
+> remains the recommended production mode.** The peer-transport security baseline
+> is **unchanged**: two opt-ins still gate the preview, membership is still static,
+> and any non-loopback cluster address still requires peer TLS **and** a shared
+> `peer_auth_token` (an unauthenticated public bind is refused). The v0.6.2
+> network-interruption tests use a test-only, in-process transport partition
+> control (`drop_peer_link` / `heal_peer_link`) that has **no configuration or CLI
+> surface** and does not weaken the handshake, auth, or TLS checks.
+
 Cluster (Raft) mode is disabled by default. v0.5.0 adds a real cross-process peer
 transport, gated by a conservative, fail-closed security baseline:
 

@@ -97,6 +97,7 @@ fn preview_docs_do_not_claim_production_ha() {
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
     for doc in [
         "docs/V0_6_RELEASE_NOTES.md",
+        "docs/V0_6_2_RELEASE_NOTES.md",
         "docs/CLUSTERING.md",
         "README.md",
     ] {

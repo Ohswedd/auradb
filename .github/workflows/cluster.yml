@@ -12,6 +12,11 @@ on:
     branches: [main]
   pull_request:
   workflow_dispatch:
+    inputs:
+      version:
+        description: "Published image tag to smoke against (e.g. 0.6.2)"
+        required: false
+        default: "0.6.2"
 
 env:
   CARGO_TERM_COLOR: always
@@ -70,6 +75,9 @@ jobs:
 
       - name: Live cluster CLI commands
         run: cargo test -p auradb-cli --test cluster_cli
+
+      - name: Recovery diagnostics (leader-change, reconnect-storm warnings)
+        run: cargo test -p auradb-cli --test cluster_diagnostics
 
       - name: Validate example configs
         run: |
@@ -134,11 +142,11 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
 
       - name: Build the auradb image for the Compose cluster
-        run: docker build -t auradb:0.6.1 .
+        run: docker build -t auradb:0.6.2 .
 
       - name: Generate dev certs, run the cluster, and tear it down
         env:
-          AURADB_IMAGE: auradb:0.6.1
+          AURADB_IMAGE: auradb:0.6.2
         run: bash scripts/smoke_cluster_compose.sh
 
   published-image-smoke:
@@ -158,9 +166,9 @@ jobs:
         uses: docker/setup-buildx-action@v3
 
       - name: Inspect the published multi-arch manifest
-        run: docker buildx imagetools inspect ghcr.io/ohswedd/auradb:0.6.1
+        run: docker buildx imagetools inspect ghcr.io/ohswedd/auradb:${{ inputs.version }}
 
       - name: Generate dev certs, run the cluster against the published image
         env:
-          AURADB_IMAGE: ghcr.io/ohswedd/auradb:0.6.1
+          AURADB_IMAGE: ghcr.io/ohswedd/auradb:${{ inputs.version }}
         run: bash scripts/smoke_cluster_compose.sh

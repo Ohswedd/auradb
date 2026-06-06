@@ -12,10 +12,10 @@
 #
 # Image selection (AURADB_IMAGE):
 #   - Locally built image (the required PR/CI path; avoids registry flakiness):
-#       docker build -t auradb:0.6.1 .
-#       AURADB_IMAGE=auradb:0.6.1 bash scripts/smoke_cluster_compose.sh
+#       docker build -t auradb:0.6.2 .
+#       AURADB_IMAGE=auradb:0.6.2 bash scripts/smoke_cluster_compose.sh
 #   - Published image (post-release verification):
-#       AURADB_IMAGE=ghcr.io/ohswedd/auradb:0.6.1 bash scripts/smoke_cluster_compose.sh
+#       AURADB_IMAGE=ghcr.io/ohswedd/auradb:0.6.2 bash scripts/smoke_cluster_compose.sh
 #   - Default (no AURADB_IMAGE): the published image in docker-compose.cluster.yml.
 #
 # Usage:
@@ -25,7 +25,7 @@ set -euo pipefail
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "${REPO_ROOT}"
 COMPOSE_FILE="docker-compose.cluster.yml"
-export AURADB_IMAGE="${AURADB_IMAGE:-ghcr.io/ohswedd/auradb:0.6.1}"
+export AURADB_IMAGE="${AURADB_IMAGE:-ghcr.io/ohswedd/auradb:0.6.2}"
 
 if ! command -v docker >/dev/null 2>&1; then
   echo "docker is not installed; skipping the live Compose smoke." >&2
@@ -65,6 +65,39 @@ trap cleanup EXIT
 NODE_PORTS="7171 7172 7173"
 
 echo "using image: ${AURADB_IMAGE}"
+
+# For a registry (multi-arch) image, print the published manifest for the record.
+case "${AURADB_IMAGE}" in
+  */*:*)
+    if docker buildx imagetools inspect "${AURADB_IMAGE}" > /tmp/auradb_manifest 2>/dev/null; then
+      echo "image manifest:"
+      sed -n '1,24p' /tmp/auradb_manifest
+    else
+      echo "image manifest: (not available; not a registry image or buildx missing)"
+    fi
+    ;;
+esac
+
+# Validate the image actually reports the expected version and FAIL LOUDLY on a
+# tag/version mismatch — a common published-image-smoke footgun is smoking the
+# wrong tag (e.g. a stale :latest) and reporting a green run for the wrong build.
+IMAGE_TAG_VERSION="${AURADB_IMAGE##*:}"
+case "${IMAGE_TAG_VERSION}" in
+  [0-9]*.[0-9]*.[0-9]*)
+    echo "verifying the image reports auradb ${IMAGE_TAG_VERSION}..."
+    CONTAINER_VERSION="$(docker run --rm "${AURADB_IMAGE}" auradb version 2>/dev/null \
+      | grep -o '[0-9]*\.[0-9]*\.[0-9]*' | head -1 || true)"
+    echo "container auradb version: ${CONTAINER_VERSION:-unknown}"
+    if [ -n "${CONTAINER_VERSION}" ] && [ "${CONTAINER_VERSION}" != "${IMAGE_TAG_VERSION}" ]; then
+      echo "ERROR: image ${AURADB_IMAGE} reports version ${CONTAINER_VERSION}, but the tag" >&2
+      echo "       claims ${IMAGE_TAG_VERSION}. Wrong image tag — refusing to smoke it." >&2
+      exit 1
+    fi
+    ;;
+  *)
+    echo "image tag '${IMAGE_TAG_VERSION}' is not a semantic version; skipping version check"
+    ;;
+esac
 
 echo "generating development peer certificates..."
 AURADB="${AURADB}" bash examples/cluster/generate-dev-certs.sh

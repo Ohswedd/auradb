@@ -157,6 +157,10 @@ exactly as in v0.3.1.
 > **AuraDB v0.5.0 introduces a controlled, experimental multi-node server
 > preview. Single-node mode remains the recommended production mode.**
 
+> **v0.6.2 adds no new configuration.** The repeated-chaos and larger-state
+> recovery hardening is tests and diagnostics only; the `[cluster]` options below
+> are unchanged, and the recommended production mode is still single-node.
+
 A single-node cluster (no peers):
 
 ```toml

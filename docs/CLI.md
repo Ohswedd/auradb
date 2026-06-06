@@ -152,7 +152,10 @@ stand up a running node.
   and `catch_up_state` (`normal` / `probing` / `snapshot_needed` /
   `snapshot_installing` / `caught_up` / `unknown`) — alongside cluster-level
   snapshot diagnostics (last installed boundary, last install time, last error,
-  bytes sent, bytes installed, in-progress gauge, needed-total).
+  bytes sent, bytes installed, in-progress gauge, needed-total). **(v0.6.2)** The
+  report also includes `leader_changes`, the cumulative number of leadership
+  changes this node has observed since it started (a leadership-instability
+  signal).
 - `auradb cluster peers [--data-dir <dir>] [--config <file>] [--json]` — list
   configured cluster peers.
 - `auradb cluster doctor [--data-dir <dir>] [--config <file>] [--json]` — validate
@@ -160,8 +163,11 @@ stand up a running node.
   `--addr <client-addr>` (plus optional `--token` / `--tls-ca` / `--server-name`,
   and `--json`) it instead becomes a **live** check: it fetches live health from a
   running server and emits warnings for a follower that needs a snapshot, a lagging
-  follower, and quorum at the minimum / quorum lost. The offline `--data-dir` form
-  is unchanged.
+  follower, and quorum at the minimum / quorum lost. **(v0.6.2)** It additionally
+  warns on a **peer reconnect storm** (a peer still disconnected after many
+  outbound connection attempts) and on **repeated leader changes** (the
+  `leader_changes` count crossing an instability threshold). The offline
+  `--data-dir` form is unchanged.
 - `auradb cluster bootstrap [--data-dir <dir>] [--config <file>]` — bootstrap a
   brand-new single-node cluster identity.
 - `auradb cluster compact-log [--data-dir <dir>] [--config <file>] [--dry-run]

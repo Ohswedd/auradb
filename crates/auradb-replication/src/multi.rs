@@ -197,6 +197,14 @@ struct Shared {
     counters: Counters,
     /// Leader-side snapshot resend rate-limiting state.
     snapshot_send: Mutex<SnapshotSendState>,
+    /// Peers whose inbound messages this node is currently ignoring, used to
+    /// simulate a network partition in the cross-process preview tests without
+    /// tearing a node down. A logical partition between two nodes is formed when
+    /// each end drops the other: bytes may still be written to the socket, but
+    /// the receiver discards every frame from a dropped peer, so no Raft state is
+    /// exchanged across the cut. This is a deliberate test/chaos transport
+    /// control — it is never set by configuration or the CLI.
+    dropped_peers: Mutex<HashSet<NodeId>>,
 }
 
 /// A small, lock-free-ish view of commit progress for `replicate` to wait on.
@@ -291,6 +299,7 @@ impl PeerCluster {
             connected_in: Mutex::new(HashMap::new()),
             counters: Counters::default(),
             snapshot_send: Mutex::new(SnapshotSendState::default()),
+            dropped_peers: Mutex::new(HashSet::new()),
         });
 
         // Replay any committed-but-unapplied entries before serving (restart
@@ -637,6 +646,40 @@ impl PeerCluster {
                 .snapshots_rejected
                 .load(Ordering::Relaxed),
         )
+    }
+
+    /// Simulate a network partition by ignoring every inbound frame from `peer`
+    /// until [`PeerCluster::heal_peer_link`] is called. The socket stays open, so
+    /// the partition heals (replication and elections resume) the moment the drop
+    /// is lifted — no reconnect, and this node's in-memory Raft state is preserved
+    /// across the cut. A clean two-way partition is formed by calling this on both
+    /// endpoints. This is a preview chaos/test control and has no configuration or
+    /// CLI surface.
+    pub fn drop_peer_link(&self, peer: NodeId) {
+        self.shared
+            .dropped_peers
+            .lock()
+            .expect("dropped_peers")
+            .insert(peer);
+    }
+
+    /// Lift a [`PeerCluster::drop_peer_link`] partition, resuming delivery of
+    /// inbound frames from `peer`.
+    pub fn heal_peer_link(&self, peer: NodeId) {
+        self.shared
+            .dropped_peers
+            .lock()
+            .expect("dropped_peers")
+            .remove(&peer);
+    }
+
+    /// Whether inbound frames from `peer` are currently being dropped.
+    pub fn peer_link_dropped(&self, peer: NodeId) -> bool {
+        self.shared
+            .dropped_peers
+            .lock()
+            .expect("dropped_peers")
+            .contains(&peer)
     }
 
     /// Stop all background tasks and wait for them to finish.
@@ -1171,6 +1214,18 @@ async fn inbound_read_loop(
             _ = shutdown.changed() => { if *shutdown.borrow() { return Ok(()); } else { continue; } }
             m = transport::read_message(stream, MAX_FRAME_BYTES) => m?,
         };
+        // Simulated-partition drop: while this peer is partitioned from us, discard
+        // every frame it sends (Raft messages and snapshot install traffic alike)
+        // as if the link were cut. The connection itself is left intact so the
+        // partition can heal without a reconnect.
+        if shared
+            .dropped_peers
+            .lock()
+            .expect("dropped_peers")
+            .contains(&from)
+        {
+            continue;
+        }
         match msg {
             PeerMessage::Raft {
                 from: claimed,

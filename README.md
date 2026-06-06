@@ -7,7 +7,7 @@
 [![CI](https://github.com/Ohswedd/auradb/actions/workflows/ci.yml/badge.svg)](https://github.com/Ohswedd/auradb/actions/workflows/ci.yml)
 [![Security](https://github.com/Ohswedd/auradb/actions/workflows/security.yml/badge.svg)](https://github.com/Ohswedd/auradb/actions/workflows/security.yml)
 [![Docker](https://github.com/Ohswedd/auradb/actions/workflows/docker.yml/badge.svg)](https://github.com/Ohswedd/auradb/actions/workflows/docker.yml)
-[![Release](https://img.shields.io/badge/release-v0.6.1-green.svg)](CHANGELOG.md)
+[![Release](https://img.shields.io/badge/release-v0.6.2-green.svg)](CHANGELOG.md)
 [![Rust](https://img.shields.io/badge/rust-1.85%2B-orange.svg)](https://www.rust-lang.org)
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
 
@@ -41,13 +41,15 @@ re-election preview, the first real peer snapshot install over the wire (a
 bounded single-message transfer), larger follower catch-up coverage, sharper
 fail-stop diagnostics, a published-image Docker Compose smoke, and peer
 cert/token rotation and cluster backup/restore runbooks; it makes no
-production-clustering or production-automatic-failover claims. **AuraDB v0.6.1
-hardens snapshot install and published-cluster smoke for the controlled
-multi-node preview**: multi-arch (`linux/amd64` + `linux/arm64`) Docker images,
-per-peer snapshot/lag diagnostics surfaced by `auradb cluster status`/`doctor`,
-and dry-run cluster backup/restore planners. It is still _not_ production HA and
-single-node mode remains the recommended production mode. See
-[docs/V0_6_RELEASE_NOTES.md](docs/V0_6_RELEASE_NOTES.md). It builds on the v0.4.x Raft and replication
+production-clustering or production-automatic-failover claims. **AuraDB v0.6.2
+hardens repeated chaos and larger-state recovery for the controlled multi-node
+preview**: repeated leader restart / re-election cycles, larger multi-model
+data-set recovery, multi-model snapshot install, a peer reconnect storm,
+deterministic network-interruption (partition/heal) simulations, and
+recovery-focused diagnostics (`leader_changes`, reconnect-storm and
+repeated-leader-change warnings). It is still _not_ production HA and single-node
+mode remains the recommended production mode. See
+[docs/V0_6_2_RELEASE_NOTES.md](docs/V0_6_2_RELEASE_NOTES.md). It builds on the v0.4.x Raft and replication
 groundwork (a durable
 consensus core, a replicated commit path, log compaction boundaries, and snapshot
 restore hardening), and changes no on-disk or wire format.

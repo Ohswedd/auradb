@@ -276,6 +276,23 @@ local testing and early validation only. See [CLUSTERING.md](CLUSTERING.md),
 [OBSERVABILITY.md](OBSERVABILITY.md), and
 [CLUSTER_TROUBLESHOOTING.md](CLUSTER_TROUBLESHOOTING.md).
 
+### Recovery diagnostics (v0.6.2)
+
+For recovery-heavy scenarios, watch two new signals:
+
+- **`leader_changes`** in `auradb cluster status --addr` — a cumulative count
+  that climbs when leadership flaps. A steadily rising value on an otherwise quiet
+  cluster means leadership instability, not a single clean failover.
+- **`auradb cluster doctor --addr` warnings** — in addition to the existing
+  snapshot-needed / lagging-follower / quorum warnings, it now warns on a **peer
+  reconnect storm** (a peer still disconnected after many connection attempts) and
+  on **repeated leader changes**.
+
+See [CLUSTER_TROUBLESHOOTING.md](CLUSTER_TROUBLESHOOTING.md) for what each warning
+points at and how to resolve it. v0.6.2 hardens repeated chaos and larger-state
+recovery in the preview but adds no production-HA claim; **single-node mode
+remains the recommended production mode.**
+
 ## Upgrading
 
 Upgrading is a drop-in binary replacement; the storage format is unchanged at v2.

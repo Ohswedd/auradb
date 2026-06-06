@@ -29,6 +29,19 @@
 > [OBSERVABILITY.md](OBSERVABILITY.md), [OPERATIONS.md](OPERATIONS.md), and
 > [CLI.md](CLI.md).
 
+> **AuraDB v0.6.2 hardens repeated chaos and larger-state recovery behavior in
+> the controlled multi-node preview. It is not production HA. Single-node mode
+> remains the recommended production mode.** v0.6.2 adds repeated leader restart /
+> re-election cycles, larger multi-model data-set recovery, multi-model snapshot
+> install, peer reconnect-storm testing, deterministic network-interruption
+> (partition/heal) simulations, and recovery diagnostics: `auradb cluster status
+> --addr` now reports `leader_changes`, and `auradb cluster doctor --addr` warns
+> on a peer reconnect storm and on repeated leader changes. Multi-node mode still
+> requires both `enabled = true` and `experimental_multi_node = true`, membership
+> is still static (no join/leave commands), and non-loopback cluster networking
+> still requires TLS **and** a peer auth token. See
+> [V0_6_2_RELEASE_NOTES.md](V0_6_2_RELEASE_NOTES.md).
+
 AuraDB introduced cluster mode in v0.4.0 (an optional, durable replication path
 built on a Raft consensus core) and hardened it in v0.4.1. v0.5.0 builds on that
 groundwork by adding a real cross-process peer transport and Raft over it, so a
