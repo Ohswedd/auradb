@@ -14,10 +14,18 @@
 //!   the leader brings a lagging follower current);
 //! - leader-only writes; followers reject writes with `not_leader`.
 //!
+//! - peer snapshot install: when a follower has fallen behind the leader's
+//!   compacted log prefix and can no longer be served by AppendEntries, the
+//!   leader ships a bounded, single-message state-machine snapshot over the peer
+//!   transport; the follower validates it (cluster id, format, digest, boundary,
+//!   storage format, size), installs it atomically, advances its Raft boundary,
+//!   and resumes AppendEntries.
+//!
 //! ## What is explicitly **not** here
 //!
 //! - dynamic membership (join/leave) — membership is static;
-//! - snapshot install over the wire — answered as unsupported;
+//! - chunked / streaming snapshot transfer — the preview ships a whole snapshot
+//!   in one bounded message ([`transport::MAX_SNAPSHOT_BYTES`]);
 //! - automatic production failover guarantees, linearizable follower reads, or
 //!   distributed transactions.
 //!
@@ -32,7 +40,7 @@ use auradb::{Engine, ReplicatedLog};
 use auradb_cluster::{ClusterConfig, ClusterIdentity, ClusterStatus, NodeId, NodeRole};
 use auradb_raft::{
     Command, Envelope, FileStorage, LogIndex, Message as RaftMessage, RaftConfig, RaftError,
-    RaftMetrics, RaftNode, RaftStorage,
+    RaftMetrics, RaftNode, RaftStorage, Term,
 };
 use auradb_storage::Batch;
 use tokio::net::{TcpListener, TcpStream};
@@ -41,7 +49,10 @@ use tokio::sync::{mpsc, watch};
 use crate::apply::apply_command;
 use crate::command::ReplicatedCommand;
 use crate::error::{ReplicationError, Result};
-use crate::transport::{self, Hello, HelloAck, Membership, PeerMessage, MAX_FRAME_BYTES};
+use crate::snapshot::SnapshotManifest;
+use crate::transport::{
+    self, Hello, HelloAck, Membership, PeerMessage, MAX_FRAME_BYTES, MAX_SNAPSHOT_BYTES,
+};
 
 /// One logical Raft tick of wall-clock time.
 const TICK: Duration = Duration::from_millis(20);
@@ -58,6 +69,9 @@ const BACKOFF_MAX: Duration = Duration::from_secs(2);
 /// Bound on a single peer's outbound queue. Raft retransmits, so dropping under
 /// pressure is safe.
 const OUTBOUND_QUEUE: usize = 1024;
+/// How long the leader waits before resending a snapshot to the same peer at the
+/// same boundary, so a still-installing follower is not flooded each tick.
+const SNAPSHOT_RESEND_COOLDOWN: Duration = Duration::from_millis(500);
 
 /// Per-peer reachability and replication state for diagnostics.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -87,6 +101,20 @@ struct Counters {
     append_entries_failures: AtomicU64,
     heartbeat_latency_ms: AtomicU64,
     apply_errors: AtomicU64,
+    /// Snapshots this node has sent to followers as a leader.
+    snapshots_sent: AtomicU64,
+    /// Snapshots this node has installed from a leader as a follower.
+    snapshots_installed: AtomicU64,
+    /// Snapshot installs this node rejected (validation failure).
+    snapshots_rejected: AtomicU64,
+}
+
+/// Per-peer record of the last snapshot the leader sent, to rate-limit resends
+/// while a follower is still installing.
+#[derive(Debug, Default)]
+struct SnapshotSendState {
+    /// Peer id -> (boundary index last sent, when it was sent).
+    last_sent: HashMap<NodeId, (u64, Instant)>,
 }
 
 /// A pending dialer spec produced during startup: peer id, address, the
@@ -125,6 +153,8 @@ struct Shared {
     /// Node ids of peers with an established inbound connection (duplicate guard).
     connected_in: Mutex<HashMap<NodeId, ()>>,
     counters: Counters,
+    /// Leader-side snapshot resend rate-limiting state.
+    snapshot_send: Mutex<SnapshotSendState>,
 }
 
 /// A small, lock-free-ish view of commit progress for `replicate` to wait on.
@@ -218,6 +248,7 @@ impl PeerCluster {
             links,
             connected_in: Mutex::new(HashMap::new()),
             counters: Counters::default(),
+            snapshot_send: Mutex::new(SnapshotSendState::default()),
         });
 
         // Replay any committed-but-unapplied entries before serving (restart
@@ -414,6 +445,17 @@ impl PeerCluster {
                 .heartbeat_latency_ms
                 .load(Ordering::Relaxed),
             quorum_available: self.quorum_available(),
+            snapshots_sent: self.shared.counters.snapshots_sent.load(Ordering::Relaxed),
+            snapshots_installed: self
+                .shared
+                .counters
+                .snapshots_installed
+                .load(Ordering::Relaxed),
+            snapshots_rejected: self
+                .shared
+                .counters
+                .snapshots_rejected
+                .load(Ordering::Relaxed),
         }
     }
 
@@ -424,6 +466,37 @@ impl PeerCluster {
             .get(&peer)
             .map(|l| l.attempts.load(Ordering::Relaxed))
             .unwrap_or(0)
+    }
+
+    /// Compact this node's durable Raft log up to its applied index, discarding
+    /// the snapshot-covered prefix. Returns the compaction outcome.
+    ///
+    /// Compaction is bounded by the committed and applied indices (see
+    /// [`FileStorage::compactable_prefix`]), so it never discards entries a peer
+    /// might still need *unless that peer has fallen behind the prefix* — in which
+    /// case the peer is brought current by a snapshot install rather than by
+    /// AppendEntries. This is the live counterpart to the offline
+    /// `auradb cluster compact-log` maintenance command.
+    pub fn compact_log(&self) -> Result<auradb_raft::CompactionOutcome> {
+        let mut node = self.shared.raft.lock().expect("raft mutex");
+        let applied = node.applied_index();
+        let up_to = node.storage().compactable_prefix(applied);
+        Ok(node.storage_mut().compact(up_to, applied)?)
+    }
+
+    /// Snapshot-install counters for diagnostics: `(sent, installed, rejected)`.
+    pub fn snapshot_counters(&self) -> (u64, u64, u64) {
+        (
+            self.shared.counters.snapshots_sent.load(Ordering::Relaxed),
+            self.shared
+                .counters
+                .snapshots_installed
+                .load(Ordering::Relaxed),
+            self.shared
+                .counters
+                .snapshots_rejected
+                .load(Ordering::Relaxed),
+        )
     }
 
     /// Stop all background tasks and wait for them to finish.
@@ -458,6 +531,12 @@ pub struct PeerMetrics {
     pub heartbeat_latency_ms: u64,
     /// Whether a quorum is currently reachable.
     pub quorum_available: bool,
+    /// Snapshots sent to followers as a leader.
+    pub snapshots_sent: u64,
+    /// Snapshots installed from a leader as a follower.
+    pub snapshots_installed: u64,
+    /// Snapshot installs rejected (validation failure).
+    pub snapshots_rejected: u64,
 }
 
 impl Shared {
@@ -564,13 +643,14 @@ enum DriveEvent {
 /// apply. Holds the Raft mutex only for the synchronous core; never across an
 /// `.await`.
 fn drive(shared: &Arc<Shared>, event: DriveEvent) {
-    let (outbox, committed, state, prev_term, new_term, append_failures): (
+    let (outbox, committed, state, prev_term, new_term, append_failures, snapshot): (
         Vec<Envelope>,
         Vec<auradb_raft::LogEntry>,
         CommitState,
         u64,
         u64,
         u64,
+        Option<SnapshotPlan>,
     ) = {
         let mut node = shared.raft.lock().expect("raft mutex");
         let prev_term = node.term().get();
@@ -590,6 +670,10 @@ fn drive(shared: &Arc<Shared>, event: DriveEvent) {
             term: new_term,
             is_leader: node.role() == NodeRole::Leader,
         };
+        // Detect followers that have fallen behind the compacted prefix: a peer
+        // whose next index is at or below the leader's last-included (compacted)
+        // index can no longer be served by AppendEntries and needs a snapshot.
+        let snapshot = snapshot_plan(&node);
         (
             outbox,
             committed,
@@ -597,6 +681,7 @@ fn drive(shared: &Arc<Shared>, event: DriveEvent) {
             prev_term,
             new_term,
             ae_recv.saturating_sub(prev_ae_recv),
+            snapshot,
         )
     };
 
@@ -633,6 +718,147 @@ fn drive(shared: &Arc<Shared>, event: DriveEvent) {
             let commit_ts = shared.commit_ts_base + entry.index.get();
             if apply_command(&shared.engine, &cmd, commit_ts).is_err() {
                 shared.counters.apply_errors.fetch_add(1, Ordering::Relaxed);
+            }
+        }
+    }
+
+    // Ship a snapshot to any follower that has fallen behind the compacted
+    // prefix (outside the Raft lock; building it reads the engine).
+    if let Some(plan) = snapshot {
+        send_snapshots(shared, plan);
+    }
+}
+
+/// A leader's plan to ship a snapshot: the committed boundary the snapshot covers
+/// plus the connected peers that need it (next index at or below the compacted
+/// prefix).
+struct SnapshotPlan {
+    last_included_index: u64,
+    last_included_term: u64,
+    peers: Vec<NodeId>,
+}
+
+/// Build a [`SnapshotPlan`] if this node is a leader with a compacted prefix and
+/// at least one peer that can no longer be served by AppendEntries.
+fn snapshot_plan(node: &RaftNode<FileStorage>) -> Option<SnapshotPlan> {
+    if node.role() != NodeRole::Leader {
+        return None;
+    }
+    let base = node.storage().last_included_index();
+    if base.get() == 0 {
+        return None; // nothing compacted: AppendEntries can always serve peers
+    }
+    let behind: Vec<NodeId> = node
+        .peers()
+        .iter()
+        .copied()
+        .filter(|&p| node.next_index(p).map(|n| n <= base).unwrap_or(false))
+        .collect();
+    if behind.is_empty() {
+        return None;
+    }
+    // The snapshot covers the leader's current committed (and applied) state.
+    let lii = node.commit_index();
+    let lit = node.storage().term_at(lii).unwrap_or(Term::ZERO);
+    Some(SnapshotPlan {
+        last_included_index: lii.get(),
+        last_included_term: lit.get(),
+        peers: behind,
+    })
+}
+
+/// Build and enqueue a bounded snapshot for each behind peer, rate-limited so a
+/// still-installing follower is not flooded.
+fn send_snapshots(shared: &Arc<Shared>, plan: SnapshotPlan) {
+    // Decide which peers are due a (re)send for this boundary.
+    let due: Vec<NodeId> = {
+        let mut state = shared.snapshot_send.lock().expect("snapshot_send");
+        let now = Instant::now();
+        plan.peers
+            .into_iter()
+            .filter(|peer| {
+                // Only send to connected peers.
+                let connected = shared
+                    .links
+                    .get(peer)
+                    .map(|l| l.connected.load(Ordering::Relaxed))
+                    .unwrap_or(false);
+                if !connected {
+                    return false;
+                }
+                match state.last_sent.get(peer) {
+                    Some((idx, when))
+                        if *idx == plan.last_included_index
+                            && now.duration_since(*when) < SNAPSHOT_RESEND_COOLDOWN =>
+                    {
+                        false // already sent this boundary recently
+                    }
+                    _ => {
+                        state
+                            .last_sent
+                            .insert(*peer, (plan.last_included_index, now));
+                        true
+                    }
+                }
+            })
+            .collect()
+    };
+    if due.is_empty() {
+        return;
+    }
+
+    // Capture the leader's current state as a single bounded snapshot manifest.
+    let manifest = match SnapshotManifest::create(
+        &shared.engine,
+        plan.last_included_index,
+        plan.last_included_term,
+        env!("CARGO_PKG_VERSION"),
+    ) {
+        Ok(m) => m.with_identity(
+            Some(shared.identity.cluster_id().to_string()),
+            Some(shared.identity.node_id().to_string()),
+        ),
+        Err(e) => {
+            tracing::warn!(error = %e, "failed to capture snapshot for peer install");
+            return;
+        }
+    };
+    let bytes = match manifest.encode() {
+        Ok(b) => b,
+        Err(e) => {
+            tracing::warn!(error = %e, "failed to encode snapshot for peer install");
+            return;
+        }
+    };
+    if bytes.len() > MAX_SNAPSHOT_BYTES {
+        tracing::warn!(
+            size = bytes.len(),
+            limit = MAX_SNAPSHOT_BYTES,
+            "snapshot exceeds the single-message peer transfer limit; \
+             peer catch-up via snapshot install is not possible for this dataset"
+        );
+        return;
+    }
+
+    let from = shared.identity.node_id();
+    let term = {
+        let node = shared.raft.lock().expect("raft mutex");
+        node.term().get()
+    };
+    for peer in due {
+        if let Some(link) = shared.links.get(&peer) {
+            let msg = PeerMessage::InstallSnapshotRequest {
+                from,
+                term,
+                last_included_index: plan.last_included_index,
+                last_included_term: plan.last_included_term,
+                snapshot: bytes.clone(),
+            };
+            if link.tx.try_send(msg).is_ok() {
+                shared
+                    .counters
+                    .snapshots_sent
+                    .fetch_add(1, Ordering::Relaxed);
             }
         }
     }
@@ -727,7 +953,7 @@ async fn handle_inbound(
     .await?;
 
     // Read loop.
-    let result = inbound_read_loop(&mut stream, node_id, &inbound_tx, &mut shutdown).await;
+    let result = inbound_read_loop(&mut stream, node_id, &inbound_tx, &shared, &mut shutdown).await;
     shared
         .connected_in
         .lock()
@@ -740,6 +966,7 @@ async fn inbound_read_loop(
     stream: &mut transport::PeerStream,
     from: NodeId,
     inbound_tx: &mpsc::UnboundedSender<(NodeId, RaftMessage)>,
+    shared: &Arc<Shared>,
     shutdown: &mut watch::Receiver<bool>,
 ) -> std::result::Result<(), transport::TransportError> {
     loop {
@@ -760,20 +987,174 @@ async fn inbound_read_loop(
                     return Ok(()); // driver gone
                 }
             }
-            PeerMessage::InstallSnapshotRequest { .. } => {
-                // Snapshot install is not implemented; answer explicitly.
-                let _ = transport::write_message(
-                    stream,
-                    &PeerMessage::Unsupported {
-                        request: "install_snapshot".into(),
-                    },
-                )
-                .await;
+            PeerMessage::InstallSnapshotRequest {
+                from: claimed,
+                term,
+                last_included_index,
+                last_included_term,
+                snapshot,
+            } => {
+                if claimed != from {
+                    continue; // a peer may only speak for itself
+                }
+                // Install (validate + apply) synchronously, then route the
+                // response back over our outbound link to the leader.
+                let (success, follower_term) = install_snapshot_from_leader(
+                    shared,
+                    term,
+                    last_included_index,
+                    last_included_term,
+                    snapshot,
+                );
+                if let Some(link) = shared.links.get(&from) {
+                    let _ = link.tx.try_send(PeerMessage::InstallSnapshotResponse {
+                        from: shared.identity.node_id(),
+                        term: follower_term,
+                        success,
+                        last_included_index,
+                    });
+                }
+            }
+            PeerMessage::InstallSnapshotResponse {
+                from: claimed,
+                term: _,
+                success,
+                last_included_index,
+            } => {
+                if claimed != from {
+                    continue;
+                }
+                if success {
+                    ack_snapshot_installed(shared, from, last_included_index);
+                }
             }
             PeerMessage::Hello(_) | PeerMessage::HelloAck(_) => {
                 // Unexpected mid-stream handshake; ignore.
             }
             PeerMessage::Unsupported { .. } | PeerMessage::Error(_) => {}
+        }
+    }
+}
+
+/// Validate and install a leader-shipped snapshot on this (follower) node.
+///
+/// Every failure mode is checked **before** the engine or Raft state is mutated,
+/// so a rejected snapshot (oversized, wrong cluster, bad digest, future format,
+/// stale term, or a boundary that disagrees with the manifest) leaves existing
+/// follower state untouched. Returns `(success, this node's current term)`.
+fn install_snapshot_from_leader(
+    shared: &Arc<Shared>,
+    leader_term: u64,
+    last_included_index: u64,
+    last_included_term: u64,
+    snapshot: Vec<u8>,
+) -> (bool, u64) {
+    let current_term = shared.raft.lock().expect("raft mutex").term().get();
+
+    let reject = |shared: &Arc<Shared>, reason: &str| {
+        shared
+            .counters
+            .snapshots_rejected
+            .fetch_add(1, Ordering::Relaxed);
+        tracing::debug!(reason, "rejected peer snapshot install");
+        (false, current_term)
+    };
+
+    // 1. Bounded transfer: refuse an oversized snapshot before decoding.
+    if snapshot.len() > MAX_SNAPSHOT_BYTES {
+        return reject(shared, "snapshot exceeds the single-message size limit");
+    }
+    // 2. Stale leader term: ignore a snapshot from an older term.
+    if leader_term < current_term {
+        return reject(shared, "snapshot from a stale leader term");
+    }
+    // 3. Decode the manifest (a future manifest format is refused here).
+    let manifest = match SnapshotManifest::decode(&snapshot) {
+        Ok(m) => m,
+        Err(_) => return reject(shared, "snapshot manifest decode failed"),
+    };
+    // 4. Cluster identity: refuse a snapshot from a different cluster.
+    let our_cluster = shared.identity.cluster_id().to_string();
+    if let Some(found) = &manifest.meta.cluster_id {
+        if found != &our_cluster {
+            return reject(shared, "snapshot belongs to a different cluster");
+        }
+    }
+    // 5. Storage format: refuse a snapshot captured from a newer storage format.
+    if manifest.meta.storage_format_version > auradb_storage::FORMAT_VERSION {
+        return reject(shared, "snapshot captured from a newer storage format");
+    }
+    // 6. Boundary agreement: the message and manifest must name the same boundary.
+    if manifest.meta.last_included_index != last_included_index
+        || manifest.meta.last_included_term != last_included_term
+    {
+        return reject(shared, "snapshot boundary disagrees with the manifest");
+    }
+    // 7. Decode the logical state (verifies the payload digest).
+    let (schemas, records) = match manifest.decode_state() {
+        Ok(state) => state,
+        Err(_) => return reject(shared, "snapshot payload digest mismatch"),
+    };
+
+    // All validation passed: install into the live engine, then advance the Raft
+    // boundary. The engine's commit watermark is the MVCC commit timestamp
+    // (`commit_ts_base + log_index`), the same mapping the apply path uses, so the
+    // snapshot's records and any AppendEntries that follow stay consistent.
+    let commit_ts = shared.commit_ts_base + last_included_index;
+    if let Err(e) = shared.engine.install_snapshot(schemas, records, commit_ts) {
+        tracing::warn!(error = %e, "engine snapshot install failed");
+        shared
+            .counters
+            .snapshots_rejected
+            .fetch_add(1, Ordering::Relaxed);
+        return (false, current_term);
+    }
+    let installed = {
+        let mut node = shared.raft.lock().expect("raft mutex");
+        match node
+            .storage_mut()
+            .install_snapshot(LogIndex(last_included_index), Term(last_included_term))
+        {
+            Ok(_) => {
+                node.adopt_snapshot(LogIndex(last_included_index));
+                true
+            }
+            Err(e) => {
+                tracing::warn!(error = %e, "raft snapshot boundary install failed");
+                false
+            }
+        }
+    };
+    if installed {
+        shared
+            .counters
+            .snapshots_installed
+            .fetch_add(1, Ordering::Relaxed);
+    } else {
+        shared
+            .counters
+            .snapshots_rejected
+            .fetch_add(1, Ordering::Relaxed);
+    }
+    (installed, current_term)
+}
+
+/// Leader-side: a follower acknowledged installing a snapshot up to
+/// `last_included_index`. Advance the leader's tracking for that peer and route
+/// any AppendEntries it queues to resume replication.
+fn ack_snapshot_installed(shared: &Arc<Shared>, peer: NodeId, last_included_index: u64) {
+    let from = shared.identity.node_id();
+    let outbox = {
+        let mut node = shared.raft.lock().expect("raft mutex");
+        node.on_snapshot_installed(peer, LogIndex(last_included_index));
+        node.take_messages()
+    };
+    for env in outbox {
+        if let Some(link) = shared.links.get(&env.to) {
+            let _ = link.tx.try_send(PeerMessage::Raft {
+                from,
+                message: env.message,
+            });
         }
     }
 }

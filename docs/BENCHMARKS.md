@@ -163,3 +163,27 @@ than a direct single-node write because it must replicate and commit on a
 majority; a `not_leader` response from a follower returns promptly without a
 replication round trip. Preview cluster overhead is expected and is **not** a
 universal performance claim.
+
+## Cluster ergonomics and fail-stop recovery baseline (v0.6.0)
+
+v0.6.0 refreshes the committed engine baseline on the release machine:
+
+```bash
+cargo run --release -p auradb-cli -- bench --data-dir .local/v060-bench --json \
+  --output benches/baseline/v0.6.0.json
+auradb bench compare --baseline benches/baseline/v0.5.1.json --current benches/baseline/v0.6.0.json
+```
+
+The committed baseline (`benches/baseline/v0.6.0.json`) is the single-node engine
+suite — the stable, deterministic regression signal. The v0.6.0 fail-stop and
+**peer snapshot install** paths (leader write latency before and after a follower
+restart, follower catch-up, snapshot install time, and `not_leader` response
+latency) are topology- and dataset-dependent, so they are exercised by the
+cross-process preview tests
+(`crates/auradb-replication/tests/multi_node.rs`: leader restart, follower
+catch-up, and `install_snapshot_restores_follower_after_compaction` /
+`append_entries_resume_after_snapshot_install`) rather than committed as
+micro-benchmark numbers that would not be comparable across machines. Snapshot
+install is a bounded single-message transfer; its cost scales with the snapshot
+size up to `MAX_SNAPSHOT_BYTES` (8 MiB). None of this is a universal performance
+claim.

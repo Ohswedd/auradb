@@ -41,6 +41,16 @@ The `Metrics` registry tracks:
   These cover peer connectivity, per-peer replication lag, election activity,
   AppendEntries failures, heartbeat latency, and whether a majority is available.
   See [CLUSTERING.md](CLUSTERING.md).
+- **Fail-stop / snapshot-install metrics (v0.6.0, present when the preview is
+  enabled)** - `auradb_cluster_snapshots_sent_total` (snapshots a leader shipped
+  to lagging followers), `auradb_cluster_snapshots_installed_total` (snapshots
+  this node installed as a follower), and `auradb_cluster_snapshots_rejected_total`
+  (snapshot installs rejected by validation — oversized, wrong cluster, bad
+  digest, or future format). A rising sent/installed pair during recovery is the
+  signal that a follower fell behind the compacted prefix and was brought current
+  by a snapshot install rather than AppendEntries; a rising rejected count points
+  at a misconfigured or mismatched peer. Leadership churn is tracked by
+  `auradb_raft_leader_changes_total`. See [V0_6_RELEASE_NOTES.md](V0_6_RELEASE_NOTES.md).
 
 A `snapshot()` is serializable and can be exported:
 

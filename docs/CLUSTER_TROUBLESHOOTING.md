@@ -155,6 +155,22 @@ both the committed and applied indices, records the last included index/term in
 retained prefix fail closed with a `Compacted` error rather than returning a wrong
 answer.
 
+**A follower behind the compacted prefix (v0.6.0).** If a follower has fallen so
+far behind that the entries it needs were compacted away, the leader can no
+longer serve it with AppendEntries. In v0.6.0 the leader ships a **bounded,
+single-message peer snapshot install** to bring it current, then resumes
+AppendEntries. Watch the metrics:
+
+- `auradb_cluster_snapshots_sent_total` rising on the leader and
+  `auradb_cluster_snapshots_installed_total` rising on the follower means a
+  snapshot install is doing the catch-up — expected and healthy.
+- `auradb_cluster_snapshots_rejected_total` rising on the follower means an
+  install was refused (oversized snapshot beyond `MAX_SNAPSHOT_BYTES` = 8 MiB,
+  a wrong cluster id, a bad payload digest, or a newer manifest/storage format).
+  Check the peers share a cluster id and run compatible builds; a dataset whose
+  snapshot exceeds the size limit cannot be caught up by the single-message
+  preview install.
+
 ## Inspecting snapshot manifests
 
 ```bash

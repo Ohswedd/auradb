@@ -1,7 +1,7 @@
 # Release guide
 
 This guide describes how a maintainer cuts an AuraDB release. The current release
-is `0.5.2`.
+is `0.6.0`.
 
 ## Pre-release checklist
 
@@ -23,15 +23,23 @@ is `0.5.2`.
       release machine with
       `auradb bench --json --output benches/baseline/<version>.json`.
 
-### Multi-node preview validation (v0.5.0, hardened in v0.5.1)
+### Multi-node preview validation (v0.5.x, fail-stop recovery in v0.6.0)
 
-- [ ] **Local Docker cluster smoke (v0.5.1).** Generate dev certs and run the
-      live three-node Compose cluster end to end (or rely on the cluster CI
-      workflow when Docker is unavailable):
+- [ ] **Local-image Docker cluster smoke (required path).** Build the image
+      locally and run the live three-node Compose cluster end to end via
+      `AURADB_IMAGE` (no registry pull, so it never depends on GHCR publish
+      timing), or rely on the cluster CI workflow when Docker is unavailable:
 
       ```bash
-      bash examples/cluster/generate-dev-certs.sh
-      bash scripts/smoke_cluster_compose.sh
+      docker build -t auradb:0.6.0 .
+      AURADB_IMAGE=auradb:0.6.0 bash scripts/smoke_cluster_compose.sh
+      ```
+
+- [ ] **Published-image smoke (post-release verification).** After the release
+      tag has published the image to GHCR, verify it with the same smoke:
+
+      ```bash
+      AURADB_IMAGE=ghcr.io/ohswedd/auradb:0.6.0 bash scripts/smoke_cluster_compose.sh
       ```
 
 - [ ] **Three-node loopback smoke.** Start the three local nodes and confirm an

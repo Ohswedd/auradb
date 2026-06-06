@@ -255,6 +255,53 @@ impl<S: RaftStorage> RaftNode<S> {
         &self.config.peers
     }
 
+    // ---- snapshot install ----
+
+    /// Adopt a snapshot boundary the caller has already installed into storage
+    /// (the follower side of peer snapshot install): advance the in-memory commit
+    /// and applied indices to at least `last_included_index`, so the node resumes
+    /// AppendEntries from just past the boundary and does not re-apply the
+    /// snapshot-covered prefix. The durable log boundary and commit index are
+    /// installed by the storage layer; this keeps the node's volatile view in
+    /// step with it.
+    pub fn adopt_snapshot(&mut self, last_included_index: LogIndex) {
+        if self.commit_index < last_included_index {
+            self.commit_index = last_included_index;
+        }
+        if self.last_applied < last_included_index {
+            self.last_applied = last_included_index;
+        }
+    }
+
+    /// Record, on the leader, that `peer` has installed a snapshot up to
+    /// `last_included_index`: advance the leader's tracked match/next index for
+    /// that peer and resume replication from just past the boundary. A no-op when
+    /// this node is not the leader or the peer is already further ahead.
+    pub fn on_snapshot_installed(&mut self, peer: NodeId, last_included_index: LogIndex) {
+        if self.role != NodeRole::Leader {
+            return;
+        }
+        let cur_match = self
+            .match_index
+            .get(&peer)
+            .copied()
+            .unwrap_or(LogIndex::ZERO);
+        if last_included_index > cur_match {
+            self.match_index.insert(peer, last_included_index);
+        }
+        let next = last_included_index.next();
+        let cur_next = self
+            .next_index
+            .get(&peer)
+            .copied()
+            .unwrap_or(LogIndex::ZERO);
+        if next > cur_next {
+            self.next_index.insert(peer, next);
+        }
+        // Resume replication to the peer from the freshly installed boundary.
+        self.send_append_to(peer);
+    }
+
     // ---- driving the clock ----
 
     /// Advance the logical clock by one tick.

@@ -4,20 +4,24 @@ This roadmap describes where AuraDB is headed beyond the first single-node
 release. It is a statement of direction, not a delivery commitment. Items are
 grouped by theme and listed roughly in the order we expect to approach them.
 
-## Current release: 0.5.1
+## Current release: 0.6.0
 
-AuraDB 0.5.1 is a patch release that **hardens the controlled multi-node
-preview** shipped in 0.5.0: local Docker cluster automation with generated
-development certificates (`examples/cluster/generate-dev-certs.sh`,
-`scripts/smoke_cluster_compose.sh`), a live `auradb cluster status --addr`
-diagnostics view, sharper `not_leader` ergonomics (a leader hint carrying the
-leader's client address plus an additive `retryable` flag), peer TLS rotation
-guidance and validation, and additional leader-restart and follower-catch-up
-test coverage. Leader restart is **preview behavior, not production automatic
-failover**. There is **no format or wire change** (storage unchanged; AWP 1 with
-additive fields), so Aura Connector 0.3.x remains compatible and no connector
+AuraDB 0.6.0 **improves the controlled multi-node preview and validates
+fail-stop recovery.** It adds a leader kill / automatic re-election preview (a
+stopped leader is taken over by the surviving majority; the old node rejoins as a
+follower and catches up), the first real **peer snapshot install over the wire**
+(a bounded single-message transfer for a follower that fell behind the compacted
+prefix, with full validation and failure safety), larger follower catch-up
+coverage, sharper fail-stop diagnostics (leader-change and snapshot-install
+counters), a published-image Docker Compose smoke (`AURADB_IMAGE`), and peer
+certificate/token rotation and cluster backup/restore runbooks. It is **not
+production HA**: leader kill and re-election are a **fail-stop recovery preview**,
+not production automatic failover, and there is no linearizable follower read,
+distributed transaction, dynamic membership, sharding, or multi-region. There is
+**no format or wire change** (storage unchanged; AWP 1 with additive fail-stop
+diagnostics fields), so Aura Connector 0.3.x remains compatible and no connector
 release is required. **Single-node mode remains the recommended production
-mode.** The "not part of the preview" list below is unchanged — v0.5.1 makes no
+mode.** The "not part of the preview" list below is unchanged — v0.6.0 makes no
 new production-clustering claims.
 
 ### Delivered in 0.5.0
@@ -220,13 +224,14 @@ The following remain **future** and are not present in 0.5.0:
 - Automatic failover.
 - Dynamic cluster membership / joint consensus (`join` / `leave` / `step-down`);
   membership is static in the preview.
-- Streaming snapshot install between nodes (the snapshot boundary is defined and
-  an install request is answered as unsupported in 0.5.0).
+- **Chunked / streaming** snapshot install between nodes. v0.6.0 ships a
+  **bounded, single-message** peer snapshot install (capped at 8 MiB); chunked
+  streaming of arbitrarily large snapshots is still future work.
 - Linearizable reads and follower reads (followers reject reads in the preview).
 - Sharding and multi-region deployment.
 
-These remain explicitly out of scope for the 0.5.0 preview and are not implied by
-any current documentation.
+These remain explicitly out of scope for the multi-node preview and are not
+implied by any current documentation.
 
 ## Data services
 

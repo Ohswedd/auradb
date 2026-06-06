@@ -251,6 +251,11 @@ impl TestCluster {
     /// Panics only if no write can be committed within a generous deadline.
     async fn write_via_leader(&self, live: &[usize], id: i64, v: i64) {
         let deadline = Instant::now() + Duration::from_secs(30);
+        // Once a proposal may have committed but its ack was lost (a transient
+        // timeout / leadership churn), a retry can re-observe *its own* prior
+        // write as a primary-key conflict. That means the write did land, so
+        // treat a conflict after a transient attempt as success (at-least-once).
+        let mut may_have_committed = false;
         loop {
             if let Some(li) = self.live_leader_index(live) {
                 let engine = self.nodes[li].engine.clone();
@@ -261,6 +266,7 @@ impl TestCluster {
                 .unwrap();
                 match result {
                     Ok(_) => return,
+                    Err(auradb::core::Error::UniqueViolation(_)) if may_have_committed => return,
                     Err(err) => {
                         let transient = matches!(&err, auradb::core::Error::NotLeader(_))
                             || matches!(&err, auradb::core::Error::Internal(m)
@@ -268,6 +274,7 @@ impl TestCluster {
                         if !transient {
                             panic!("write {id} via leader {li} failed: {err}");
                         }
+                        may_have_committed = true;
                     }
                 }
             }
@@ -447,7 +454,7 @@ async fn follower_catches_up_after_restart() {
 /// Start a single node that lists one peer which never comes up, so its dialer
 /// must retry. Returns the live node, the dead peer's id, this node's listen
 /// address, the cluster id, and the data dir guard.
-async fn node_with_dead_peer() -> (Arc<PeerCluster>, NodeId, String, ClusterId, TempDir) {
+async fn node_with_dead_peer() -> (Arc<PeerCluster>, NodeId, String, ClusterId, TempDir, Engine) {
     let cluster_id = ClusterId::new(0xDEAD).unwrap();
     let ports = reserve_ports(2);
     let me = NodeId::from_raw(1);
@@ -475,12 +482,12 @@ async fn node_with_dead_peer() -> (Arc<PeerCluster>, NodeId, String, ClusterId, 
     let id = identity(cluster_id, me);
     let listen_addr = format!("127.0.0.1:{}", ports[0]);
     let peer = PeerCluster::spawn(engine.clone(), id, cfg, dir.path().join("cluster")).unwrap();
-    (peer, dead, listen_addr, cluster_id, dir)
+    (peer, dead, listen_addr, cluster_id, dir, engine)
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn peer_connection_retries_bounded() {
-    let (peer, dead, _addr, _cid, _dir) = node_with_dead_peer().await;
+    let (peer, dead, _addr, _cid, _dir, _engine) = node_with_dead_peer().await;
     // Over half a second the dialer should retry a handful of times with bounded
     // backoff — not spin thousands of times.
     tokio::time::sleep(Duration::from_millis(600)).await;
@@ -498,7 +505,7 @@ async fn peer_connection_retries_bounded() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn peer_connection_shutdown_clean() {
-    let (peer, _dead, _addr, _cid, _dir) = node_with_dead_peer().await;
+    let (peer, _dead, _addr, _cid, _dir, _engine) = node_with_dead_peer().await;
     tokio::time::sleep(Duration::from_millis(100)).await;
     // Shutdown must complete promptly even while a dialer is mid-backoff.
     let done = tokio::time::timeout(Duration::from_secs(3), peer.shutdown()).await;
@@ -533,7 +540,7 @@ async fn minority_cannot_commit() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn peer_status_reports_unreachable_peer() {
-    let (peer, dead, _addr, _cid, _dir) = node_with_dead_peer().await;
+    let (peer, dead, _addr, _cid, _dir, _engine) = node_with_dead_peer().await;
     tokio::time::sleep(Duration::from_millis(300)).await;
     let statuses = peer.peer_status();
     let s = statuses
@@ -851,37 +858,129 @@ async fn follower_catches_up_with_snapshot_boundary_present() {
     cluster.shutdown().await;
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn follower_catches_up_after_log_compaction_if_supported() {
-    // Snapshot install is not implemented in the multi-node preview: a follower
-    // that needs entries the leader has compacted away would require an install,
-    // which is answered with a structured `Unsupported` response rather than
-    // silently corrupting state or hanging. Drive that path directly over the
-    // peer transport by impersonating a configured-but-absent peer.
+// ----- peer snapshot install (v0.6.0) -----
+
+/// Drive a follower behind the leader's compacted prefix so it can only be
+/// brought current by a snapshot install. Returns the running cluster, the
+/// follower index, and the committed record count it must reach.
+async fn run_snapshot_install_scenario() -> (TestCluster, usize, usize) {
+    let mut cluster = TestCluster::start(3).await;
+    let ids = cluster.ids();
+    let addrs = cluster.addrs();
+    let leader = cluster.wait_for_leader(Duration::from_secs(10)).await;
+    let all: Vec<usize> = (0..3).collect();
+
+    // Seed a baseline every node holds.
+    for id in 1..=20 {
+        cluster.write_via_leader(&all, id, id).await;
+    }
+    cluster.wait_all_have(20, Duration::from_secs(10)).await;
+
+    // Stop one follower and commit a long run it will miss.
+    let follower = (0..3).find(|&i| i != leader).unwrap();
+    cluster.stop(follower).await;
+    let live: Vec<usize> = (0..3).filter(|&i| i != follower).collect();
+    let target = 120usize;
+    for id in 21..=target as i64 {
+        cluster.write_via_leader(&live, id, id).await;
+    }
+    cluster
+        .wait_indices_have(&live, target, Duration::from_secs(20))
+        .await;
+
+    // Compact the live nodes' logs so the entries the follower needs are gone:
+    // whichever node leads can now only serve the follower via a snapshot
+    // install, not via AppendEntries.
+    for &i in &live {
+        let _ = cluster.nodes[i].peer.compact_log();
+    }
+
+    // Bring the follower back; it must be caught up by a snapshot install.
+    cluster.restart(follower, &ids, &addrs).await;
+    (cluster, follower, target)
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 6)]
+async fn install_snapshot_restores_follower_after_compaction() {
+    let (cluster, follower, target) = run_snapshot_install_scenario().await;
+    // The follower caught up to the full committed state.
+    cluster
+        .wait_indices_have(&[follower], target, Duration::from_secs(30))
+        .await;
+    // It was brought current by an actual snapshot install (not AppendEntries):
+    // since both live nodes compacted the entries the follower needed, the only
+    // possible catch-up path is a snapshot install. Poll the counters with a
+    // bounded deadline — the follower's engine reaches `target` records inside the
+    // install handler a hair before the install counter is incremented, so a
+    // single read right after catch-up can race that increment.
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        let installed = cluster.nodes[follower].peer.snapshot_counters().1;
+        let sent: u64 = (0..3)
+            .map(|i| cluster.nodes[i].peer.snapshot_counters().0)
+            .sum();
+        if installed >= 1 && sent >= 1 {
+            break;
+        }
+        if Instant::now() >= deadline {
+            panic!(
+                "expected a snapshot install: follower installed={installed}, cluster sent={sent}"
+            );
+        }
+        tokio::time::sleep(Duration::from_millis(25)).await;
+    }
+    cluster.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 6)]
+async fn append_entries_resume_after_snapshot_install() {
+    let (cluster, follower, target) = run_snapshot_install_scenario().await;
+    cluster
+        .wait_indices_have(&[follower], target, Duration::from_secs(30))
+        .await;
+    // After the snapshot install, normal AppendEntries replication resumes: new
+    // writes committed by the leader reach the recovered follower too.
+    let all: Vec<usize> = (0..3).collect();
+    for id in (target as i64 + 1)..=(target as i64 + 10) {
+        cluster.write_via_leader(&all, id, id).await;
+    }
+    cluster
+        .wait_indices_have(&[follower], target + 10, Duration::from_secs(30))
+        .await;
+    cluster.shutdown().await;
+}
+
+/// Connect to `addr` and complete the peer handshake as `node_id`, retrying
+/// briefly while the listener binds. Returns the open stream.
+async fn handshake_as_peer(
+    addr: &str,
+    cluster_id: ClusterId,
+    node_id: NodeId,
+) -> tokio::net::TcpStream {
     use auradb_replication::transport::{self, Hello, PeerMessage, MAX_FRAME_BYTES};
     use tokio::net::TcpStream;
 
-    let (peer, _dead, addr, cluster_id, _dir) = node_with_dead_peer().await;
-    // Connect as the configured peer (node 2), which the live node knows. The
-    // listener binds inside a spawned task, so retry briefly until it is up.
-    let connect_deadline = Instant::now() + Duration::from_secs(5);
+    let deadline = Instant::now() + Duration::from_secs(5);
     let mut stream = loop {
-        match TcpStream::connect(&addr).await {
+        match TcpStream::connect(addr).await {
             Ok(s) => break s,
-            Err(_) if Instant::now() < connect_deadline => {
+            Err(_) if Instant::now() < deadline => {
                 tokio::time::sleep(Duration::from_millis(25)).await;
             }
             Err(e) => panic!("peer listener never came up: {e}"),
         }
     };
-    let hello = PeerMessage::Hello(Hello {
-        cluster_id,
-        node_id: NodeId::from_raw(2),
-        advertise_addr: "127.0.0.1:1".into(),
-        token: auradb_cluster::Secret::default(),
-    });
-    transport::write_message(&mut stream, &hello).await.unwrap();
-    // Expect a HelloAck (handshake accepted).
+    transport::write_message(
+        &mut stream,
+        &PeerMessage::Hello(Hello {
+            cluster_id,
+            node_id,
+            advertise_addr: "127.0.0.1:1".into(),
+            token: auradb_cluster::Secret::default(),
+        }),
+    )
+    .await
+    .unwrap();
     match transport::read_message(&mut stream, MAX_FRAME_BYTES)
         .await
         .unwrap()
@@ -889,23 +988,144 @@ async fn follower_catches_up_after_log_compaction_if_supported() {
         PeerMessage::HelloAck(_) => {}
         other => panic!("expected HelloAck, got {other:?}"),
     }
-    // Ask the leader to install a snapshot; it must answer Unsupported.
-    transport::write_message(
-        &mut stream,
-        &PeerMessage::InstallSnapshotRequest {
-            from: NodeId::from_raw(2),
-        },
-    )
-    .await
-    .unwrap();
-    let resp = transport::read_message(&mut stream, MAX_FRAME_BYTES)
+    stream
+}
+
+/// A sample snapshot manifest tagged with `cluster_id`, covering boundary
+/// index 50 / term 1, with a handful of records.
+fn sample_manifest(cluster_id: ClusterId) -> auradb_replication::SnapshotManifest {
+    let tmp = tempfile::tempdir().unwrap();
+    let src = Engine::open(tmp.path().join("data")).unwrap();
+    src.create_schema(schema()).unwrap();
+    for id in 1..=5 {
+        src.apply_mutation(insert_mutation(id, id)).unwrap();
+    }
+    auradb_replication::SnapshotManifest::create(&src, 50, 1, "test")
+        .unwrap()
+        .with_identity(Some(cluster_id.to_string()), None)
+}
+
+/// Send an install request to a live node impersonating its configured peer and
+/// assert the node rejects it (its rejected-snapshot counter advances).
+async fn assert_snapshot_rejected(
+    peer: &Arc<PeerCluster>,
+    addr: &str,
+    cluster_id: ClusterId,
+    request: auradb_replication::transport::PeerMessage,
+) {
+    use auradb_replication::transport;
+    let mut stream = handshake_as_peer(addr, cluster_id, NodeId::from_raw(2)).await;
+    let before = peer.snapshot_counters().2;
+    transport::write_message(&mut stream, &request)
         .await
         .unwrap();
-    match resp {
-        PeerMessage::Unsupported { request } => {
-            assert_eq!(request, "install_snapshot");
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        if peer.snapshot_counters().2 > before {
+            return;
         }
-        other => panic!("snapshot install must be reported unsupported, got {other:?}"),
+        if Instant::now() >= deadline {
+            panic!("node did not reject the invalid snapshot install");
+        }
+        tokio::time::sleep(Duration::from_millis(25)).await;
     }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn install_snapshot_rejects_oversized_payload() {
+    use auradb_replication::transport::{PeerMessage, MAX_SNAPSHOT_BYTES};
+    let (peer, _dead, addr, cluster_id, _dir, _engine) = node_with_dead_peer().await;
+    let req = PeerMessage::InstallSnapshotRequest {
+        from: NodeId::from_raw(2),
+        term: u64::MAX, // never stale, so the size check is what rejects it
+        last_included_index: 50,
+        last_included_term: 1,
+        snapshot: vec![0u8; MAX_SNAPSHOT_BYTES + 1],
+    };
+    assert_snapshot_rejected(&peer, &addr, cluster_id, req).await;
+    peer.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn install_snapshot_rejects_wrong_cluster() {
+    use auradb_replication::transport::PeerMessage;
+    let (peer, _dead, addr, cluster_id, _dir, _engine) = node_with_dead_peer().await;
+    // A manifest from a different cluster id.
+    let other = ClusterId::new(0x9999).unwrap();
+    let manifest = sample_manifest(other);
+    let req = PeerMessage::InstallSnapshotRequest {
+        from: NodeId::from_raw(2),
+        term: u64::MAX,
+        last_included_index: 50,
+        last_included_term: 1,
+        snapshot: manifest.encode().unwrap(),
+    };
+    assert_snapshot_rejected(&peer, &addr, cluster_id, req).await;
+    peer.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn install_snapshot_rejects_bad_digest() {
+    use auradb_replication::transport::PeerMessage;
+    let (peer, _dead, addr, cluster_id, _dir, _engine) = node_with_dead_peer().await;
+    // Same cluster, but the payload is corrupted after the digest was computed.
+    let mut manifest = sample_manifest(cluster_id);
+    manifest.payload.push(0xFF);
+    let req = PeerMessage::InstallSnapshotRequest {
+        from: NodeId::from_raw(2),
+        term: u64::MAX,
+        last_included_index: 50,
+        last_included_term: 1,
+        snapshot: manifest.encode().unwrap(),
+    };
+    assert_snapshot_rejected(&peer, &addr, cluster_id, req).await;
+    peer.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn install_snapshot_rejects_future_format() {
+    use auradb_replication::transport::PeerMessage;
+    let (peer, _dead, addr, cluster_id, _dir, _engine) = node_with_dead_peer().await;
+    let mut manifest = sample_manifest(cluster_id);
+    manifest.meta.format_version = 9999; // newer than this build understands
+    let req = PeerMessage::InstallSnapshotRequest {
+        from: NodeId::from_raw(2),
+        term: u64::MAX,
+        last_included_index: 50,
+        last_included_term: 1,
+        snapshot: manifest.encode().unwrap(),
+    };
+    assert_snapshot_rejected(&peer, &addr, cluster_id, req).await;
+    peer.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn install_snapshot_failure_preserves_existing_state() {
+    use auradb_replication::transport::PeerMessage;
+    let (peer, _dead, addr, cluster_id, _dir, engine) = node_with_dead_peer().await;
+    // Give the node some existing local state.
+    for id in 1..=5 {
+        engine.apply_mutation(insert_mutation(id, id)).unwrap();
+    }
+    assert_eq!(engine.find(&FindQuery::new("C")).unwrap().len(), 5);
+
+    // A corrupt snapshot is rejected before any state is touched.
+    let mut manifest = sample_manifest(cluster_id);
+    manifest.payload.push(0xFF);
+    let req = PeerMessage::InstallSnapshotRequest {
+        from: NodeId::from_raw(2),
+        term: u64::MAX,
+        last_included_index: 50,
+        last_included_term: 1,
+        snapshot: manifest.encode().unwrap(),
+    };
+    assert_snapshot_rejected(&peer, &addr, cluster_id, req).await;
+
+    // Existing records are untouched.
+    assert_eq!(
+        engine.find(&FindQuery::new("C")).unwrap().len(),
+        5,
+        "a rejected snapshot must not modify existing follower state"
+    );
     peer.shutdown().await;
 }

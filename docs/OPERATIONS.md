@@ -135,10 +135,11 @@ portable snapshots with `auradb snapshot create|inspect|restore`. For diagnosing
 see [CLUSTER_TROUBLESHOOTING.md](CLUSTER_TROUBLESHOOTING.md). See also
 [CLUSTERING.md](CLUSTERING.md) and [CLI.md](CLI.md).
 
-## Multi-node preview operations (v0.5.0, hardened in v0.5.1)
+## Multi-node preview operations (v0.5.0, hardened in v0.5.1, fail-stop recovery in v0.6.0)
 
-> **AuraDB v0.5.1 hardens the controlled multi-node preview. Single-node mode
-> remains the recommended production mode.**
+> **AuraDB v0.6.0 improves the controlled multi-node preview and validates
+> fail-stop recovery. It is _not_ production HA. Single-node mode remains the
+> recommended production mode.**
 
 The preview lets real server processes form a cross-process cluster, elect a
 leader, and replicate writes through Raft. It is **off by default** and requires
@@ -187,6 +188,46 @@ Operating notes:
   [CLUSTERING.md](CLUSTERING.md).
 - **Watch quorum.** `auradb_cluster_quorum_available` and the
   `quorum_available` status field tell you whether a majority is connected.
+
+### Fail-stop recovery (v0.6.0, preview)
+
+Stopping a leader is recovered by the surviving majority — a **fail-stop recovery
+preview**, not production automatic failover:
+
+- The majority elects a new leader (term advances); the new leader accepts writes.
+- A client that wrote to the old leader gets a `not_leader` error with a leader
+  hint and a retryable flag; retry against the new leader's client address
+  (`auradb cluster leader --addr <any-node>`).
+- The old node restarts as a follower and catches up — by AppendEntries if its
+  log still overlaps the leader's, or by a **snapshot install** if it fell behind
+  the leader's compacted prefix (see [REPLICATION.md](REPLICATION.md)).
+- Track recovery with `auradb cluster status --addr` (role, leader, per-peer
+  `match_index`) and the metrics `auradb_raft_leader_changes_total`,
+  `auradb_cluster_snapshots_sent_total`, and
+  `auradb_cluster_snapshots_installed_total`.
+
+### Cluster backup and restore (v0.6.0, preview)
+
+The preview cluster backup story is **leader-side logical backup → single-node
+restore → seed a fresh preview cluster**:
+
+```bash
+# 1. Back up the latest committed state from the leader's data directory
+#    (stop or quiesce the leader, or run against its data dir).
+auradb dump --data-dir /path/to/leader/data --out cluster-backup.jsonl
+
+# 2. Restore into a fresh single-node data directory.
+auradb restore --data-dir restored --input cluster-backup.jsonl
+
+# 3. Run restored as single-node (recommended), or bootstrap a NEW preview
+#    cluster from it by initializing fresh cluster identities on each node.
+auradb server --data-dir restored --bind 127.0.0.1 --port 7171
+```
+
+The backup captures committed state only (no uncommitted entries) and excludes
+the Raft log. **Restoring directly into a live multi-node cluster is not
+supported** — restore into single-node, then bootstrap a fresh preview cluster if
+you need one. See [UPGRADING.md](UPGRADING.md) and [STORAGE_ENGINE.md](STORAGE_ENGINE.md).
 
 Single-node mode remains the recommended production path; use the preview for
 local testing and early validation only. See [CLUSTERING.md](CLUSTERING.md),

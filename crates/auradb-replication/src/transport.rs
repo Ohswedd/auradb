@@ -10,8 +10,12 @@
 //!   membership), and a shared authentication token;
 //! - unknown, duplicate, or wrong-cluster peers are rejected with a structured
 //!   [`PeerError`];
-//! - snapshot install is **not** implemented and is answered with a structured
-//!   [`PeerMessage::Unsupported`] rather than silently ignored;
+//! - snapshot install is carried as a bounded, single-message
+//!   [`PeerMessage::InstallSnapshotRequest`] (the preview transfers a whole
+//!   snapshot in one frame, capped by [`MAX_SNAPSHOT_BYTES`]) and answered with a
+//!   [`PeerMessage::InstallSnapshotResponse`]; an unrecognized request is still
+//!   answered with a structured [`PeerMessage::Unsupported`] rather than silently
+//!   ignored;
 //! - secrets (the peer auth token) never appear in `Debug` output.
 //!
 //! Loopback-only deployments may run without TLS (the documented preview
@@ -36,6 +40,11 @@ pub const PROTOCOL_VERSION: u8 = 1;
 /// Maximum accepted peer frame payload (16 MiB). Oversized frames are rejected
 /// before allocation.
 pub const MAX_FRAME_BYTES: u32 = 16 * 1024 * 1024;
+/// Maximum accepted single-message snapshot payload (8 MiB), strictly below
+/// [`MAX_FRAME_BYTES`] so the encoded request still fits one frame. The preview
+/// ships a whole snapshot in one bounded message rather than chunked streaming;
+/// a snapshot larger than this is refused on both the send and receive sides.
+pub const MAX_SNAPSHOT_BYTES: usize = 8 * 1024 * 1024;
 
 /// A stream usable for the peer transport (plain TCP or TLS).
 pub trait PeerIo: AsyncRead + AsyncWrite + Send + Unpin {}
@@ -160,11 +169,35 @@ pub enum PeerMessage {
         /// The Raft message body (RequestVote, AppendEntries, and responses).
         message: RaftMessage,
     },
-    /// A request this build does not implement (e.g. snapshot install). The
-    /// receiver answers with [`PeerMessage::Unsupported`].
+    /// A leader installs a bounded, single-message state-machine snapshot on a
+    /// follower that has fallen behind the leader's compacted log prefix. The
+    /// snapshot is carried as an encoded [`crate::SnapshotManifest`] in
+    /// `snapshot`, bounded by [`MAX_SNAPSHOT_BYTES`].
     InstallSnapshotRequest {
-        /// The sending node id.
+        /// The sending (leader) node id.
         from: NodeId,
+        /// The leader's term.
+        term: u64,
+        /// The last log index the snapshot includes.
+        last_included_index: u64,
+        /// The term of `last_included_index`.
+        last_included_term: u64,
+        /// The encoded snapshot manifest (schemas, records, metadata, digest).
+        /// Base64-encoded on the wire so it stays one compact JSON string rather
+        /// than a byte-array that would bloat past the frame limit.
+        #[serde(with = "base64_bytes")]
+        snapshot: Vec<u8>,
+    },
+    /// A follower's response to an [`PeerMessage::InstallSnapshotRequest`].
+    InstallSnapshotResponse {
+        /// The responding (follower) node id.
+        from: NodeId,
+        /// The follower's term, so the leader steps down on a higher term.
+        term: u64,
+        /// Whether the snapshot was validated and installed.
+        success: bool,
+        /// On success, the boundary index the follower installed (echoed back).
+        last_included_index: u64,
     },
     /// A structured "not supported" response.
     Unsupported {
@@ -173,6 +206,82 @@ pub enum PeerMessage {
     },
     /// A structured error (typically a handshake rejection).
     Error(PeerError),
+}
+
+/// Compact, dependency-free base64 (standard alphabet) for the snapshot payload
+/// so an `InstallSnapshotRequest` serializes as one JSON string rather than a
+/// byte-array that would multiply its size past the frame limit.
+mod base64_bytes {
+    use serde::{Deserialize, Deserializer, Serializer};
+
+    const ALPHABET: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+
+    pub fn serialize<S: Serializer>(bytes: &[u8], s: S) -> Result<S::Ok, S::Error> {
+        s.serialize_str(&encode(bytes))
+    }
+
+    pub fn deserialize<'de, D: Deserializer<'de>>(d: D) -> Result<Vec<u8>, D::Error> {
+        let s = String::deserialize(d)?;
+        decode(&s).map_err(serde::de::Error::custom)
+    }
+
+    fn encode(bytes: &[u8]) -> String {
+        let mut out = String::with_capacity(bytes.len().div_ceil(3) * 4);
+        for chunk in bytes.chunks(3) {
+            let b = [
+                chunk[0],
+                *chunk.get(1).unwrap_or(&0),
+                *chunk.get(2).unwrap_or(&0),
+            ];
+            let n = ((b[0] as u32) << 16) | ((b[1] as u32) << 8) | (b[2] as u32);
+            out.push(ALPHABET[((n >> 18) & 63) as usize] as char);
+            out.push(ALPHABET[((n >> 12) & 63) as usize] as char);
+            out.push(if chunk.len() > 1 {
+                ALPHABET[((n >> 6) & 63) as usize] as char
+            } else {
+                '='
+            });
+            out.push(if chunk.len() > 2 {
+                ALPHABET[(n & 63) as usize] as char
+            } else {
+                '='
+            });
+        }
+        out
+    }
+
+    fn decode(s: &str) -> Result<Vec<u8>, String> {
+        fn val(c: u8) -> Result<u32, String> {
+            match c {
+                b'A'..=b'Z' => Ok((c - b'A') as u32),
+                b'a'..=b'z' => Ok((c - b'a' + 26) as u32),
+                b'0'..=b'9' => Ok((c - b'0' + 52) as u32),
+                b'+' => Ok(62),
+                b'/' => Ok(63),
+                _ => Err(format!("invalid base64 byte {c:#x}")),
+            }
+        }
+        let s = s.trim().as_bytes();
+        if s.len() % 4 != 0 {
+            return Err("base64 length must be a multiple of 4".into());
+        }
+        let mut out = Vec::with_capacity(s.len() / 4 * 3);
+        for chunk in s.chunks(4) {
+            let pad = chunk.iter().filter(|&&c| c == b'=').count();
+            let mut n = 0u32;
+            for &c in chunk {
+                n = (n << 6) | if c == b'=' { 0 } else { val(c)? };
+            }
+            out.push((n >> 16) as u8);
+            if pad < 2 {
+                out.push((n >> 8) as u8);
+            }
+            if pad < 1 {
+                out.push(n as u8);
+            }
+        }
+        Ok(out)
+    }
 }
 
 /// The static membership view the transport validates against: the set of

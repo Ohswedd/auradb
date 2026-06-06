@@ -140,6 +140,13 @@ pub struct Metrics {
     pub raft_heartbeat_latency_ms: AtomicU64,
     /// Cluster: whether a quorum is reachable (gauge, 0/1).
     pub cluster_quorum_available: AtomicU64,
+    /// Multi-node preview: snapshots this node has sent as a leader (counter).
+    pub cluster_snapshots_sent_total: AtomicU64,
+    /// Multi-node preview: snapshots this node has installed as a follower
+    /// (counter).
+    pub cluster_snapshots_installed_total: AtomicU64,
+    /// Multi-node preview: snapshot installs this node rejected (counter).
+    pub cluster_snapshots_rejected_total: AtomicU64,
     /// Per-request latency.
     pub request_latency: Histogram,
     /// Query execution latency.
@@ -236,7 +243,19 @@ impl Metrics {
         append_entries_failures_total: u64,
         heartbeat_latency_ms: u64,
         quorum_available: bool,
+        snapshots_sent_total: u64,
+        snapshots_installed_total: u64,
+        snapshots_rejected_total: u64,
     ) {
+        Metrics::gauge_set(&self.cluster_snapshots_sent_total, snapshots_sent_total);
+        Metrics::gauge_set(
+            &self.cluster_snapshots_installed_total,
+            snapshots_installed_total,
+        );
+        Metrics::gauge_set(
+            &self.cluster_snapshots_rejected_total,
+            snapshots_rejected_total,
+        );
         Metrics::gauge_set(&self.peer_connected, peers_connected);
         Metrics::gauge_set(
             &self.peer_replication_lag_entries,
@@ -308,6 +327,13 @@ impl Metrics {
                 .load(Ordering::Relaxed),
             raft_heartbeat_latency_ms: self.raft_heartbeat_latency_ms.load(Ordering::Relaxed),
             cluster_quorum_available: self.cluster_quorum_available.load(Ordering::Relaxed),
+            cluster_snapshots_sent_total: self.cluster_snapshots_sent_total.load(Ordering::Relaxed),
+            cluster_snapshots_installed_total: self
+                .cluster_snapshots_installed_total
+                .load(Ordering::Relaxed),
+            cluster_snapshots_rejected_total: self
+                .cluster_snapshots_rejected_total
+                .load(Ordering::Relaxed),
             request_latency: self.request_latency.snapshot(),
             query_latency: self.query_latency.snapshot(),
             storage_latency: self.storage_latency.snapshot(),
@@ -393,6 +419,12 @@ pub struct MetricsSnapshot {
     pub raft_heartbeat_latency_ms: u64,
     /// Cluster: whether a quorum is reachable (0/1).
     pub cluster_quorum_available: u64,
+    /// Cluster: snapshots sent to followers as a leader.
+    pub cluster_snapshots_sent_total: u64,
+    /// Cluster: snapshots installed from a leader as a follower.
+    pub cluster_snapshots_installed_total: u64,
+    /// Cluster: snapshot installs rejected (validation failure).
+    pub cluster_snapshots_rejected_total: u64,
     /// Request latency histogram.
     pub request_latency: HistogramSnapshot,
     /// Query latency histogram.
@@ -475,6 +507,18 @@ impl MetricsSnapshot {
         gauge(
             "auradb_cluster_quorum_available",
             self.cluster_quorum_available,
+        );
+        gauge(
+            "auradb_cluster_snapshots_sent_total",
+            self.cluster_snapshots_sent_total,
+        );
+        gauge(
+            "auradb_cluster_snapshots_installed_total",
+            self.cluster_snapshots_installed_total,
+        );
+        gauge(
+            "auradb_cluster_snapshots_rejected_total",
+            self.cluster_snapshots_rejected_total,
         );
         gauge("auradb_cluster_enabled", self.cluster_enabled);
         gauge("auradb_node_role", self.node_role);

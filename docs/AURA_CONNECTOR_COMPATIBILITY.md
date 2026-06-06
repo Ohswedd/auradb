@@ -2,14 +2,20 @@
 
 This document is the connector-focused companion to the
 [Compatibility Matrix](COMPATIBILITY.md). It records which Aura Connector release
-talks to AuraDB 0.5.1, what it can drive, and what it cannot.
+talks to AuraDB 0.6.0, what it can drive, and what it cannot.
 
-> **AuraDB v0.5.1 hardens the controlled multi-node preview. Single-node mode
-> remains the recommended production mode.**
+> **AuraDB v0.6.0 improves the controlled multi-node preview and validates
+> fail-stop recovery. It is _not_ production HA. Single-node mode remains the
+> recommended production mode.**
 
-AuraDB 0.5.1 hardens the experimental cross-process multi-node preview, but it
-preserves the existing wire behavior, so the same connector compatibility applies
-and **no connector release is required**. The wire additions remain additive: the
+AuraDB 0.6.0 improves the experimental cross-process multi-node preview
+(fail-stop recovery validation, peer snapshot install, sharper diagnostics), but
+it preserves the existing wire behavior, so the same connector compatibility
+applies and **no connector release is required**. After a leader kill, a write to
+a non-leader returns the structured `not_leader` error with a leader hint and a
+retryable flag; Aura Connector 0.3.x surfaces this as a retryable server error
+and a client retry against the new leader succeeds. The wire additions remain
+additive: the
 health report's `cluster` section gains additional diagnostics fields
 (`preview_multi_node`, `quorum_available`, a `peers` array, and per-peer
 reachability detail), the error payload gains an optional `retryable` hint, and
@@ -68,6 +74,12 @@ response); the published-connector smoke against the elected leader continues to
 be exercised by the conformance and cluster CI workflows. The full
 `run_connector_conformance.py` suite and the auth/TLS connector matrix continue
 to run in `conformance.yml`.
+
+For **v0.6.0**, the published `aura-connector` 0.3.0 was installed from PyPI and
+run locally against a v0.6.0 server: the AWP protocol conformance passed 18/18,
+the connector smoke 12/12, and the full connector conformance 15/15. No connector
+changes are required; AWP stays at v1, and the additive v0.6.0 fail-stop
+diagnostics fields on the health report are ignored by the 0.3.x connector.
 
 ## Required connector extras
 

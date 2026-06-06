@@ -228,6 +228,55 @@ impl FileStorage {
         Ok(plan)
     }
 
+    /// Install a snapshot boundary received from the leader (the follower side of
+    /// peer snapshot install).
+    ///
+    /// A leader snapshot covers every index up to and including
+    /// `last_included_index`; this is used by a follower that has fallen behind
+    /// the leader's compacted prefix and can no longer be served by AppendEntries.
+    /// The follower adopts the boundary, drops the log entries the snapshot
+    /// subsumes, and persists the new boundary and commit index. Returns `true`
+    /// when the boundary advanced (a stale or already-covered snapshot is a no-op
+    /// returning `false`).
+    ///
+    /// If the follower already holds an entry at `last_included_index` whose term
+    /// matches `last_included_term`, only the subsumed prefix is dropped and the
+    /// suffix after the boundary is retained (the standard Raft rule). Otherwise
+    /// the entire log is discarded because it conflicts with the snapshot the
+    /// leader has committed. The boundary is persisted before the log is rewritten,
+    /// so an interrupted install fails closed on reopen rather than leaving a
+    /// boundary ahead of the retained log.
+    pub fn install_snapshot(
+        &mut self,
+        last_included_index: LogIndex,
+        last_included_term: Term,
+    ) -> Result<bool> {
+        if last_included_index <= self.base_index {
+            // An equal-or-older snapshot: the prefix is already covered.
+            return Ok(false);
+        }
+        let retain_suffix =
+            matches!(self.term_at(last_included_index), Some(t) if t == last_included_term);
+        // Persist the new boundary first (same crash discipline as `compact`).
+        self.write_compaction(last_included_index, last_included_term)?;
+        if retain_suffix {
+            self.entries.retain(|e| e.index > last_included_index);
+        } else {
+            self.entries.clear();
+        }
+        self.base_index = last_included_index;
+        self.base_term = last_included_term;
+        self.rewrite_log()?;
+        // The snapshot is durable committed state up to the boundary: advance the
+        // persisted commit index so the boundary stays consistent across restarts.
+        if self.hard_state.commit_index < last_included_index {
+            let mut hs = self.hard_state.clone();
+            hs.commit_index = last_included_index;
+            self.save_hard_state(&hs)?;
+        }
+        Ok(true)
+    }
+
     /// Validate a compaction request and return its outcome. Shared by the dry
     /// run and the real compaction so both agree exactly.
     fn plan_compaction(
@@ -827,6 +876,67 @@ mod tests {
         assert_eq!(s.entry_at(LogIndex(4)).unwrap().command.payload, b"d");
         // A gap append is still rejected.
         assert!(s.append(&[entry(1, 6, b"x")]).is_err());
+    }
+
+    #[test]
+    fn install_snapshot_jumps_boundary_ahead_of_log() {
+        let dir = tempdir().unwrap();
+        let mut s = seed(dir.path(), 3, 3); // follower has entries 1..=3
+                                            // A leader snapshot covers up to index 10 (entries the follower lacks).
+        let installed = s.install_snapshot(LogIndex(10), Term(4)).unwrap();
+        assert!(installed);
+        assert_eq!(s.last_included_index(), LogIndex(10));
+        assert_eq!(s.last_included_term(), Term(4));
+        // The whole prior log is subsumed; the boundary becomes the new end.
+        assert_eq!(s.last_index(), LogIndex(10));
+        assert_eq!(s.term_at(LogIndex(10)), Some(Term(4)));
+        assert!(matches!(
+            s.read_at(LogIndex(3)),
+            Err(RaftError::Compacted { .. })
+        ));
+        // The commit index advanced to the boundary and AppendEntries can resume.
+        assert_eq!(s.hard_state().commit_index, LogIndex(10));
+        s.append(&[entry(4, 11, b"k")]).unwrap();
+        assert_eq!(s.last_index(), LogIndex(11));
+    }
+
+    #[test]
+    fn install_snapshot_persists_after_restart() {
+        let dir = tempdir().unwrap();
+        {
+            let mut s = seed(dir.path(), 3, 3);
+            s.install_snapshot(LogIndex(10), Term(4)).unwrap();
+        }
+        let s = FileStorage::open(dir.path()).unwrap();
+        assert_eq!(s.last_included_index(), LogIndex(10));
+        assert_eq!(s.last_included_term(), Term(4));
+        assert_eq!(s.last_index(), LogIndex(10));
+        assert_eq!(s.hard_state().commit_index, LogIndex(10));
+    }
+
+    #[test]
+    fn install_snapshot_stale_boundary_is_noop() {
+        let dir = tempdir().unwrap();
+        let mut s = seed(dir.path(), 5, 5);
+        s.compact(LogIndex(3), LogIndex(5)).unwrap();
+        // A snapshot at or below the current prefix changes nothing.
+        let installed = s.install_snapshot(LogIndex(2), Term(1)).unwrap();
+        assert!(!installed);
+        assert_eq!(s.last_included_index(), LogIndex(3));
+        assert_eq!(s.last_index(), LogIndex(5));
+    }
+
+    #[test]
+    fn install_snapshot_retains_matching_suffix() {
+        let dir = tempdir().unwrap();
+        let mut s = seed(dir.path(), 5, 5); // entries 1..=5 at term 1
+                                            // A snapshot at index 3 / term 1 matches the existing entry 3, so the
+                                            // suffix 4..=5 survives.
+        let installed = s.install_snapshot(LogIndex(3), Term(1)).unwrap();
+        assert!(installed);
+        assert_eq!(s.last_included_index(), LogIndex(3));
+        assert_eq!(s.last_index(), LogIndex(5));
+        assert_eq!(s.entry_at(LogIndex(4)).unwrap().command.payload, &[4u8]);
     }
 
     #[test]

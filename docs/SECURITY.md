@@ -123,10 +123,14 @@ the environment so no secret is committed. See [DEPLOYMENT.md](DEPLOYMENT.md).
   `--allow-insecure-bind` is passed to `auradb server`. This prevents
   accidentally exposing an unauthenticated server on a public interface.
 
-## Cluster (peer) transport (v0.4.0, multi-node preview in v0.5.0, hardened in v0.5.1)
+## Cluster (peer) transport (v0.4.0, multi-node preview in v0.5.0, fail-stop recovery in v0.6.0)
 
-> **AuraDB v0.5.1 hardens the controlled multi-node preview. Single-node mode
-> remains the recommended production mode.**
+> **AuraDB v0.6.0 improves the controlled multi-node preview and validates
+> fail-stop recovery. It is _not_ production HA. Single-node mode remains the
+> recommended production mode.** Peer certificate and token rotation (rolling
+> restart, one node at a time) is documented below; the v0.6.0 peer snapshot
+> install validates the cluster id, manifest digest, and storage format before
+> touching follower state, so a wrong-cluster or tampered snapshot is rejected.
 
 Cluster (Raft) mode is disabled by default. v0.5.0 adds a real cross-process peer
 transport, gated by a conservative, fail-closed security baseline:

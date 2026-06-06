@@ -1,17 +1,20 @@
 # AuraDB Compatibility Matrix
 
-This document records what AuraDB v0.5.1 implements and how it interoperates with
-the Aura Connector client library and the Aura Wire Protocol (AWP). v0.5.1 hardens
-the controlled multi-node preview (off by default); single-node mode remains the
-recommended production mode. It keeps **AWP 1** unchanged and makes no
-incompatible protocol change: the health report's `cluster` section gains
-additive diagnostics fields and the error payload gains an additive, optional
-`retryable` hint, both ignored by older clients, so no connector release is
-required and Aura Connector 0.3.x remains fully compatible. The on-disk **storage
-format is unchanged** from v0.4.x.
+This document records what AuraDB v0.6.0 implements and how it interoperates with
+the Aura Connector client library and the Aura Wire Protocol (AWP). v0.6.0
+improves the controlled multi-node preview and validates fail-stop recovery
+(off by default); single-node mode remains the recommended production mode. It
+keeps **AWP 1** unchanged and makes no incompatible protocol change: the health
+report's `cluster` section gains additional additive fail-stop diagnostics
+fields and the error payload's optional `retryable` hint are both ignored by
+older clients, so no connector release is required and Aura Connector 0.3.x
+remains fully compatible. The on-disk **storage format is unchanged** from
+v0.4.x.
 
 | AuraDB | Aura Connector | Protocol | Status |
 | ------ | -------------- | -------- | ------ |
+| 0.6.0  | 0.3.x          | AWP 1    | Supported (native AuraDB backend; additive fail-stop diagnostics fields; multi-node preview ergonomics) |
+| 0.5.2  | 0.3.x          | AWP 1    | Supported (native AuraDB backend; additive diagnostics fields; multi-node preview cert fix) |
 | 0.5.1  | 0.3.x          | AWP 1    | Supported (native AuraDB backend; additive diagnostics fields; multi-node preview hardening) |
 | 0.5.0  | 0.3.x          | AWP 1    | Supported (native AuraDB backend; cluster fields additive; multi-node preview) |
 | 0.4.1  | 0.3.x          | AWP 1    | Supported (native AuraDB backend; cluster fields additive) |
@@ -32,18 +35,19 @@ and TLS). Use Aura Connector 0.3.x to connect to an AuraDB 0.2.x server. See
 
 ## Versions
 
-- **AuraDB:** 0.5.1
+- **AuraDB:** 0.6.0
 - **Storage format:** v2 (commit-timestamped MVCC version chains), unchanged from
   v0.4.x. A v1 (≤ 0.2.x) data directory is migrated to v2 transparently on first
   open; an unknown future format is rejected. See [UPGRADING.md](UPGRADING.md).
 - **Aura Wire Protocol:** AWP 1 (44-byte framed header, CRC32-checked, JSON
-  payloads), unchanged in v0.5.1. The cluster health section (with additive
-  diagnostics fields), the optional additive `retryable` error hint, and the
-  `not_leader` error code are additive. See [PROTOCOL.md](PROTOCOL.md).
+  payloads), unchanged in v0.6.0. The cluster health section (with additive
+  fail-stop diagnostics fields), the optional additive `retryable` error hint,
+  and the `not_leader` error code are additive. See [PROTOCOL.md](PROTOCOL.md).
 - **Aura Connector (tested):** 0.3.x
 - **Cluster mode:** optional, off by default. Single-node cluster, plus a
-  controlled, **experimental multi-node server preview (v0.5.0)** gated by two
-  opt-ins; single-node mode remains the recommended production path. See
+  controlled, **experimental multi-node server preview** gated by two opt-ins;
+  single-node mode remains the recommended production path. v0.6.0 improves the
+  preview's fail-stop recovery ergonomics but is **not** production HA. See
   [CLUSTERING.md](CLUSTERING.md).
 
 ## Required connector features
@@ -113,9 +117,11 @@ and TLS). Use Aura Connector 0.3.x to connect to an AuraDB 0.2.x server. See
 ## Known limitations
 
 - Single-node mode is the recommended production path. v0.5.0 added a controlled,
-  experimental multi-node server preview (off by default, gated by two opt-ins)
-  and v0.5.1 hardens it; it is not production multi-node clustering, has no
-  automatic failover, no dynamic membership, and no sharding.
+  experimental multi-node server preview (off by default, gated by two opt-ins),
+  v0.5.x hardened it, and v0.6.0 improves its fail-stop recovery ergonomics and
+  diagnostics; it is **not** production multi-node clustering. It has no
+  production automatic failover, no linearizable follower reads, no distributed
+  transactions, no dynamic membership, and no sharding or multi-region.
 - AuraDB v0.3.0 implements single-node snapshot isolation with optimistic write
   conflict detection. It is not serializable isolation (it does not prevent
   write-skew).

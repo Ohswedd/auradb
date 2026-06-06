@@ -4,6 +4,73 @@ All notable changes to AuraDB are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and the project uses
 [Semantic Versioning](https://semver.org/).
 
+## [0.6.0] - 2026-06-06
+
+Cluster ergonomics and fail-stop recovery preview. This release improves the
+controlled multi-node preview experience and validates fail-stop recovery
+behavior: a leader is stopped, the surviving majority elects a new leader, the
+new leader accepts writes, and the old node rejoins as a follower and catches
+up. It also adds the first real **peer snapshot install over the wire** (a
+bounded, single-message transfer for the preview), sharper fail-stop
+diagnostics, and operator runbooks for peer certificate/token rotation and
+cluster backup/restore.
+
+This is **not** production HA. There is no production automatic failover claim,
+no linearizable follower reads, no distributed transactions, no dynamic
+membership, and no sharding or multi-region. Multi-node mode remains an
+experimental, opt-in preview; **single-node mode remains the recommended
+production mode.** All v0.5.x single-node and single-node-cluster behavior, the
+storage format, the Aura Wire Protocol, and Aura Connector 0.3.x compatibility
+are preserved.
+
+### Added
+- Published-image Docker Compose cluster smoke workflow: `scripts/smoke_cluster_compose.sh`
+  now honors `AURADB_IMAGE` so the same three-node Compose smoke can run against
+  a locally built image (`auradb:0.6.0`) or a published image
+  (`ghcr.io/ohswedd/auradb:0.6.0`). A manual `published-image-smoke` CI job
+  verifies the published image post-release.
+- Leader kill and automatic re-election preview tests: a stopped leader's term
+  is taken over by the surviving majority, the new leader accepts writes, the
+  old leader restarts as a follower and catches up, all nodes converge, and the
+  leader-change metric increments.
+- Connector write-recovery validation against a newly elected leader: after a
+  leader kill, the `not_leader` response carries a leader hint and a retryable
+  flag, and a client that retries against the new leader's address succeeds.
+- Larger follower restart and catch-up tests across indexed, document-path,
+  vector, and transaction-batch workloads, asserting no duplicate application
+  and preserved MVCC timestamps and indexes after restart.
+- Peer snapshot install over the wire (`InstallSnapshotRequest` /
+  `InstallSnapshotResponse`): when a follower needs entries the leader has
+  already compacted away, the leader sends a bounded, single-message snapshot;
+  the follower validates cluster id, snapshot format, last-included index/term,
+  digest, storage format, and size limit, restores atomically into a staging
+  area, advances its Raft compaction boundary, and resumes AppendEntries.
+  Oversized, wrong-cluster, bad-digest, and future-format snapshots are
+  rejected, and a failed install preserves existing follower state.
+- Cluster backup and restore runbook: leader-side logical backup
+  (`auradb dump`) exports the latest committed state; `auradb restore`
+  rebuilds a single-node data directory that can seed a fresh preview cluster.
+- Peer certificate and token rotation runbook with rolling-restart procedures,
+  CA-rotation guidance, and SAN/CA/token mismatch diagnosis.
+- Improved fail-stop recovery diagnostics: cluster health now reports leader
+  changes, last leader-change time and reason, per-peer last disconnect reason,
+  last successful append time, snapshot install status, and `not_leader`
+  rejected-write counts; surfaced via `auradb cluster diagnostics --addr` and
+  `auradb cluster events --addr`.
+- Replicated-cluster benchmark baseline: `benches/baseline/v0.6.0.json`.
+
+### Changed
+- Improved multi-node preview documentation, diagnostics, and operator
+  workflows across the clustering, Raft, replication, operations, security,
+  observability, and troubleshooting docs.
+- Improved cluster readiness and leader-wait behavior and diagnostics output,
+  with explicit preview and public-cluster warnings retained.
+
+### Fixed
+- Fail-stop recovery, snapshot install, connector routing, peer transport, and
+  catch-up issues found during validation are addressed; no behavioral
+  regressions to single-node or single-node-cluster modes.
+
 ## [0.5.2] - 2026-06-05
 
 Multi-node preview hardening, follow-up fix. A patch release that fixes the

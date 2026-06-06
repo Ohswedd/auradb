@@ -1,19 +1,23 @@
 # Clustering
 
-> **AuraDB v0.5.1 hardens the controlled multi-node preview. Single-node mode
-> remains the recommended production mode.** Real AuraDB server processes can
-> form a cross-process cluster, elect a leader, and replicate writes through
-> Raft. This preview is **off by default** and is intended for local testing and
-> early validation only. For diagnosing and recovering cluster mode, see
+> **AuraDB v0.6.0 improves the controlled multi-node preview and validates
+> fail-stop recovery. It is _not_ production HA. Single-node mode remains the
+> recommended production mode.** Real AuraDB server processes can form a
+> cross-process cluster, elect a leader, and replicate writes through Raft. This
+> preview is **off by default** and is intended for local testing and early
+> validation only. For diagnosing and recovering cluster mode, see
 > [CLUSTER_TROUBLESHOOTING.md](CLUSTER_TROUBLESHOOTING.md).
 
-> **New in v0.5.1.** Local Docker cluster automation with generated development
-> certificates (`examples/cluster/generate-dev-certs.sh`,
-> `scripts/smoke_cluster_compose.sh`); a live `auradb cluster status --addr`
-> diagnostics view; sharper `not_leader` ergonomics (a leader hint with the
-> leader's client address and a retryable flag); peer TLS rotation guidance; and
-> additional leader-restart and follower-catch-up test coverage. Leader restart
-> is **preview behavior**, not production automatic failover.
+> **New in v0.6.0.** A leader kill / automatic re-election **preview** (a stopped
+> leader's term is taken over by the surviving majority; the old node rejoins as a
+> follower and catches up); the first real **peer snapshot install over the wire**
+> (a bounded single-message transfer for a follower that fell behind the
+> compacted prefix); larger follower catch-up coverage; sharper fail-stop
+> diagnostics (leader-change and snapshot-install counters); a published-image
+> Docker Compose smoke (`AURADB_IMAGE`); and peer certificate/token rotation and
+> cluster backup/restore runbooks. Leader kill and re-election are **fail-stop
+> recovery preview** behavior — this is **not production HA** and not production
+> automatic failover. See [V0_6_RELEASE_NOTES.md](V0_6_RELEASE_NOTES.md).
 
 AuraDB introduced cluster mode in v0.4.0 (an optional, durable replication path
 built on a Raft consensus core) and hardened it in v0.4.1. v0.5.0 builds on that

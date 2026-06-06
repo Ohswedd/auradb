@@ -1,5 +1,50 @@
 # Upgrading
 
+## From v0.5.x to v0.6.0
+
+> **AuraDB v0.6.0 improves the controlled multi-node preview and validates
+> fail-stop recovery. It is _not_ production HA. Single-node mode remains the
+> recommended production mode.**
+
+v0.6.0 is a drop-in binary replacement from any v0.5.x release (v0.5.0, v0.5.1,
+or the v0.5.2 cert fix). It changes **no on-disk format**: storage stays at v2,
+cluster metadata at v1, the Raft log, hard state, compaction marker, commit base,
+and the snapshot manifest (v1) are unchanged. A v0.5.x data directory —
+single-node or a single-node / multi-node cluster directory with its `cluster/`
+identity and Raft state — opens directly with no migration. Stop the old binary,
+swap in the new one, start it. For a multi-node preview cluster, roll one node at
+a time, keeping a quorum.
+
+If you do nothing, behavior is unchanged. What is new in v0.6.0:
+
+- **Fail-stop recovery preview.** Stopping a leader is taken over by the surviving
+  majority, which elects a new leader that accepts writes; the old node rejoins as
+  a follower and catches up. This is preview behavior, **not** production
+  automatic failover.
+- **Peer snapshot install over the wire.** A follower that has fallen behind the
+  leader's compacted prefix is brought current by a bounded, single-message
+  snapshot install (validated for cluster id, format, digest, boundary, storage
+  format, and size). See [REPLICATION.md](REPLICATION.md).
+- **Additive diagnostics.** New `auradb_cluster_snapshots_{sent,installed,rejected}_total`
+  metrics and a published-image Docker Compose smoke (`AURADB_IMAGE`). The Aura
+  Wire Protocol stays at AWP 1 with additive fields only, so Aura Connector 0.3.x
+  remains compatible — **no connector release is required**.
+- **Cluster backup/restore runbook.** Leader-side logical backup (`auradb dump`)
+  restores into a single-node data directory that can seed a fresh preview
+  cluster; restoring directly into a live multi-node cluster is not supported. See
+  [OPERATIONS.md](OPERATIONS.md).
+
+**Note on v0.5.2.** v0.5.2 was a patch on top of v0.5.1 that fixed the
+development certificates generated for the multi-node preview (they now allow both
+server and client authentication, which the peer transport's mutual TLS
+requires). If you generated dev certs with v0.5.1 for a TLS preview cluster,
+regenerate them with `examples/cluster/generate-dev-certs.sh`. No data or wire
+change. See the [CHANGELOG](../CHANGELOG.md).
+
+**Downgrade.** v0.5.x and v0.6.0 share the same on-disk and wire formats, so a
+v0.6.0 data directory can be reopened by v0.5.x. As always, back up the data
+directory before changing versions. See [CLUSTERING.md](CLUSTERING.md).
+
 ## From v0.5.0 to v0.5.1
 
 > **AuraDB v0.5.1 hardens the controlled multi-node preview. Single-node mode
