@@ -15,7 +15,9 @@ use std::sync::Arc;
 
 use auradb::ReplicatedLog;
 use auradb_cluster::{ClusterIdentity, ClusterStatus};
-use auradb_replication::{ClusterNode, PeerCluster, PeerMetrics, PeerStatus, ReplicationMetrics};
+use auradb_replication::{
+    ClusterNode, PeerCluster, PeerMetrics, PeerStatus, ReplicationMetrics, SnapshotDiagnostics,
+};
 
 /// The active cluster runtime: single-node or the multi-node preview.
 pub enum ClusterRuntime {
@@ -84,6 +86,15 @@ impl ClusterRuntime {
         match self {
             ClusterRuntime::Single(_) => None,
             ClusterRuntime::Multi(n) => Some(n.peer_metrics()),
+        }
+    }
+
+    /// Last-event snapshot install diagnostics (None for single-node, which has
+    /// no peers to ship snapshots to).
+    pub fn snapshot_diagnostics(&self) -> Option<SnapshotDiagnostics> {
+        match self {
+            ClusterRuntime::Single(_) => None,
+            ClusterRuntime::Multi(n) => Some(n.snapshot_diagnostics()),
         }
     }
 

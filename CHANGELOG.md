@@ -4,6 +4,71 @@ All notable changes to AuraDB are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and the project uses
 [Semantic Versioning](https://semver.org/).
 
+## [0.6.1] - 2026-06-06
+
+Snapshot install and published-cluster smoke hardening. This patch release makes
+the v0.6.0 controlled multi-node preview more reliable, observable, and
+repeatable: multi-architecture Docker images, larger and concurrent-write
+snapshot-install validation, snapshot-needed and follower-lag diagnostics,
+cluster backup/restore dry-run planning, and a published-image cluster smoke
+checklist.
+
+This is **not** production HA. There is no production automatic failover claim,
+no linearizable follower reads, no distributed transactions, no dynamic
+membership, and no sharding or multi-region. Multi-node mode remains an
+experimental, opt-in preview; **single-node mode remains the recommended
+production mode.** All v0.6.0 behavior, the storage format, the Aura Wire
+Protocol (AWP v1), and Aura Connector 0.3.x compatibility are preserved.
+
+### Added
+- Multi-architecture Docker image publishing: the tag workflow builds and pushes
+  a `linux/amd64` + `linux/arm64` manifest to `ghcr.io/ohswedd/auradb:0.6.1` and
+  `:latest` via Docker Buildx (arm64 built under QEMU in CI). PR/branch builds
+  build `linux/amd64` through buildx without publishing. On Apple Silicon,
+  `docker pull` selects the arm64 variant automatically.
+- Larger snapshot-install validation: a CI-safe larger run plus `#[ignore]`d
+  1,000-entry and 10,000-entry stress scenarios, asserting data, index, planner,
+  and MVCC-timestamp convergence after a snapshot install.
+- Snapshot install under concurrent leader writes: the leader keeps committing
+  while a follower installs a snapshot and resumes AppendEntries, with no
+  duplicate apply and full convergence.
+- Snapshot-needed and follower-lag diagnostics: per-peer `lag_entries`,
+  `needs_snapshot`, `snapshot_in_progress`, and a `catch_up_state`
+  (`normal` / `probing` / `snapshot_needed` / `snapshot_installing` /
+  `caught_up` / `unknown`), plus cluster-level snapshot diagnostics (last
+  installed boundary, last install time, last error, bytes sent/installed,
+  in-progress gauge), surfaced by `auradb cluster status --addr` and a new live
+  `auradb cluster doctor --addr`.
+- Additional snapshot-install metrics: `auradb_cluster_snapshot_needed_total`,
+  `auradb_cluster_snapshot_bytes_sent_total`,
+  `auradb_cluster_snapshot_bytes_installed_total`,
+  `auradb_cluster_snapshot_in_progress`, and `auradb_cluster_snapshot_last_error`.
+- Cluster backup and restore dry-run tooling: `auradb cluster backup-plan`
+  inspects a data dir and reports what a logical backup would include, exclude,
+  where it restores, and which secrets are referenced (redacted);
+  `auradb cluster restore-plan` inspects a JSONL backup and reports what a
+  restore would load. Neither writes data.
+- Published GHCR cluster smoke release checklist and an enhanced
+  `scripts/smoke_cluster_compose.sh` that prints the image, node ports, leader,
+  quorum, peer states, and teardown result; the manual `published-image-smoke`
+  workflow inspects the multi-arch manifest before running the smoke.
+- Connector leader-hint UX review (docs): Aura Connector 0.3.x remains compatible
+  but is not cluster-routing-aware; manual leader routing is documented, with
+  tests pinning the `not_leader` leader-hint message and no-infinite-retry
+  contract.
+
+### Changed
+- Improved the Docker publish workflow (multi-arch) and the cluster smoke
+  documentation and release checklist.
+- Improved cluster troubleshooting for followers that need a snapshot and for
+  lagging followers.
+- Improved observability for snapshot install and follower lag.
+
+### Fixed
+- Snapshot-install, follower-lag, Docker publish, cluster-smoke, and diagnostics
+  issues found during validation are addressed; no behavioral regressions to
+  single-node or single-node-cluster modes.
+
 ## [0.6.0] - 2026-06-06
 
 Cluster ergonomics and fail-stop recovery preview. This release improves the

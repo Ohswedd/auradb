@@ -1,5 +1,11 @@
 # syntax=docker/dockerfile:1
 
+# Multi-arch: this Dockerfile is architecture-agnostic. `cargo build` compiles for
+# the build platform, so `docker buildx build --platform linux/amd64,linux/arm64`
+# (used by the tag publish workflow) produces a manifest with both a native amd64
+# image and an arm64 image (built under QEMU emulation in CI). On Apple Silicon,
+# `docker pull` selects the linux/arm64 variant automatically.
+#
 # ---- build stage ----
 # Rust 1.90 (>= the workspace MSRV; some dependencies such as `time` require
 # rustc >= 1.88). CI builds on stable; this pins a concrete builder for the image.

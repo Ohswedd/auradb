@@ -336,6 +336,299 @@ pub fn cmd_cluster_compact_log(
     Ok(out)
 }
 
+// ----- cluster backup / restore dry-run planning (v0.6.1) -----
+
+/// What a logical backup of this data dir would include.
+#[derive(Debug, Serialize)]
+pub struct BackupIncluded {
+    /// The latest committed engine state (not historical MVCC versions).
+    pub latest_committed_state: bool,
+    /// All collection schemas.
+    pub schema: bool,
+    /// Number of collections that would be exported.
+    pub collections: usize,
+    /// Number of live records that would be exported.
+    pub records: u64,
+    /// Secondary and persisted indexes are rebuilt from records on restore.
+    pub indexes_rebuilt_on_restore: bool,
+}
+
+/// The dry-run plan for `auradb cluster backup-plan`.
+#[derive(Debug, Serialize)]
+pub struct BackupPlanReport {
+    /// Always true: this command never writes a backup, only plans one.
+    pub dry_run: bool,
+    /// `leader-logical-backup` for a cluster node (back up the leader) or
+    /// `local-data-dir-logical-backup` for a non-cluster data dir.
+    pub source_mode: String,
+    /// Whether cluster mode is enabled in the configuration.
+    pub cluster_enabled: bool,
+    /// This node's id (hex), if cluster identity is initialized.
+    pub node_id: Option<String>,
+    /// The cluster id (hex), if cluster identity is initialized.
+    pub cluster_id: Option<String>,
+    /// Whether this is a single-node cluster (no peers).
+    pub single_node: bool,
+    /// What the logical backup includes.
+    pub included: BackupIncluded,
+    /// What the logical backup excludes.
+    pub excluded: Vec<String>,
+    /// Where the backup can be restored.
+    pub restore_target: Vec<String>,
+    /// Redacted descriptions of secrets that are referenced by config but are
+    /// never written into a logical backup. Secret values are never emitted.
+    pub secrets: Vec<String>,
+    /// Operational warnings.
+    pub warnings: Vec<String>,
+}
+
+/// `auradb cluster backup-plan` — describe, without writing anything, the
+/// logical backup that `auradb dump` / `auradb snapshot create` would produce
+/// from this data directory: what is included, what is excluded, where it can be
+/// restored, and which secrets are referenced (redacted). Inspects real engine
+/// and cluster metadata, not static text.
+pub fn cmd_cluster_backup_plan(data_dir: &Path, config: &Config, json: bool) -> Result<String> {
+    let store = ClusterStore::new(data_dir);
+    let identity = store.load().context("loading cluster metadata")?;
+    let engine = Engine::open(data_dir).context("opening engine")?;
+    let schemas = engine.list_schemas();
+    let mut records: u64 = 0;
+    for s in &schemas {
+        records += engine
+            .find(&auradb::query::FindQuery::new(&s.name))
+            .map(|r| r.len() as u64)
+            .unwrap_or(0);
+    }
+
+    let cluster = &config.cluster;
+    let in_cluster = cluster.enabled && identity.is_some();
+    let source_mode = if in_cluster {
+        "leader-logical-backup"
+    } else {
+        "local-data-dir-logical-backup"
+    }
+    .to_string();
+
+    let excluded = vec![
+        "raft log and compaction state (raft-log / raft-compaction)".to_string(),
+        "cluster membership and peer metadata".to_string(),
+        "uncommitted (in-flight) entries".to_string(),
+        "historical MVCC versions (only the latest committed state is captured)".to_string(),
+    ];
+    let restore_target = vec![
+        "single-node restore into a fresh data dir (`auradb snapshot restore` or `auradb restore`)"
+            .to_string(),
+        "optional: bootstrap a fresh single-node preview cluster from the restored data dir \
+         (`auradb cluster bootstrap`)"
+            .to_string(),
+    ];
+
+    // Secrets are referenced by config but never written into a logical backup.
+    let mut secrets = Vec::new();
+    if config.auth.token_hash.is_some() {
+        secrets.push(
+            "auth token: configured (Argon2id hash; redacted and not included in the backup)"
+                .to_string(),
+        );
+    }
+    if !cluster.peer_auth_token.is_empty() {
+        secrets.push(
+            "cluster peer_auth_token: configured (redacted and not included in the backup)"
+                .to_string(),
+        );
+    }
+    if config.tls.enabled || cluster.tls.enabled {
+        secrets.push(
+            "TLS key/cert material: referenced by config paths; not included in the backup"
+                .to_string(),
+        );
+    }
+
+    let mut warnings = vec![
+        "a logical backup cannot be restored directly into a live multi-node cluster; restore \
+         into a fresh single-node data dir, then optionally bootstrap a preview cluster"
+            .to_string(),
+        "run the backup from a stable leader with writes quiesced so the captured state is \
+         internally consistent"
+            .to_string(),
+        "verify the backup after restoring it (`auradb snapshot inspect` / `auradb check`)"
+            .to_string(),
+    ];
+    if cluster.is_multi_node() {
+        warnings.push(
+            "this data dir is configured for the multi-node preview; capture the backup from the \
+             current leader's data dir (`auradb cluster leader --addr <server>`)"
+                .to_string(),
+        );
+    }
+
+    let report = BackupPlanReport {
+        dry_run: true,
+        source_mode,
+        cluster_enabled: cluster.enabled,
+        node_id: identity.as_ref().map(|i| i.node_id().to_string()),
+        cluster_id: identity.as_ref().map(|i| i.cluster_id().to_string()),
+        single_node: cluster.peers.is_empty(),
+        included: BackupIncluded {
+            latest_committed_state: true,
+            schema: true,
+            collections: schemas.len(),
+            records,
+            indexes_rebuilt_on_restore: true,
+        },
+        excluded,
+        restore_target,
+        secrets,
+        warnings,
+    };
+    if json {
+        return Ok(serde_json::to_string_pretty(&report)?);
+    }
+    let mut out = String::new();
+    out.push_str("dry run: no backup written\n");
+    out.push_str(&format!("source_mode: {}\n", report.source_mode));
+    out.push_str(&format!(
+        "included: {} collection(s), {} record(s), schema, latest committed state \
+         (indexes rebuilt on restore)\n",
+        report.included.collections, report.included.records
+    ));
+    for e in &report.excluded {
+        out.push_str(&format!("excluded: {e}\n"));
+    }
+    for t in &report.restore_target {
+        out.push_str(&format!("restore_target: {t}\n"));
+    }
+    for s in &report.secrets {
+        out.push_str(&format!("secret: {s}\n"));
+    }
+    for w in &report.warnings {
+        out.push_str(&format!("warning: {w}\n"));
+    }
+    Ok(out)
+}
+
+/// The dry-run plan for `auradb cluster restore-plan`.
+#[derive(Debug, Serialize)]
+pub struct RestorePlanReport {
+    /// Always true: this command never restores, only plans a restore.
+    pub dry_run: bool,
+    /// The backup input path inspected.
+    pub input: String,
+    /// The detected backup format.
+    pub source_format: String,
+    /// Number of schema lines found.
+    pub schemas: usize,
+    /// Number of record lines found.
+    pub records: usize,
+    /// Collection names referenced by the backup.
+    pub collections: Vec<String>,
+    /// Where the backup can be restored.
+    pub restore_target: Vec<String>,
+    /// What the restore does not reconstruct.
+    pub excluded: Vec<String>,
+    /// Operational warnings.
+    pub warnings: Vec<String>,
+}
+
+/// `auradb cluster restore-plan` — inspect a JSONL logical backup and report,
+/// without restoring anything, what a restore would load and where it can go.
+/// Parses the backup input, not static text.
+pub fn cmd_cluster_restore_plan(input: &Path, json: bool) -> Result<String> {
+    use std::collections::BTreeSet;
+    use std::io::BufRead;
+
+    let file = std::fs::File::open(input)
+        .with_context(|| format!("opening backup input {}", input.display()))?;
+    let reader = std::io::BufReader::new(file);
+    let mut schemas = 0usize;
+    let mut records = 0usize;
+    let mut collections: BTreeSet<String> = BTreeSet::new();
+    for line in reader.lines() {
+        let line = line?;
+        if line.trim().is_empty() {
+            continue;
+        }
+        let value: serde_json::Value =
+            serde_json::from_str(&line).context("parsing backup line as JSON")?;
+        match value.get("type").and_then(|t| t.as_str()) {
+            Some("schema") => {
+                schemas += 1;
+                if let Some(name) = value
+                    .get("schema")
+                    .and_then(|s| s.get("name"))
+                    .and_then(|n| n.as_str())
+                {
+                    collections.insert(name.to_string());
+                }
+            }
+            Some("record") => {
+                records += 1;
+                if let Some(name) = value.get("collection").and_then(|c| c.as_str()) {
+                    collections.insert(name.to_string());
+                }
+            }
+            _ => {
+                anyhow::bail!(
+                    "unrecognized backup line (expected a JSONL logical dump of schema/record \
+                     lines): {line}"
+                );
+            }
+        }
+    }
+
+    let report = RestorePlanReport {
+        dry_run: true,
+        input: input.display().to_string(),
+        source_format: "jsonl-logical-dump".to_string(),
+        schemas,
+        records,
+        collections: collections.into_iter().collect(),
+        restore_target: vec![
+            "single-node restore into a fresh, empty data dir (`auradb restore --data-dir <dir>`)"
+                .to_string(),
+            "optional: bootstrap a fresh single-node preview cluster from the restored data dir \
+             (`auradb cluster bootstrap`)"
+                .to_string(),
+        ],
+        excluded: vec![
+            "raft log and cluster membership (rebuilt by bootstrap, not by restore)".to_string(),
+            "historical MVCC versions (the dump holds latest committed state only)".to_string(),
+        ],
+        warnings: vec![
+            "cannot restore directly into a live multi-node cluster; restore into a fresh \
+             single-node data dir first"
+                .to_string(),
+            "restore is an idempotent upsert load; run it into an empty data dir so it does not \
+             mix with existing records"
+                .to_string(),
+            "verify the data after restoring (`auradb check`)".to_string(),
+        ],
+    };
+    if json {
+        return Ok(serde_json::to_string_pretty(&report)?);
+    }
+    let mut out = String::new();
+    out.push_str("dry run: no data restored\n");
+    out.push_str(&format!("input: {}\n", report.input));
+    out.push_str(&format!("source_format: {}\n", report.source_format));
+    out.push_str(&format!(
+        "would restore: {} schema(s), {} record(s) across {} collection(s)\n",
+        report.schemas,
+        report.records,
+        report.collections.len()
+    ));
+    for t in &report.restore_target {
+        out.push_str(&format!("restore_target: {t}\n"));
+    }
+    for e in &report.excluded {
+        out.push_str(&format!("excluded: {e}\n"));
+    }
+    for w in &report.warnings {
+        out.push_str(&format!("warning: {w}\n"));
+    }
+    Ok(out)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -424,6 +717,84 @@ mod tests {
         let cfg = cluster_config(dir.path());
         // No bootstrap/init: compaction must refuse rather than guess.
         assert!(cmd_cluster_compact_log(dir.path(), &cfg, true, false).is_err());
+    }
+
+    #[test]
+    fn cluster_backup_plan_reports_leader_logical_backup() {
+        let dir = tempdir().unwrap();
+        let cfg = cluster_config(dir.path());
+        cmd_cluster_bootstrap(dir.path(), &cfg).unwrap();
+        let json = cmd_cluster_backup_plan(dir.path(), &cfg, true).unwrap();
+        assert!(
+            json.contains("\"source_mode\": \"leader-logical-backup\""),
+            "{json}"
+        );
+        assert!(json.contains("\"dry_run\": true"), "{json}");
+    }
+
+    #[test]
+    fn cluster_backup_plan_excludes_raft_log() {
+        let dir = tempdir().unwrap();
+        let cfg = cluster_config(dir.path());
+        cmd_cluster_bootstrap(dir.path(), &cfg).unwrap();
+        let json = cmd_cluster_backup_plan(dir.path(), &cfg, true).unwrap();
+        assert!(
+            json.contains("raft log"),
+            "excluded should list raft log: {json}"
+        );
+    }
+
+    #[test]
+    fn cluster_backup_plan_redacts_secrets() {
+        let dir = tempdir().unwrap();
+        let mut cfg = cluster_config(dir.path());
+        // A configured auth token hash must never appear in the plan output.
+        let secret_hash = "$argon2id$v=19$m=65536,t=3,p=1$SECRETSALT$SECRETHASH";
+        cfg.auth.enabled = true;
+        cfg.auth.token_hash = Some(secret_hash.to_string());
+        cmd_cluster_bootstrap(dir.path(), &cfg).unwrap();
+        let json = cmd_cluster_backup_plan(dir.path(), &cfg, true).unwrap();
+        assert!(
+            !json.contains("SECRETHASH"),
+            "the auth token hash must be redacted: {json}"
+        );
+        assert!(
+            json.contains("redacted and not included in the backup"),
+            "{json}"
+        );
+    }
+
+    #[test]
+    fn cluster_restore_plan_json_shape() {
+        let dir = tempdir().unwrap();
+        let backup = dir.path().join("backup.jsonl");
+        std::fs::write(
+            &backup,
+            "{\"type\":\"schema\",\"schema\":{\"name\":\"User\",\"fields\":[],\"relationships\":[]}}\n\
+             {\"type\":\"record\",\"collection\":\"User\",\"fields\":{\"id\":1}}\n",
+        )
+        .unwrap();
+        let json = cmd_cluster_restore_plan(&backup, true).unwrap();
+        assert!(json.contains("\"schemas\": 1"), "{json}");
+        assert!(json.contains("\"records\": 1"), "{json}");
+        assert!(json.contains("\"restore_target\""), "{json}");
+        assert!(json.contains("\"User\""), "{json}");
+    }
+
+    #[test]
+    fn cluster_restore_plan_warns_no_live_cluster_restore() {
+        let dir = tempdir().unwrap();
+        let backup = dir.path().join("backup.jsonl");
+        std::fs::write(
+            &backup,
+            "{\"type\":\"record\",\"collection\":\"User\",\"fields\":{\"id\":1}}\n",
+        )
+        .unwrap();
+        let out = cmd_cluster_restore_plan(&backup, false).unwrap();
+        assert!(
+            out.contains("cannot restore directly into a live multi-node cluster"),
+            "{out}"
+        );
     }
 
     #[test]

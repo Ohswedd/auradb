@@ -15,9 +15,10 @@ use serde::{Deserialize, Serialize};
 
 mod cluster;
 pub use cluster::{
-    cluster_metadata_report, cmd_cluster_bootstrap, cmd_cluster_compact_log, cmd_cluster_doctor,
-    cmd_cluster_init, cmd_cluster_peers, cmd_cluster_status, ClusterDoctorReport,
-    ClusterMetadataReport,
+    cluster_metadata_report, cmd_cluster_backup_plan, cmd_cluster_bootstrap,
+    cmd_cluster_compact_log, cmd_cluster_doctor, cmd_cluster_init, cmd_cluster_peers,
+    cmd_cluster_restore_plan, cmd_cluster_status, BackupPlanReport, ClusterDoctorReport,
+    ClusterMetadataReport, RestorePlanReport,
 };
 
 /// The package version.
@@ -1009,6 +1010,13 @@ pub async fn cmd_cluster_status_live(
     if json {
         return serde_json::to_string_pretty(&cluster).context("serializing cluster status");
     }
+    Ok(format_cluster_status_text(addr, &cluster))
+}
+
+/// Render a live cluster health report as human-readable text (the non-JSON
+/// output of `auradb cluster status --addr`). Extracted so the rendering and the
+/// diagnostics warnings can be unit-tested without standing up a live server.
+pub fn format_cluster_status_text(addr: &str, cluster: &auradb_protocol::ClusterHealth) -> String {
     let mut out = String::new();
     out.push_str(&format!("addr: {addr}\n"));
     out.push_str(&format!("enabled: {}\n", cluster.enabled));
@@ -1046,7 +1054,7 @@ pub async fn cmd_cluster_status_live(
     out.push_str(&format!("peers: {}\n", cluster.peer_count));
     for p in &cluster.peers {
         out.push_str(&format!(
-            "  peer {} @ {}{}: {}{}{}\n",
+            "  peer {} @ {}{}: {}{}{}, catch_up={}{}{}\n",
             p.node_id,
             p.addr,
             p.client_addr
@@ -1065,13 +1073,144 @@ pub async fn cmd_cluster_status_live(
             p.next_index
                 .map(|i| format!(", next_index={i}"))
                 .unwrap_or_default(),
+            p.catch_up_state,
+            p.lag_entries
+                .map(|l| format!(", lag_entries={l}"))
+                .unwrap_or_default(),
+            if p.needs_snapshot {
+                ", needs_snapshot=true"
+            } else {
+                ""
+            },
         ));
+    }
+    if let Some(s) = &cluster.snapshot {
+        out.push_str(&format!(
+            "snapshot: in_progress={}, needed_total={}, bytes_sent={}, bytes_installed={}\n",
+            s.in_progress, s.needed_total, s.bytes_sent, s.bytes_installed
+        ));
+        if s.last_included_index > 0 {
+            out.push_str(&format!(
+                "  last_installed: index={}, term={}\n",
+                s.last_included_index, s.last_included_term
+            ));
+        }
+        if let Some(err) = &s.last_error {
+            out.push_str(&format!("  last_snapshot_error: {err}\n"));
+        }
+    }
+    for w in cluster_health_warnings(cluster) {
+        out.push_str(&format!("warning: {w}\n"));
     }
     if cluster.preview_multi_node {
         out.push_str(
             "note: multi-node mode is an experimental, opt-in preview; single-node mode \
              remains the recommended production mode\n",
         );
+    }
+    out
+}
+
+/// Analyze a live cluster health report and return operator-facing warnings
+/// about snapshot-needed followers, lagging followers, and quorum impact. This
+/// is the live diagnostics counterpart to the offline `auradb cluster doctor`
+/// config/metadata checks, and backs the warning lines shown by
+/// `auradb cluster status --addr` and `auradb cluster doctor --addr`.
+pub fn cluster_health_warnings(cluster: &auradb_protocol::ClusterHealth) -> Vec<String> {
+    let mut warnings = Vec::new();
+    if !cluster.quorum_available && cluster.preview_multi_node {
+        warnings.push(
+            "no quorum is currently reachable from this node; the cluster cannot commit writes \
+             until a majority of peers reconnect"
+                .to_string(),
+        );
+    }
+    let mut snapshot_needed = Vec::new();
+    let mut lagging = Vec::new();
+    let mut disconnected = 0usize;
+    for p in &cluster.peers {
+        if !p.connected {
+            disconnected += 1;
+        }
+        if p.needs_snapshot || p.catch_up_state == "snapshot_needed" {
+            snapshot_needed.push(p.node_id.clone());
+        } else if p.catch_up_state == "snapshot_installing" {
+            // Installing is in-flight progress, not a standing warning.
+        } else if p
+            .lag_entries
+            .map(|l| l >= FOLLOWER_LAG_WARN)
+            .unwrap_or(false)
+        {
+            lagging.push((p.node_id.clone(), p.lag_entries.unwrap_or(0)));
+        }
+    }
+    if !snapshot_needed.is_empty() {
+        warnings.push(format!(
+            "follower(s) {} have fallen behind the compacted log prefix and need a snapshot \
+             install; ensure they are connected so the leader can ship a snapshot",
+            snapshot_needed.join(", ")
+        ));
+    }
+    for (id, lag) in lagging {
+        warnings.push(format!(
+            "follower {id} is lagging by {lag} entries; check its connectivity and apply rate"
+        ));
+    }
+    // Quorum impact: warn when disconnected peers threaten the majority.
+    let voters = cluster.peer_count + 1;
+    let needed = voters / 2 + 1;
+    let reachable = (cluster.peer_count - disconnected) + 1;
+    if cluster.preview_multi_node && voters > 1 && reachable == needed {
+        warnings.push(format!(
+            "quorum is at the minimum: {reachable}/{voters} voters reachable (need {needed}); \
+             one more peer loss would stall writes"
+        ));
+    }
+    warnings
+}
+
+/// Per-peer lag (in entries) at or above which `cluster status`/`doctor` warns.
+const FOLLOWER_LAG_WARN: u64 = 10;
+
+/// `auradb cluster doctor --addr` — live cluster diagnostics: fetch the running
+/// server's health and report quorum, snapshot-needed followers, follower lag,
+/// and quorum-impact warnings. This is the runtime counterpart to the offline
+/// `auradb cluster doctor --data-dir` config/metadata checks.
+pub async fn cmd_cluster_doctor_live(
+    addr: &str,
+    token: Option<String>,
+    tls_ca: Option<PathBuf>,
+    server_name: &str,
+    json: bool,
+) -> Result<String> {
+    let report = status_report(addr, token, tls_ca, server_name).await?;
+    let cluster = report
+        .cluster
+        .ok_or_else(|| anyhow::anyhow!("server at {addr} is not running in cluster mode"))?;
+    let warnings = cluster_health_warnings(&cluster);
+    let healthy = cluster.quorum_available && warnings.is_empty();
+    if json {
+        return serde_json::to_string_pretty(&serde_json::json!({
+            "addr": addr,
+            "role": cluster.role,
+            "quorum_available": cluster.quorum_available,
+            "preview_multi_node": cluster.preview_multi_node,
+            "healthy": healthy,
+            "warnings": warnings,
+        }))
+        .context("serializing cluster doctor report");
+    }
+    let mut out = String::new();
+    out.push_str(&format!("addr: {addr}\n"));
+    out.push_str(&format!("role: {}\n", cluster.role));
+    out.push_str(&format!("quorum_available: {}\n", cluster.quorum_available));
+    out.push_str(&format!("healthy: {healthy}\n"));
+    if warnings.is_empty() {
+        out.push_str("warnings: none\n");
+    } else {
+        for w in &warnings {
+            out.push_str(&format!("warning: {w}\n"));
+        }
     }
     Ok(out)
 }

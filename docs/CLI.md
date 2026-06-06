@@ -147,11 +147,21 @@ stand up a running node.
   instead queries a **running** server for live diagnostics: role, leader (and its
   client address), quorum availability, commit/applied/last-log indices,
   replication lag, and per-peer reachability (`connected`, `connect_attempts`,
-  `match_index` / `next_index`).
+  `match_index` / `next_index`). **(v0.6.1)** Each peer entry also carries
+  snapshot/lag fields — `lag_entries`, `needs_snapshot`, `snapshot_in_progress`,
+  and `catch_up_state` (`normal` / `probing` / `snapshot_needed` /
+  `snapshot_installing` / `caught_up` / `unknown`) — alongside cluster-level
+  snapshot diagnostics (last installed boundary, last install time, last error,
+  bytes sent, bytes installed, in-progress gauge, needed-total).
 - `auradb cluster peers [--data-dir <dir>] [--config <file>] [--json]` — list
   configured cluster peers.
 - `auradb cluster doctor [--data-dir <dir>] [--config <file>] [--json]` — validate
-  the cluster configuration and on-disk identity offline.
+  the cluster configuration and on-disk identity offline. **(v0.6.1)** With
+  `--addr <client-addr>` (plus optional `--token` / `--tls-ca` / `--server-name`,
+  and `--json`) it instead becomes a **live** check: it fetches live health from a
+  running server and emits warnings for a follower that needs a snapshot, a lagging
+  follower, and quorum at the minimum / quorum lost. The offline `--data-dir` form
+  is unchanged.
 - `auradb cluster bootstrap [--data-dir <dir>] [--config <file>]` — bootstrap a
   brand-new single-node cluster identity.
 - `auradb cluster compact-log [--data-dir <dir>] [--config <file>] [--dry-run]
@@ -159,6 +169,30 @@ stand up a running node.
   prefix. `--dry-run` reports what would be discarded without modifying anything.
   Compaction never runs ahead of the committed/applied prefix. Requires an
   initialized single-node cluster.
+
+### `auradb cluster backup-plan` / `auradb cluster restore-plan` (v0.6.1)
+
+Two **dry-run planners**: both inspect and report only and **never write data**.
+
+- `auradb cluster backup-plan --data-dir <dir> [--config <file>] [--json]` —
+  inspects the data directory and config and reports the source mode
+  (`leader-logical-backup` for a cluster node, else
+  `local-data-dir-logical-backup`); what a logical backup would **include** (latest
+  committed state, schema, collection and record counts; indexes rebuilt on
+  restore); what it **excludes** (the Raft log and compaction state, cluster
+  membership/peer metadata, uncommitted entries, historical MVCC versions); the
+  restore target (single-node restore into a fresh data dir, optionally
+  bootstrapping a fresh single-node preview cluster); referenced secrets (auth
+  token, peer auth token, TLS material) shown **redacted** and noted as **not**
+  included in the backup; and warnings (cannot restore directly into a live
+  multi-node cluster; run from a stable leader with writes quiesced; verify after
+  restore).
+- `auradb cluster restore-plan --input <backup.jsonl> [--json]` — inspects a JSONL
+  logical dump and reports its schema/record counts, collections, restore target,
+  exclusions, and the same "no live multi-node restore" warning.
+
+These planners describe the existing `auradb dump` / `auradb restore` flow; they
+do not perform it. See [OPERATIONS.md](OPERATIONS.md) and [SECURITY.md](SECURITY.md).
 
 ### `auradb cluster leader|wait-leader|wait-ready` (v0.5.0)
 

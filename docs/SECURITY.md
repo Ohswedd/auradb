@@ -158,6 +158,9 @@ transport, gated by a conservative, fail-closed security baseline:
   *unsupported* response rather than being silently ignored.
 - **Token redaction.** The `peer_auth_token` is treated like other AuraDB
   secrets: it is never printed by `doctor`/`status` output or logged.
+- **Backup-plan redacts secrets (v0.6.1).** `auradb cluster backup-plan` references
+  the auth token, peer auth token, and TLS material **redacted**, and notes they
+  are **never written into a logical backup** (`auradb dump` exports data only).
 - **Static membership only.** No join/leave/dynamic membership; a duplicate, a
   self-peer, or a malformed peer address is rejected.
 

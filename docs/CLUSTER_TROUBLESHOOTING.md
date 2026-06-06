@@ -136,6 +136,51 @@ closed unless `allow_experimental_public_cluster = true` (which then requires
 peer TLS and a token). Membership is static; a duplicate peer, a self-peer, or a
 malformed `host:port` is rejected at startup.
 
+## A follower that needs a snapshot (v0.6.1)
+
+When a follower has fallen below the leader's compacted prefix, AppendEntries can
+no longer serve it and the leader must ship a snapshot. v0.6.1 makes this visible
+in the live status report:
+
+```bash
+auradb cluster status --addr 127.0.0.1:7171 --json
+auradb cluster doctor --addr 127.0.0.1:7171 --json
+```
+
+- In `cluster status --addr`, the peer's `catch_up_state` reads `snapshot_needed`
+  (an install is required) or `snapshot_installing` (one is in progress), and
+  `needs_snapshot` is `true`. Cluster-level snapshot diagnostics report the last
+  installed boundary, last install time, last error (the rejection reason), bytes
+  sent, bytes installed, the in-progress gauge, and the needed-total.
+- `cluster doctor --addr` fetches live health and emits a warning for a follower
+  that needs a snapshot.
+- Watch the metrics `auradb_cluster_snapshot_needed_total`,
+  `auradb_cluster_snapshot_in_progress`, `auradb_cluster_snapshot_bytes_sent_total`,
+  `auradb_cluster_snapshot_bytes_installed_total`, and
+  `auradb_cluster_snapshot_last_error` (a 0/1 gauge; the textual reason is in the
+  `cluster status` JSON, not a metric label). See [OBSERVABILITY.md](OBSERVABILITY.md).
+
+A rising sent/installed pair during recovery is the healthy signal that a snapshot
+install is doing the catch-up. `auradb_cluster_snapshot_last_error` set to `1`
+(with a reason in the status JSON) points at a rejected install — an oversized
+snapshot, a wrong cluster id, a bad digest, or a future format.
+
+## A lagging follower (v0.6.1)
+
+A follower that trails but is still within the leader's retained log is caught up
+by AppendEntries. v0.6.1 quantifies the lag in the live status report:
+
+- In `cluster status --addr`, the peer's `lag_entries` is how far its match index
+  trails the leader, and `catch_up_state` reads `probing` or `normal` while it
+  closes the gap and `caught_up` once converged.
+- `cluster doctor --addr` emits warnings for a lagging follower and for quorum at
+  the minimum or quorum lost.
+
+Confirm the follower converges (`lag_entries` falls toward zero,
+`catch_up_state` reaches `caught_up`). A follower whose lag keeps growing while
+others converge usually means it is unreachable (`connected: false`) or has
+fallen below the compacted prefix (see the snapshot section above).
+
 ## Compacting the Raft log
 
 Over time the durable Raft log grows. Once the engine has durably applied a

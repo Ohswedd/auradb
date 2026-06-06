@@ -6,12 +6,13 @@ use std::path::PathBuf;
 use anyhow::Result;
 use auradb_cli::{
     build_config, cmd_auth_hash_token, cmd_auth_rotate_token, cmd_bench, cmd_bench_compare,
-    cmd_bench_json, cmd_cert_generate_dev, cmd_check, cmd_cluster_bootstrap,
-    cmd_cluster_compact_log, cmd_cluster_doctor, cmd_cluster_init, cmd_cluster_leader,
-    cmd_cluster_peers, cmd_cluster_status, cmd_cluster_status_live, cmd_cluster_wait_leader,
-    cmd_cluster_wait_ready, cmd_compact, cmd_compatibility, cmd_config_validate, cmd_doctor,
-    cmd_doctor_json, cmd_dump, cmd_gc, cmd_index_check, cmd_index_rebuild, cmd_init, cmd_restore,
-    cmd_server, cmd_snapshot_create, cmd_snapshot_inspect, cmd_snapshot_restore, cmd_stats_analyze,
+    cmd_bench_json, cmd_cert_generate_dev, cmd_check, cmd_cluster_backup_plan,
+    cmd_cluster_bootstrap, cmd_cluster_compact_log, cmd_cluster_doctor, cmd_cluster_doctor_live,
+    cmd_cluster_init, cmd_cluster_leader, cmd_cluster_peers, cmd_cluster_restore_plan,
+    cmd_cluster_status, cmd_cluster_status_live, cmd_cluster_wait_leader, cmd_cluster_wait_ready,
+    cmd_compact, cmd_compatibility, cmd_config_validate, cmd_doctor, cmd_doctor_json, cmd_dump,
+    cmd_gc, cmd_index_check, cmd_index_rebuild, cmd_init, cmd_restore, cmd_server,
+    cmd_snapshot_create, cmd_snapshot_inspect, cmd_snapshot_restore, cmd_stats_analyze,
     cmd_stats_show, cmd_status, cmd_status_json, cmd_version,
 };
 use clap::{Parser, Subcommand};
@@ -249,12 +250,27 @@ enum ClusterCommand {
         #[arg(long)]
         json: bool,
     },
-    /// Validate cluster configuration and metadata.
+    /// Validate cluster configuration and metadata. With `--addr`, query a
+    /// running server for live diagnostics (quorum, snapshot-needed followers,
+    /// follower lag, quorum impact) instead of reading on-disk metadata.
     Doctor {
         #[arg(long, default_value = ".local/auradb")]
         data_dir: PathBuf,
         #[arg(long)]
         config: Option<PathBuf>,
+        /// Query a running server's client port for live cluster diagnostics
+        /// instead of validating on-disk config and metadata.
+        #[arg(long)]
+        addr: Option<String>,
+        /// Authentication token, if the queried server requires auth.
+        #[arg(long)]
+        token: Option<String>,
+        /// PEM CA bundle to enable and verify TLS when querying `--addr`.
+        #[arg(long)]
+        tls_ca: Option<PathBuf>,
+        /// TLS server name to verify against when querying `--addr`.
+        #[arg(long, default_value = "localhost")]
+        server_name: String,
         /// Emit the report as JSON.
         #[arg(long)]
         json: bool,
@@ -276,6 +292,27 @@ enum ClusterCommand {
         #[arg(long)]
         dry_run: bool,
         /// Emit the report as JSON.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Plan (dry-run) a logical backup of a data dir: what it would include,
+    /// exclude, where it can be restored, and which secrets are referenced.
+    BackupPlan {
+        #[arg(long, default_value = ".local/auradb")]
+        data_dir: PathBuf,
+        #[arg(long)]
+        config: Option<PathBuf>,
+        /// Emit the plan as JSON.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Plan (dry-run) a restore from a JSONL logical backup: what it would load
+    /// and where it can be restored.
+    RestorePlan {
+        /// The JSONL logical backup to inspect.
+        #[arg(long)]
+        input: PathBuf,
+        /// Emit the plan as JSON.
         #[arg(long)]
         json: bool,
     },
@@ -619,13 +656,24 @@ async fn main() -> Result<()> {
             ClusterCommand::Doctor {
                 data_dir,
                 config,
+                addr,
+                token,
+                tls_ca,
+                server_name,
                 json,
             } => {
-                let cfg =
-                    build_config(config.as_deref(), Some(data_dir.clone()), None, None, false)?;
-                print!("{}", cmd_cluster_doctor(&data_dir, &cfg, json)?);
-                if json {
-                    println!();
+                if let Some(addr) = addr {
+                    println!(
+                        "{}",
+                        cmd_cluster_doctor_live(&addr, token, tls_ca, &server_name, json).await?
+                    );
+                } else {
+                    let cfg =
+                        build_config(config.as_deref(), Some(data_dir.clone()), None, None, false)?;
+                    print!("{}", cmd_cluster_doctor(&data_dir, &cfg, json)?);
+                    if json {
+                        println!();
+                    }
                 }
             }
             ClusterCommand::Bootstrap { data_dir, config } => {
@@ -645,6 +693,24 @@ async fn main() -> Result<()> {
                     "{}",
                     cmd_cluster_compact_log(&data_dir, &cfg, dry_run, json)?
                 );
+                if json {
+                    println!();
+                }
+            }
+            ClusterCommand::BackupPlan {
+                data_dir,
+                config,
+                json,
+            } => {
+                let cfg =
+                    build_config(config.as_deref(), Some(data_dir.clone()), None, None, false)?;
+                print!("{}", cmd_cluster_backup_plan(&data_dir, &cfg, json)?);
+                if json {
+                    println!();
+                }
+            }
+            ClusterCommand::RestorePlan { input, json } => {
+                print!("{}", cmd_cluster_restore_plan(&input, json)?);
                 if json {
                     println!();
                 }
