@@ -113,17 +113,17 @@ Because containers communicate over a non-loopback Docker network, this path is 
    image (the recommended preview path, no registry pull) or the published one:
 
    ```bash
-   # Local image (build it first: docker build -t auradb:0.6.2 .)
-   AURADB_IMAGE=auradb:0.6.2 bash scripts/smoke_cluster_compose.sh
+   # Local image (build it first: docker build -t auradb:0.7.0 .)
+   AURADB_IMAGE=auradb:0.7.0 bash scripts/smoke_cluster_compose.sh
    # Or the published image (post-release verification)
-   AURADB_IMAGE=ghcr.io/ohswedd/auradb:0.6.2 bash scripts/smoke_cluster_compose.sh
+   AURADB_IMAGE=ghcr.io/ohswedd/auradb:0.7.0 bash scripts/smoke_cluster_compose.sh
    ```
 
    The smoke prints the image used, the node ports, the leader, quorum, per-peer
    states, and the teardown result. The published image is **multi-arch**
    (`linux/amd64` + `linux/arm64`), so `docker pull` selects arm64 automatically
    on Apple Silicon; inspect the manifest with `docker buildx imagetools inspect
-   ghcr.io/ohswedd/auradb:0.6.2`.
+   ghcr.io/ohswedd/auradb:0.7.0`.
 
 4. **Inspect** (client ports are published to the host as `7171`/`7181`/`7191`):
 
@@ -147,6 +147,28 @@ Because containers communicate over a non-loopback Docker network, this path is 
 
 The loopback option (A) is the validated path used by the project's integration
 tests; the Docker option (B) is provided for a more realistic networked preview.
+
+---
+
+## Connecting with Aura Connector (Python)
+
+Aura Connector v0.4.x is cluster-aware: a write to a follower raises
+`AuraNotLeaderError`, and the client can reconnect to the leader with
+`Client.connect_to_leader(exc)` or an opt-in bounded `Client.with_leader_redirect()`.
+[`python_connector.py`](python_connector.py) demonstrates this against the Docker
+cluster. Because the compose file publishes each node's client port on the host
+(`7171`/`7181`/`7191`) while the cluster's internal leader address is not reachable
+from the host, the example locates the leader by trying the published endpoints:
+
+```bash
+python -m pip install "aura-connector>=0.4,<0.5"
+docker compose -f docker-compose.cluster.yml up -d
+auradb cluster wait-leader --addr 127.0.0.1:7171 --timeout-secs 30
+python examples/cluster/python_connector.py
+```
+
+It is preview-only: there is no production high availability or automatic
+failover, and it never auto-retries a write whose application status is ambiguous.
 
 ---
 

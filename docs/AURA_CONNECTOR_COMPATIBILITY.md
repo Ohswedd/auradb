@@ -2,11 +2,65 @@
 
 This document is the connector-focused companion to the
 [Compatibility Matrix](COMPATIBILITY.md). It records which Aura Connector release
-talks to AuraDB 0.6.2, what it can drive, and what it cannot.
+talks to AuraDB 0.7.0, what it can drive, and what it cannot.
 
-> **AuraDB v0.6.2 hardens repeated chaos and larger-state recovery for the
-> controlled multi-node preview. It is _not_ production HA. Single-node mode
+> **AuraDB v0.7.0 adds connector cluster ergonomics for the controlled multi-node
+> preview. It is _not_ production HA — there is no automatic failover,
+> linearizable follower reads, or distributed transactions. Single-node mode
 > remains the recommended production mode.**
+
+## Connector cluster ergonomics (v0.7.0)
+
+v0.7.0 is the first **coordinated** server + connector cluster-ergonomics release:
+**Aura Connector v0.4.0** ships alongside it. The server-side change is additive
+and backward compatible — the `not_leader` error frame now carries a structured
+`not_leader` object built from the node's current cluster view:
+
+```json
+{
+  "code": "not_leader",
+  "message": "this node (0000000000000001) is not the leader; current leader is node 00000000000000aa (client address 127.0.0.1:7373); retry the write against the leader",
+  "retryable": true,
+  "not_leader": {
+    "current_node_id": "0000000000000001",
+    "leader_node_id": "00000000000000aa",
+    "leader_client_addr": "127.0.0.1:7373",
+    "leader_hint": "127.0.0.1:7373",
+    "term": 7,
+    "role": "follower"
+  }
+}
+```
+
+Every field is present only when genuinely known (a follower that has not yet
+recognized a leader omits the leader fields rather than guessing), the object
+carries no secrets, and older clients ignore it — so **Aura Connector 0.3.x stays
+fully compatible**. The structured-payload contract is pinned by
+`crates/auradb-server/tests/cluster_preview.rs`
+(`not_leader_payload_includes_leader_client_addr_when_known`,
+`not_leader_payload_contains_no_secrets`) and
+`crates/auradb-server/tests/not_leader.rs`
+(`not_leader_payload_safe_over_tls_auth`), with the wire shape covered by
+`auradb-protocol` unit tests.
+
+**Aura Connector 0.4.x** consumes these fields:
+
+- maps `not_leader` to a dedicated `AuraNotLeaderError` exposing `leader_addr`,
+  `leader_client_addr`, `leader_hint`, `leader_node_id`, `current_node_id`,
+  `retryable`, and the full `raw_payload`;
+- `Client.connect_to_leader(error)` / `Client.reconnect_to(addr)` open a new
+  client bound to the leader, preserving the original auth and TLS settings;
+- `Client.with_leader_redirect(max_redirects=…)` is an opt-in, bounded redirect
+  for autonomous writes (never for transactions or streaming cursors).
+
+The connector cluster conformance runner
+`tests/conformance/python/run_connector_cluster.py` exercises this end to end
+against a live preview cluster (leader write, follower `not_leader`, reconnect,
+bounded redirect, transaction-not-redirected), gated on
+`AURADB_CLUSTER_LEADER_DSN` / `AURADB_CLUSTER_FOLLOWER_DSN`.
+
+Manual leader routing (unchanged, still available) resolves the leader with
+`auradb cluster leader --addr <any-node>` and points the connector there.
 
 ## Connector leader-hint review (v0.6.2)
 
@@ -112,6 +166,8 @@ human-readable message.
 
 | AuraDB | Aura Connector | Protocol | Status |
 | ------ | -------------- | -------- | ------ |
+| 0.7.0  | 0.4.x          | AWP 1    | Supported (native AuraDB backend; structured `not_leader` payload; `AuraNotLeaderError`, reconnect + bounded redirect helpers) |
+| 0.7.0  | 0.3.x          | AWP 1    | Supported (compatible; ignores the additive `not_leader` object and routes the leader manually) |
 | 0.6.2  | 0.3.x          | AWP 1    | Supported (native AuraDB backend; additive `leader_changes` diagnostics field; manual leader routing) |
 | 0.6.1  | 0.3.x          | AWP 1    | Supported (native AuraDB backend; additive snapshot/lag diagnostics fields; manual leader routing) |
 | 0.6.0  | 0.3.x          | AWP 1    | Supported (native AuraDB backend; additive fail-stop diagnostics fields; targets the leader) |
