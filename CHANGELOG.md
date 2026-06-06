@@ -4,6 +4,42 @@ All notable changes to AuraDB are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and the project uses
 [Semantic Versioning](https://semver.org/).
 
+## [0.7.1] - 2026-06-06
+
+Connector ergonomics polish. This release coordinates with Aura Connector v0.4.1
+to improve the developer experience around the controlled multi-node **preview**:
+clearer cluster-preview docs for Python connector users, hardened connector
+cluster conformance guidance, and additional leader-hint and safe-redirect
+examples.
+
+This release adds **no** new database architecture and changes **no** Raft,
+storage, query, MVCC, replication, or snapshot semantics. The `not_leader` payload
+is byte-for-byte the same as v0.7.0, the storage format is unchanged, and the Aura
+Wire Protocol (AWP v1) is unchanged. It is **not** production HA — there is no
+production automatic failover, no linearizable follower reads, no distributed
+transactions, no dynamic membership, and no sharding or multi-region. Multi-node
+mode remains an experimental, opt-in preview; **single-node mode remains the
+recommended production mode.** All v0.7.0 behavior is preserved.
+
+### Added
+- Aura Connector v0.4.1 compatibility notes across the cluster and conformance
+  docs (`docs/AURA_CONNECTOR_COMPATIBILITY.md`, `docs/COMPATIBILITY.md`,
+  `docs/CONFORMANCE.md`).
+- Stronger connector cluster conformance guidance for the published connector,
+  including how PR vs. release/tag runs select a local or published connector.
+- Additional examples for leader hints (`auradb cluster leader`) and safe
+  redirects in `examples/cluster/`.
+- `docs/V0_7_1_RELEASE_NOTES.md`.
+
+### Changed
+- Improved cluster-preview docs for Python connector users.
+- Improved the release checklist for connector-first coordinated releases
+  (`docs/RELEASE.md`).
+
+### Fixed
+- Documentation and conformance-guidance bugs found during coordinated validation.
+  No server behavior changed.
+
 ## [0.7.0] - 2026-06-06
 
 Connector cluster ergonomics. This release coordinates with Aura Connector

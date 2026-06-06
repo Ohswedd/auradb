@@ -14,9 +14,14 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: "Published image tag to smoke against (e.g. 0.7.0)"
+        description: "Published image tag to smoke against (e.g. 0.7.1)"
         required: false
-        default: "0.7.0"
+        default: "0.7.1"
+      require_published_connector:
+        description: "Fail (don't skip) if the published Aura Connector >=0.4.1,<0.5 is unavailable. Set for release/tag conformance."
+        type: boolean
+        required: false
+        default: false
 
 env:
   CARGO_TERM_COLOR: always
@@ -131,16 +136,26 @@ jobs:
         # Drives Aura Connector v0.4.x against the live loopback cluster: leader
         # write, follower not_leader exposing the leader address, reconnect helper,
         # bounded redirect, and transaction-not-redirected. The connector resolves
-        # leader/follower client addresses from `auradb cluster leader`. Until Aura
-        # Connector 0.4.0 is published, the install or the runner reports it is
-        # missing/too old (exit 2) and this step skips with a clear message rather
-        # than failing — see docs/CONFORMANCE.md.
+        # leader/follower client addresses from `auradb cluster leader`.
+        #
+        # Connector selection: on PR/push this uses the latest published connector
+        # in the >=0.4.1,<0.5 line when one is available, and skips with a clear
+        # message when it is not (so coordinated work does not block on connector
+        # publish timing). For release/tag conformance, set the
+        # `require_published_connector` input so a missing/too-old connector FAILS
+        # instead of skipping — see docs/CONFORMANCE.md. Until Aura Connector 0.4.1
+        # is published, leave it unset.
         env:
-          AURA_CONNECTOR_MIN_VERSION: "0.4.0"
+          AURA_CONNECTOR_MIN_VERSION: "0.4.1"
+          REQUIRE_PUBLISHED_CONNECTOR: ${{ github.event.inputs.require_published_connector || 'false' }}
         run: |
           set -eu
-          if ! python -m pip install --upgrade "aura-connector>=0.4,<0.5"; then
-            echo "Aura Connector >=0.4,<0.5 not installable yet; skipping cluster conformance."
+          if ! python -m pip install --upgrade "aura-connector>=0.4.1,<0.5"; then
+            if [ "$REQUIRE_PUBLISHED_CONNECTOR" = "true" ]; then
+              echo "Aura Connector >=0.4.1,<0.5 is required for release conformance but is not installable."
+              exit 1
+            fi
+            echo "Aura Connector >=0.4.1,<0.5 not installable yet; skipping cluster conformance."
             exit 0
           fi
           # Resolve the leader's client address and pick a follower from the known
@@ -156,11 +171,20 @@ jobs:
             if [ "$cand" != "$leader" ]; then follower="$cand"; break; fi
           done
           echo "leader=$leader follower=$follower"
+          # Scenario 1-2: connector smoke + full conformance against the leader,
+          # using the published 0.4.x connector (these must pass when it installs).
+          python tests/conformance/python/run_connector_smoke.py --addr "$leader"
+          python tests/conformance/python/run_connector_conformance.py --addr "$leader"
+          # Scenario 3: cluster ergonomics across leader + follower.
           set +e
           python tests/conformance/python/run_connector_cluster.py --leader "$leader" --follower "$follower"
           rc=$?
           set -e
           if [ "$rc" -eq 2 ]; then
+            if [ "$REQUIRE_PUBLISHED_CONNECTOR" = "true" ]; then
+              echo "Aura Connector 0.4.x required for release conformance but reported too old."
+              exit 1
+            fi
             echo "Aura Connector 0.4.x not available; skipping cluster conformance."
             exit 0
           fi
@@ -185,11 +209,11 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
 
       - name: Build the auradb image for the Compose cluster
-        run: docker build -t auradb:0.7.0 .
+        run: docker build -t auradb:0.7.1 .
 
       - name: Generate dev certs, run the cluster, and tear it down
         env:
-          AURADB_IMAGE: auradb:0.7.0
+          AURADB_IMAGE: auradb:0.7.1
         run: bash scripts/smoke_cluster_compose.sh
 
   published-image-smoke:

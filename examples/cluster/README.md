@@ -155,16 +155,31 @@ tests; the Docker option (B) is provided for a more realistic networked preview.
 Aura Connector v0.4.x is cluster-aware: a write to a follower raises
 `AuraNotLeaderError`, and the client can reconnect to the leader with
 `Client.connect_to_leader(exc)` or an opt-in bounded `Client.with_leader_redirect()`.
-[`python_connector.py`](python_connector.py) demonstrates this against the Docker
-cluster. Because the compose file publishes each node's client port on the host
-(`7171`/`7181`/`7191`) while the cluster's internal leader address is not reachable
-from the host, the example locates the leader by trying the published endpoints:
+Aura Connector **v0.4.1** (coordinated with AuraDB v0.7.1) is recommended: it
+renders clearer `AuraNotLeaderError` messages (the node reached, the leader
+address, and the redirect call) and refuses a redirect that would silently drop
+TLS. [`python_connector.py`](python_connector.py) demonstrates the host-side path
+against the Docker cluster. Because the compose file publishes each node's client
+port on the host (`7171`/`7181`/`7191`) while the cluster's internal leader address
+is not reachable from the host, the example locates the leader by trying the
+published endpoints:
 
 ```bash
-python -m pip install "aura-connector>=0.4,<0.5"
+python -m pip install "aura-connector>=0.4,<0.5"   # v0.4.1+ recommended
 docker compose -f docker-compose.cluster.yml up -d
 auradb cluster wait-leader --addr 127.0.0.1:7171 --timeout-secs 30
 python examples/cluster/python_connector.py
+```
+
+When the leader's client address **is** reachable from the client, resolve it
+directly and connect there instead of scanning endpoints:
+
+```bash
+# Resolve the current leader's client address from any node.
+auradb cluster leader --addr 127.0.0.1:7171 --json
+# Then connect the Aura Connector to that address, or catch AuraNotLeaderError and
+# call client.connect_to_leader(exc) — see the connector's
+# examples/auradb_leader_redirect.py.
 ```
 
 It is preview-only: there is no production high availability or automatic

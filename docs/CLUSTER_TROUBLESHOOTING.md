@@ -103,6 +103,16 @@ wait-leader`. Aura Connector 0.3.x surfaces `not_leader` as a normal server
 error; it does not crash, does not retry forever, and does not drop auth/TLS
 state.
 
+**With Aura Connector 0.4.x** the `not_leader` response maps to a dedicated
+`AuraNotLeaderError` that exposes the leader address and routing hints. Recover by
+either resolving the leader first (`auradb cluster leader --addr <node> --json`)
+and connecting there, or catching the error and calling
+`client.connect_to_leader(exc)` (preserves token auth and TLS) or the opt-in
+bounded `client.with_leader_redirect()`. v0.4.1 renders a clearer message (the
+node reached, the leader address, the redirect call) and refuses a redirect that
+would silently drop TLS. Transactions are never auto-redirected — restart the
+transaction on the leader. See the connector's `examples/auradb_leader_redirect.py`.
+
 ## Multi-node preview troubleshooting (v0.5.0)
 
 The v0.5.0 preview forms a real cross-process cluster when both opt-ins are set

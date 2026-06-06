@@ -7,7 +7,7 @@
 [![CI](https://github.com/Ohswedd/auradb/actions/workflows/ci.yml/badge.svg)](https://github.com/Ohswedd/auradb/actions/workflows/ci.yml)
 [![Security](https://github.com/Ohswedd/auradb/actions/workflows/security.yml/badge.svg)](https://github.com/Ohswedd/auradb/actions/workflows/security.yml)
 [![Docker](https://github.com/Ohswedd/auradb/actions/workflows/docker.yml/badge.svg)](https://github.com/Ohswedd/auradb/actions/workflows/docker.yml)
-[![Release](https://img.shields.io/badge/release-v0.7.0-green.svg)](CHANGELOG.md)
+[![Release](https://img.shields.io/badge/release-v0.7.1-green.svg)](CHANGELOG.md)
 [![Rust](https://img.shields.io/badge/rust-1.85%2B-orange.svg)](https://www.rust-lang.org)
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
 
@@ -62,6 +62,15 @@ leader without parsing the message. The wire protocol (AWP 1) is unchanged and
 older connectors ignore the new fields. It remains _not_ production HA;
 single-node mode stays the recommended production mode. See
 [docs/V0_7_RELEASE_NOTES.md](docs/V0_7_RELEASE_NOTES.md).
+
+**AuraDB v0.7.1 is a connector-ergonomics polish release** (coordinated with Aura
+Connector v0.4.1): clearer compatibility docs for Python cluster-preview users,
+hardened connector cluster conformance guidance, and additional leader-hint and
+safe-redirect examples. It adds **no** new database architecture and changes
+neither the on-disk nor the wire format — the `not_leader` payload is byte-for-byte
+the same as v0.7.0. It remains _not_ production HA; single-node mode stays the
+recommended production mode. See
+[docs/V0_7_1_RELEASE_NOTES.md](docs/V0_7_1_RELEASE_NOTES.md).
 
 AuraDB 0.4.0 adds the replication and Raft foundation for future clustered
 deployments, on top of the 0.3.x MVCC and query-planner foundations: each record

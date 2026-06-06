@@ -2,12 +2,30 @@
 
 This document is the connector-focused companion to the
 [Compatibility Matrix](COMPATIBILITY.md). It records which Aura Connector release
-talks to AuraDB 0.7.0, what it can drive, and what it cannot.
+talks to AuraDB 0.7.1, what it can drive, and what it cannot.
 
-> **AuraDB v0.7.0 adds connector cluster ergonomics for the controlled multi-node
+> **AuraDB v0.7.x adds connector cluster ergonomics for the controlled multi-node
 > preview. It is _not_ production HA — there is no automatic failover,
 > linearizable follower reads, or distributed transactions. Single-node mode
 > remains the recommended production mode.**
+
+## Connector ergonomics polish (v0.7.1)
+
+v0.7.1 is a **coordinated patch** release with **Aura Connector v0.4.1**, a
+docs/ergonomics polish over v0.4.0. The server is unchanged — the `not_leader`
+payload below is byte-for-byte the same as v0.7.0, and the Aura Wire Protocol (AWP
+1) is unchanged. Aura Connector v0.4.1 improves the client-side experience around
+this payload without changing the wire contract:
+
+- clearer `AuraNotLeaderError` messages (the rendered string names the node
+  reached, the leader address or that it is unknown, the retry classification, and
+  the redirect call — and still leaks no secrets);
+- a secure-by-default redirect: an explicit insecure redirect target is refused
+  unless the caller opts in, and TLS/auth are preserved across a reconnect;
+- transaction-redirect safety documentation and tests.
+
+Aura Connector 0.4.0 and 0.3.x remain compatible with AuraDB 0.7.1; the v0.4.1
+improvements are client-side only.
 
 ## Connector cluster ergonomics (v0.7.0)
 
@@ -166,6 +184,9 @@ human-readable message.
 
 | AuraDB | Aura Connector | Protocol | Status |
 | ------ | -------------- | -------- | ------ |
+| 0.7.1  | 0.4.1          | AWP 1    | Supported, recommended (clearer `AuraNotLeaderError` messages, secure-by-default redirect, transaction-redirect docs; identical wire payload to 0.7.0) |
+| 0.7.1  | 0.4.0          | AWP 1    | Supported (structured `not_leader` payload; `AuraNotLeaderError`, reconnect + bounded redirect helpers) |
+| 0.7.1  | 0.3.x          | AWP 1    | Supported (compatible; ignores the additive `not_leader` object and routes the leader manually) |
 | 0.7.0  | 0.4.x          | AWP 1    | Supported (native AuraDB backend; structured `not_leader` payload; `AuraNotLeaderError`, reconnect + bounded redirect helpers) |
 | 0.7.0  | 0.3.x          | AWP 1    | Supported (compatible; ignores the additive `not_leader` object and routes the leader manually) |
 | 0.6.2  | 0.3.x          | AWP 1    | Supported (native AuraDB backend; additive `leader_changes` diagnostics field; manual leader routing) |
