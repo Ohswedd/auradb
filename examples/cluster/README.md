@@ -156,7 +156,7 @@ Aura Connector v0.4.x is cluster-aware: a write to a follower raises
 `AuraNotLeaderError`, and the client can reconnect to the leader with
 `Client.connect_to_leader(exc)` or an opt-in bounded `Client.with_leader_redirect()`.
 Aura Connector **v0.4.1** (introduced alongside AuraDB v0.7.1 and still the
-recommended connector for the current AuraDB v0.8.0 release, which leaves the wire
+recommended connector for the current AuraDB v0.8.1 release, which leaves the wire
 protocol unchanged) is recommended: it renders clearer `AuraNotLeaderError`
 messages (the node reached, the leader address, and the redirect call) and refuses
 a redirect that would silently drop TLS. [`python_connector.py`](python_connector.py) demonstrates the host-side path

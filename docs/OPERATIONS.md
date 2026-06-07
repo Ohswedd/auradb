@@ -7,7 +7,8 @@ AuraDB v0.5.0 adds a controlled, experimental multi-node server preview (see
 [Multi-node preview operations](#multi-node-preview-operations-v050)); it is off
 by default and not a production path.
 
-v0.8.0 is a production-readiness candidate for single-node operations. For
+v0.8.1 is a stabilization patch over the v0.8.0 production-readiness candidate for
+single-node operations; the operability surface below is unchanged. For
 single-node production guidance and step-by-step operator runbooks, see
 [PRODUCTION_READINESS.md](PRODUCTION_READINESS.md) and [RUNBOOKS.md](RUNBOOKS.md).
 Three operability tools introduced in v0.8.0 are referenced throughout this guide:
@@ -104,9 +105,11 @@ auradb restore --data-dir /restored --in backup.jsonl
 ```
 
 `auradb backup verify` (v0.8.0) validates a dump without importing it: every line
-parses, a per-line size bound holds, and records reference declared schemas. It
-exits non-zero on an invalid backup, so run it after `dump` and before relying on
-the backup. See [CLI.md](CLI.md).
+parses, a per-line size bound holds, and records reference declared schemas. As of
+v0.8.1 it also rejects a backup with duplicate primary keys (reporting the
+collection and a count only — never the key value). It exits non-zero on an
+invalid backup, so run it after `dump` and before relying on the backup. See
+[CLI.md](CLI.md).
 
 Properties that hold across GC:
 

@@ -209,6 +209,31 @@ Each archive (`auradb-vX.Y.Z-<target>.tar.gz`, or `.zip` on Windows) contains th
 file is generated, and all archives plus the checksum file are attached to the
 GitHub release.
 
+### Verifying release artifacts
+
+`scripts/verify_release_artifacts.sh` checks a release for completeness and
+integrity. It runs in three modes:
+
+```bash
+# Verify a local directory of built artifacts (no network).
+scripts/verify_release_artifacts.sh --dir out --version 0.8.1
+
+# Download and verify the published assets for a tag (requires the gh CLI), and
+# confirm the release body carries the single-node / preview honesty wording.
+scripts/verify_release_artifacts.sh --tag v0.8.1
+
+# Network-free self-test of the verifier itself (good dir passes; missing
+# archive, bad checksum, and wrong-version name each fail).
+scripts/verify_release_artifacts.sh --self-test
+```
+
+It verifies that every expected platform archive is present, that `SHA256SUMS`
+lists **and** matches every archive (no stray, unlisted asset ships), that archive
+names carry the version, and that a host-matching binary prints the expected
+`auradb version`. The CI `release.yml` runs `--dir` verification after the collect
+step; the `--tag` body-wording check and the published-image smoke remain
+post-release steps.
+
 ## Tag and GitHub release
 
 ```bash

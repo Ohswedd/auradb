@@ -4,6 +4,60 @@ All notable changes to AuraDB are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and the project uses
 [Semantic Versioning](https://semver.org/).
 
+## [0.8.1] - 2026-06-07
+
+Production-readiness **stabilization patch** for the v0.8.0 candidate. It narrows
+in on the operational edges of v0.8.0 — backup/restore corner cases, resource-limit
+boundaries, soak ergonomics, release-artifact verification, and runbook clarity —
+without adding product features or changing semantics.
+
+This release introduces **no** new database architecture and changes **no** Raft,
+storage, query, MVCC, replication, or snapshot semantics. The storage format
+(v2) and the Aura Wire Protocol (AWP 1) are unchanged, and Aura Connector v0.4.1
+compatibility is preserved. Multi-node mode remains an experimental, opt-in
+preview — **not** production HA — and **single-node mode remains the recommended
+production mode.** All v0.8.0 behavior is preserved except where a documented bug
+was fixed.
+
+### Added
+- Additional backup and restore edge-case coverage: empty database, schema-only
+  export, a large single record, Unicode/escaped strings, deeply nested
+  documents, vectors, relationship delete policies, full-text with punctuation,
+  and document-path indexes after restore.
+- Backup-verify rejection coverage: malformed JSONL, records for an undeclared
+  collection, duplicate primary keys, truncated files, invalid schema sections,
+  the per-line size bound, and a check that the verify report never echoes record
+  contents.
+- `auradb backup verify` now rejects a backup that carries two records with the
+  same primary key — a corrupt or hand-edited dump whose restore would silently
+  collapse two logical records into one. Only the collection and a count are
+  reported; the key value is never printed.
+- Additional resource-limit edge-case coverage: exact-boundary acceptance,
+  one-past-boundary rejection, zero/absurd config validation, error-shape
+  stability, payload redaction, the no-partial-commit guarantee on a refused
+  staged write, and a structured single-message snapshot-size error.
+- Release-artifact verification gained a SHA256SUMS-completeness check (no stray,
+  unlisted asset), a `--tag` release-body honesty-wording check, and a
+  network-free `--self-test` mode covering missing-archive, bad-checksum,
+  wrong-version-name, and good-directory scenarios.
+- Soak scripts now print timestamps, the binary version, and the data/log
+  directories; honor `KEEP_ARTIFACTS=1`; allow a `LEADER_ADDR` override for the
+  cluster preview; and emit a final machine-readable summary line.
+
+### Changed
+- The document-depth limit error now names the offending top-level field so an
+  operator can find the over-nested path without bisecting the record. The field
+  name is structural, not record content, so this leaks nothing.
+- Improved production-readiness documentation and operator runbooks.
+- Improved release checklist clarity.
+- Improved backup/restore and resource-limit diagnostics.
+
+### Fixed
+- Resolved v0.8.0 documentation and release-tooling rough edges found during
+  release validation (release-body wording verification, stray-asset detection,
+  soak cleanup and artifact retention). No product behavior regressions were
+  found in v0.8.0; this patch is primarily proactive stabilization.
+
 ## [0.8.0] - 2026-06-07
 
 Production-readiness candidate for single-node deployments and a stronger cluster

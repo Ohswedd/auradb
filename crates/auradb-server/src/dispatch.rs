@@ -268,13 +268,29 @@ fn enforce_schema_limits(limits: &LimitsConfig, schema: &CollectionSchema) -> Re
     Ok(())
 }
 
+/// The name of the top-level field whose subtree drives a document's nesting
+/// depth. Reported in a depth-limit error so an operator can find the offending
+/// field without having to bisect a large record. Returns `None` for an empty
+/// document (it has no nested field).
+fn deepest_top_level_field(doc: &Document) -> Option<&str> {
+    doc.iter()
+        .max_by_key(|(_, v)| v.nesting_depth())
+        .map(|(k, _)| k.as_str())
+}
+
 /// Reject a written document whose nesting depth or vector dimensionality
 /// exceeds the configured bounds.
 fn enforce_document_limits(limits: &LimitsConfig, doc: &Document) -> Result<()> {
     let depth = document_depth(doc);
     if depth > limits.max_document_depth {
+        // Name the offending top-level field (the deepest subtree) so the error
+        // points at the path to fix rather than just the aggregate depth. The
+        // field name is structural, not record content, so this leaks nothing.
+        let where_ = deepest_top_level_field(doc)
+            .map(|f| format!(" (deepest field `{f}`)"))
+            .unwrap_or_default();
         return Err(Error::LimitExceeded(format!(
-            "document nesting depth {depth} exceeds limit {}",
+            "document nesting depth {depth} exceeds limit {}{where_}",
             limits.max_document_depth
         )));
     }

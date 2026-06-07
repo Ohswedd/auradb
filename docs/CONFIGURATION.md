@@ -127,6 +127,14 @@ max_transaction_write_set = 100000    # max staged writes in one transaction
 | `max_vector_dimension` | `4096` | Maximum declared or queried vector dimension |
 | `max_transaction_write_set` | `100000` | Maximum staged writes in a single transaction |
 
+Each bound is **inclusive** (a request exactly at the limit is accepted; one past
+it is refused) and carries **no upper cap** — these are operator policy, not
+hard-coded ceilings, so a deliberately high value validates and an operator who
+sets one owns the trade-off. A zero value is rejected at startup. When a
+`max_document_depth` violation is reported, the error **names the offending
+top-level field** so the over-nested path is easy to find; the field name is
+structural, not record content.
+
 These bounds are independent of `max_payload_bytes`, which is the **wire frame**
 bound (the largest accepted AWP frame payload, 16 MiB) enforced at the transport
 layer. The CLI `restore` command additionally enforces a 64 MiB per-line bound on

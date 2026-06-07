@@ -2,12 +2,20 @@
 
 This document is the connector-focused companion to the
 [Compatibility Matrix](COMPATIBILITY.md). It records which Aura Connector release
-talks to AuraDB 0.8.0, what it can drive, and what it cannot.
+talks to AuraDB 0.8.1, what it can drive, and what it cannot.
 
 > **AuraDB v0.7.x adds connector cluster ergonomics for the controlled multi-node
 > preview. It is _not_ production HA — there is no automatic failover,
 > linearizable follower reads, or distributed transactions. Single-node mode
 > remains the recommended production mode.**
+
+## Stabilization patch (v0.8.1)
+
+v0.8.1 is a stabilization patch over v0.8.0: more backup/restore and
+resource-limit edge-case coverage, soak-script and release-artifact-verification
+improvements, and runbook polish. It touches **no** wire behavior, storage
+format, or connector surface — **Aura Connector v0.4.1 remains the recommended,
+tested connector** and no connector release is required.
 
 ## AuraDB-focused hardening release (v0.8.0)
 
@@ -195,7 +203,8 @@ human-readable message.
 
 | AuraDB | Aura Connector | Protocol | Status |
 | ------ | -------------- | -------- | ------ |
-| 0.8.0  | 0.4.1          | AWP 1    | Supported, recommended (AuraDB-focused hardening release; connector unchanged; wire payload identical to 0.7.x) |
+| 0.8.1  | 0.4.1          | AWP 1    | Supported, recommended (stabilization patch over 0.8.0; connector unchanged; wire payload identical to 0.7.x) |
+| 0.8.0  | 0.4.1          | AWP 1    | Supported (AuraDB-focused hardening release; connector unchanged; wire payload identical to 0.7.x) |
 | 0.7.1  | 0.4.1          | AWP 1    | Supported, recommended (clearer `AuraNotLeaderError` messages, secure-by-default redirect, transaction-redirect docs; identical wire payload to 0.7.0) |
 | 0.7.1  | 0.4.0          | AWP 1    | Supported (structured `not_leader` payload; `AuraNotLeaderError`, reconnect + bounded redirect helpers) |
 | 0.7.1  | 0.3.x          | AWP 1    | Supported (compatible; ignores the additive `not_leader` object and routes the leader manually) |

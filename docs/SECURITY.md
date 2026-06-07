@@ -1,6 +1,6 @@
 # Security
 
-This document describes the implemented security posture of AuraDB `0.8.0`. See
+This document describes the implemented security posture of AuraDB `0.8.1`. See
 `SECURITY.md` at the repository root for the vulnerability reporting policy.
 
 AuraDB is a single-node server. It does not claim production-grade guarantees
@@ -171,6 +171,12 @@ transport, gated by a conservative, fail-closed security baseline:
 - **Backup-plan redacts secrets (v0.6.1).** `auradb cluster backup-plan` references
   the auth token, peer auth token, and TLS material **redacted**, and notes they
   are **never written into a logical backup** (`auradb dump` exports data only).
+- **Errors do not echo request payloads or record contents (v0.8.1).** A
+  structured `limit_exceeded` error reports the violated bound and a count or
+  field name, never the request payload — a secret embedded in a query or record
+  cannot leak through a limit error. `auradb backup verify` likewise reports only
+  collection names and counts; it never prints record field values, including a
+  duplicated primary key it rejects.
 - **Static membership only.** No join/leave/dynamic membership; a duplicate, a
   self-peer, or a malformed peer address is rejected.
 
@@ -272,7 +278,7 @@ described above; single-node mode is the recommended production mode.
 
 ## Not implemented (do not rely on)
 
-AuraDB is single node. The following are not implemented in `0.8.0`:
+AuraDB is single node. The following are not implemented in `0.8.1`:
 role-based access control (RBAC/ABAC), tenant isolation, field-level read/write
 policies, field-level encryption, encryption at rest, and audit logging. The
 recommended production deployment remains single-node. v0.5.0 adds a controlled,

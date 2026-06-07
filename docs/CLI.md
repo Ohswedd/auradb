@@ -80,11 +80,15 @@ alias of `--input`. The restore enforces a 64 MiB per-line bound on its input.
 
 ### `auradb backup verify --input <file> --json` (v0.8.0)
 Validates a JSONL dump **without importing it**: it checks that every line parses,
-that a per-line size bound holds, and that records reference declared schemas. The
-`--json` report carries `ok`, `input`, `schemas`, `records`, a `collections` map
-(per-collection counts), `warnings`, and `errors`, and the command **exits
-non-zero on an invalid backup**. Run it after `auradb dump` and before relying on
-a backup. See [OPERATIONS.md](OPERATIONS.md) and [UPGRADING.md](UPGRADING.md).
+that a per-line size bound holds, and that records reference declared schemas. As
+of v0.8.1 it also **rejects a backup that carries two records with the same
+primary key** — a corrupt or hand-edited dump whose restore would silently
+collapse two logical records into one. The `--json` report carries `ok`, `input`,
+`schemas`, `records`, a `collections` map (per-collection counts), `warnings`,
+and `errors`, and the command **exits non-zero on an invalid backup**. The report
+names the collection and a count only; it never prints field values or key
+contents. Run it after `auradb dump` and before relying on a backup. See
+[OPERATIONS.md](OPERATIONS.md) and [UPGRADING.md](UPGRADING.md).
 
 ### `auradb bench --data-dir <dir> [--records <n>] [--json] [--output <file>]`
 Runs the benchmark suite (storage append, point lookup, secondary-index lookup,

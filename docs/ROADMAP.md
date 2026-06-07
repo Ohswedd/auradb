@@ -4,9 +4,15 @@ This roadmap describes where AuraDB is headed beyond the first single-node
 release. It is a statement of direction, not a delivery commitment. Items are
 grouped by theme and listed roughly in the order we expect to approach them.
 
-## Current release: 0.8.0
+## Current release: 0.8.1
 
-AuraDB 0.8.0 (released) is a **production-readiness candidate for single-node and
+AuraDB 0.8.1 (released) is a **production-readiness stabilization patch** for the
+v0.8.0 candidate: more backup/restore and resource-limit edge-case coverage,
+soak-script and release-artifact-verification improvements, and runbook polish.
+It adds **no** new database features and changes **no** semantics; the storage
+format (v2) and AWP 1 are unchanged and Aura Connector v0.4.1 stays compatible.
+
+The v0.8.0 candidate it builds on is a **production-readiness candidate for single-node and
 a stronger cluster preview**. It is a hardening, validation, and operability
 release — not a feature release: a structured `auradb check --json` consistency
 report with broad corruption drills, a non-importing `auradb backup verify`,
