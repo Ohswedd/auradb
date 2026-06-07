@@ -69,6 +69,8 @@ jobs:
     permissions:
       contents: write
     steps:
+      - uses: actions/checkout@v6
+
       - name: Download artifacts
         uses: actions/download-artifact@v4
         with:
@@ -80,6 +82,12 @@ jobs:
           find artifacts -type f \( -name '*.tar.gz' -o -name '*.zip' \) -exec cp {} out/ \;
           cd out && shasum -a 256 * > SHA256SUMS
           cat SHA256SUMS
+
+      - name: Verify release artifacts
+        # All target archives present, SHA256SUMS complete and matching, versioned
+        # names, and the host (linux x86_64) binary reports the expected version.
+        run: |
+          bash scripts/verify_release_artifacts.sh --dir out --version "${GITHUB_REF_NAME#v}"
 
       - name: Create GitHub release
         uses: softprops/action-gh-release@v2

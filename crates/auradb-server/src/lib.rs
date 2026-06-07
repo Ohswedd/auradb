@@ -17,7 +17,7 @@ mod tls;
 mod wire;
 
 pub use cluster_runtime::ClusterRuntime;
-pub use config::{AuthConfig, AuthMode, Config, TlsConfig, TokenHashAlgorithm};
+pub use config::{AuthConfig, AuthMode, Config, LimitsConfig, TlsConfig, TokenHashAlgorithm};
 pub use cursor::{CursorPage, CursorRegistry};
 pub use dispatch::{respond, ServerContext, Session};
 pub use server::Server;

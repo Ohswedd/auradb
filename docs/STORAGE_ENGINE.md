@@ -159,6 +159,19 @@ payload, then a JSON payload. An `INDEX_MANIFEST.json` tracks the set.
 The persisted kinds are primary key, unique, secondary, document-path,
 full-text, and exact vector. See [INDEXING.md](INDEXING.md).
 
+## Structured consistency report
+
+`auradb check --json` (v0.8.0) surfaces a structured consistency report across the
+storage, catalog, indexes, planner statistics, Raft log, and snapshot boundaries
+(top-level `ok`, `storage`, `catalog`, `indexes`, `planner_stats`, `raft`,
+`snapshots`, `warnings`, `errors`). It detects segment-checksum, manifest, catalog,
+index-manifest, planner-stats, raft-log, and snapshot-boundary corruption — a
+recoverable index-manifest mismatch is rebuilt and reported as a warning, advisory
+planner-stats problems are warnings, and an unknown future storage format is
+rejected — and the command exits non-zero if any check fails, so it can be
+scheduled and alerted on. The report never prints secrets. See [CLI.md](CLI.md) and
+[OBSERVABILITY.md](OBSERVABILITY.md).
+
 ## Identity boundary
 
 Records are addressed by stable logical `RecordId`. Physical offsets are **never**

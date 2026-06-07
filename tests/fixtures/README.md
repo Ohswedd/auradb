@@ -79,3 +79,17 @@ rebuild, planner statistics initialize, the MVCC format is v2, transactions begi
 and read a snapshot, the transaction-timeout reaper works, GC runs, and a
 backup/restore round-trips. It also asserts that an unknown future
 `format_version` is rejected (no silent downgrade).
+
+## Upgrade coverage into v0.8.0
+
+`crates/auradb-cli/tests/upgrade_to_v0_8_0.rs` runs the v0.8.0 upgrade checklist
+over **all** genuine release fixtures: open → `check --json` → analyze → index
+check → dump → `backup verify` → restore → query smoke. It also asserts that a
+manifest carrying an unknown future `format_version` is rejected rather than
+silently opened.
+
+The fixtures span the on-disk format history: v0.1.0–v0.2.1 are storage **format
+v1** (migrated to v2 transparently on first open), and v0.3.0 is storage **format
+v2**, representative of v0.3.x–v0.7.x, which all share format v2 — so the v0.3.0
+fixture is the representative storage fixture for that whole range and no new
+per-version v2 fixtures are needed.

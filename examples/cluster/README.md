@@ -155,10 +155,11 @@ tests; the Docker option (B) is provided for a more realistic networked preview.
 Aura Connector v0.4.x is cluster-aware: a write to a follower raises
 `AuraNotLeaderError`, and the client can reconnect to the leader with
 `Client.connect_to_leader(exc)` or an opt-in bounded `Client.with_leader_redirect()`.
-Aura Connector **v0.4.1** (coordinated with AuraDB v0.7.1) is recommended: it
-renders clearer `AuraNotLeaderError` messages (the node reached, the leader
-address, and the redirect call) and refuses a redirect that would silently drop
-TLS. [`python_connector.py`](python_connector.py) demonstrates the host-side path
+Aura Connector **v0.4.1** (introduced alongside AuraDB v0.7.1 and still the
+recommended connector for the current AuraDB v0.8.0 release, which leaves the wire
+protocol unchanged) is recommended: it renders clearer `AuraNotLeaderError`
+messages (the node reached, the leader address, and the redirect call) and refuses
+a redirect that would silently drop TLS. [`python_connector.py`](python_connector.py) demonstrates the host-side path
 against the Docker cluster. Because the compose file publishes each node's client
 port on the host (`7171`/`7181`/`7191`) while the cluster's internal leader address
 is not reachable from the host, the example locates the leader by trying the

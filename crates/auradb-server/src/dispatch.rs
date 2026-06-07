@@ -3,8 +3,10 @@
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
-use auradb::core::CollectionSchema;
-use auradb::query::{FindQuery, Mutation, QueryResultPage, ReadRequest};
+use auradb::core::{CollectionSchema, Document, FieldType, Value};
+use auradb::query::{
+    CountQuery, ExistsQuery, Filter, FindQuery, Mutation, QueryResultPage, ReadRequest,
+};
 use auradb::{Engine, Transaction};
 use auradb_core::{Error, Result, ServerCapabilities};
 use auradb_observability::Metrics;
@@ -15,7 +17,7 @@ use auradb_protocol::{
 };
 use serde::{Deserialize, Serialize};
 
-use crate::config::Config;
+use crate::config::{Config, LimitsConfig};
 use crate::cursor::CursorRegistry;
 
 /// Shared, immutable-ish server context handed to every connection.
@@ -178,6 +180,9 @@ pub struct Session {
     pub authenticated: bool,
     /// Open transactions keyed by transaction id.
     pub transactions: HashMap<u64, Transaction>,
+    /// Number of writes staged so far in each open transaction, for enforcing
+    /// the transaction write-set bound.
+    pub staged_writes: HashMap<u64, usize>,
     /// Cursor ids owned by this connection (for cleanup on disconnect).
     pub cursor_ids: HashSet<u64>,
 }
@@ -193,6 +198,7 @@ impl Session {
         for id in self.cursor_ids.drain() {
             ctx.cursors.close(id);
         }
+        self.staged_writes.clear();
         for (_id, txn) in self.transactions.drain() {
             ctx.engine.rollback(txn);
         }
@@ -226,6 +232,164 @@ fn ok_ok(frame_req: &Frame) -> Result<Frame> {
         frame_req.txn_id,
         &OkResult { ok: true },
     )
+}
+
+// ---------------------------------------------------------------------------
+// Defensive resource limits.
+//
+// Enforced at the request boundary so a single client cannot exhaust server
+// memory or stack. Every violation is a structured `limit_exceeded` error that
+// is converted to an ERROR frame by `respond`; the connection stays open.
+// ---------------------------------------------------------------------------
+
+/// The nesting depth of a top-level record document (the record object counts as
+/// one level; each nested document/array adds another).
+fn document_depth(doc: &Document) -> usize {
+    1 + doc.values().map(Value::nesting_depth).max().unwrap_or(0)
+}
+
+/// The largest vector dimensionality anywhere within a record document.
+fn document_vector_dim(doc: &Document) -> usize {
+    doc.values().map(Value::max_vector_dim).max().unwrap_or(0)
+}
+
+/// Reject a schema whose declared vector dimensionality exceeds the bound.
+fn enforce_schema_limits(limits: &LimitsConfig, schema: &CollectionSchema) -> Result<()> {
+    for field in &schema.fields {
+        if let FieldType::Vector { dim } = field.field_type {
+            if dim > limits.max_vector_dimension {
+                return Err(Error::LimitExceeded(format!(
+                    "vector field `{}` dimensionality {dim} exceeds limit {}",
+                    field.name, limits.max_vector_dimension
+                )));
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Reject a written document whose nesting depth or vector dimensionality
+/// exceeds the configured bounds.
+fn enforce_document_limits(limits: &LimitsConfig, doc: &Document) -> Result<()> {
+    let depth = document_depth(doc);
+    if depth > limits.max_document_depth {
+        return Err(Error::LimitExceeded(format!(
+            "document nesting depth {depth} exceeds limit {}",
+            limits.max_document_depth
+        )));
+    }
+    let dim = document_vector_dim(doc);
+    if dim > limits.max_vector_dimension {
+        return Err(Error::LimitExceeded(format!(
+            "vector dimensionality {dim} exceeds limit {}",
+            limits.max_vector_dimension
+        )));
+    }
+    Ok(())
+}
+
+/// Apply [`enforce_document_limits`] to every document carried by a mutation.
+fn enforce_mutation_limits(limits: &LimitsConfig, mutation: &Mutation) -> Result<()> {
+    match mutation {
+        Mutation::Insert { fields, .. } | Mutation::Upsert { fields, .. } => {
+            enforce_document_limits(limits, fields)
+        }
+        Mutation::Update { set, .. } => enforce_document_limits(limits, set),
+        Mutation::BulkInsert { records, .. } => {
+            for rec in records {
+                enforce_document_limits(limits, rec)?;
+            }
+            Ok(())
+        }
+        Mutation::Delete { .. } => Ok(()),
+    }
+}
+
+/// The number of staged record writes a mutation contributes to a transaction's
+/// write set (a bulk insert counts as one per record).
+fn mutation_write_count(mutation: &Mutation) -> usize {
+    match mutation {
+        Mutation::BulkInsert { records, .. } => records.len().max(1),
+        _ => 1,
+    }
+}
+
+/// Count the distinct query tokens the way the full-text path tokenizes them:
+/// runs of alphanumeric characters separated by any other character.
+fn full_text_token_count(query: &str) -> usize {
+    query
+        .split(|c: char| !c.is_alphanumeric())
+        .filter(|s| !s.is_empty())
+        .count()
+}
+
+/// Reject a filter tree whose full-text clauses carry too many query tokens.
+fn enforce_filter_limits(limits: &LimitsConfig, filter: &Filter) -> Result<()> {
+    match filter {
+        Filter::And { filters } | Filter::Or { filters } => {
+            for f in filters {
+                enforce_filter_limits(limits, f)?;
+            }
+            Ok(())
+        }
+        Filter::Not { filter } => enforce_filter_limits(limits, filter),
+        Filter::ContainsText { query, .. } => {
+            let n = full_text_token_count(query);
+            if n > limits.max_full_text_query_tokens {
+                return Err(Error::LimitExceeded(format!(
+                    "full-text query has {n} tokens, exceeding limit {}",
+                    limits.max_full_text_query_tokens
+                )));
+            }
+            Ok(())
+        }
+        Filter::Compare { .. } | Filter::Contains { .. } | Filter::Exists { .. } => Ok(()),
+    }
+}
+
+/// Reject an out-of-bounds `limit`/`offset` on a read query.
+fn enforce_pagination_limits(
+    limits: &LimitsConfig,
+    limit: Option<usize>,
+    offset: Option<usize>,
+) -> Result<()> {
+    if let Some(l) = limit {
+        if l > limits.max_query_limit {
+            return Err(Error::LimitExceeded(format!(
+                "query limit {l} exceeds limit {}",
+                limits.max_query_limit
+            )));
+        }
+    }
+    if let Some(o) = offset {
+        if o > limits.max_query_limit {
+            return Err(Error::LimitExceeded(format!(
+                "query offset {o} exceeds limit {}",
+                limits.max_query_limit
+            )));
+        }
+    }
+    Ok(())
+}
+
+/// Apply pagination and full-text bounds to a read request.
+fn enforce_read_limits(limits: &LimitsConfig, req: &ReadRequest) -> Result<()> {
+    match req {
+        ReadRequest::Find(q) => {
+            enforce_pagination_limits(limits, q.limit, q.offset)?;
+            if let Some(f) = &q.filter {
+                enforce_filter_limits(limits, f)?;
+            }
+            Ok(())
+        }
+        ReadRequest::Count(CountQuery { filter, .. })
+        | ReadRequest::Exists(ExistsQuery { filter, .. }) => {
+            if let Some(f) = filter {
+                enforce_filter_limits(limits, f)?;
+            }
+            Ok(())
+        }
+    }
 }
 
 /// Handle a single request frame, producing a response frame. Errors are
@@ -360,6 +524,7 @@ fn handle(ctx: &ServerContext, session: &mut Session, frame: &Frame) -> Result<F
         }
         Opcode::SchemaCreate => {
             let schema: CollectionSchema = frame.decode_json()?;
+            enforce_schema_limits(&ctx.config.limits, &schema)?;
             ctx.engine.create_schema(schema)?;
             ok_ok(frame)
         }
@@ -383,6 +548,7 @@ fn handle(ctx: &ServerContext, session: &mut Session, frame: &Frame) -> Result<F
         Opcode::Query => {
             Metrics::incr(&ctx.metrics.queries_total);
             let req: ReadRequest = frame.decode_json()?;
+            enforce_read_limits(&ctx.config.limits, &req)?;
             handle_query(ctx, session, frame, req)
         }
         Opcode::Mutate => {
@@ -392,6 +558,7 @@ fn handle(ctx: &ServerContext, session: &mut Session, frame: &Frame) -> Result<F
         }
         Opcode::CursorFetch => {
             let req: CursorFetchRequest = frame.decode_json()?;
+            enforce_pagination_limits(&ctx.config.limits, Some(req.limit), None)?;
             // A cursor opened inside a transaction is paged through that same
             // transaction so staged writes stay visible across fetches.
             let page = if frame.txn_id != 0 {
@@ -478,6 +645,7 @@ fn handle(ctx: &ServerContext, session: &mut Session, frame: &Frame) -> Result<F
                 .transactions
                 .remove(&frame.txn_id)
                 .ok_or_else(|| Error::NotFound(format!("transaction {}", frame.txn_id)))?;
+            session.staged_writes.remove(&frame.txn_id);
             ctx.engine.commit(txn)?;
             Metrics::gauge_set(
                 &ctx.metrics.active_transactions,
@@ -490,6 +658,7 @@ fn handle(ctx: &ServerContext, session: &mut Session, frame: &Frame) -> Result<F
                 .transactions
                 .remove(&frame.txn_id)
                 .ok_or_else(|| Error::NotFound(format!("transaction {}", frame.txn_id)))?;
+            session.staged_writes.remove(&frame.txn_id);
             ctx.engine.rollback(txn);
             Metrics::gauge_set(
                 &ctx.metrics.active_transactions,
@@ -599,12 +768,25 @@ fn handle_mutation(
     frame: &Frame,
     mutation: Mutation,
 ) -> Result<Frame> {
+    enforce_mutation_limits(&ctx.config.limits, &mutation)?;
     let result = if frame.txn_id != 0 {
+        // Enforce the cumulative write-set bound before staging so the offending
+        // write is refused and the transaction stays usable.
+        let max = ctx.config.limits.max_transaction_write_set;
+        let staged = session.staged_writes.entry(frame.txn_id).or_insert(0);
+        let next = staged.saturating_add(mutation_write_count(&mutation));
+        if next > max {
+            return Err(Error::LimitExceeded(format!(
+                "transaction write set would reach {next} writes, exceeding limit {max}"
+            )));
+        }
         let txn = session
             .transactions
             .get_mut(&frame.txn_id)
             .ok_or_else(|| Error::NotFound(format!("transaction {}", frame.txn_id)))?;
-        ctx.engine.stage(txn, mutation)?
+        let result = ctx.engine.stage(txn, mutation)?;
+        *session.staged_writes.entry(frame.txn_id).or_insert(0) = next;
+        result
     } else {
         ctx.engine.apply_mutation(mutation)?
     };

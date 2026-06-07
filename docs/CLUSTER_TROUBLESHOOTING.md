@@ -13,6 +13,14 @@ multi-node preview**.
 > **no distributed transactions**. It is for local testing and early validation
 > only.
 
+## Operator runbooks (v0.8.0)
+
+For step-by-step recovery procedures, see [RUNBOOKS.md](RUNBOOKS.md): runbooks
+**14–18** cover the cluster-preview recovery scenarios — leader loss, follower lag,
+a follower that needs a snapshot, peer TLS failure, and a peer token mismatch. The
+cluster preview remains an experimental, opt-in preview and is **not production
+HA**; single-node mode remains the recommended production mode.
+
 ## Inspecting node and cluster identity
 
 Identity lives under `<data_dir>/cluster/` as `node.json` and `cluster.json`.

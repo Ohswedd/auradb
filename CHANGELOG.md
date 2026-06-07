@@ -4,6 +4,60 @@ All notable changes to AuraDB are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and the project uses
 [Semantic Versioning](https://semver.org/).
 
+## [0.8.0] - 2026-06-07
+
+Production-readiness candidate for single-node deployments and a stronger cluster
+**preview**. This release moves AuraDB from "impressive preview" toward "credible
+early production candidate" for **single-node** mode — without overclaiming. It
+focuses on hardening, validation, and operability rather than new product
+features: a single-node production-readiness checklist, storage corruption drills
+and a structured `auradb check --json`, backup/restore and upgrade drills, real
+defensive resource limits, large-dataset and soak harnesses, performance
+regression thresholds, a security hardening review, stronger cluster-preview
+recovery tests, operator runbooks, and release-artifact reproducibility checks.
+
+This release introduces **no** large new database features and changes **no**
+Raft, storage, query, MVCC, replication, or snapshot semantics except where a real
+bug was fixed during hardening. The storage format and the Aura Wire Protocol
+(AWP v1) are unchanged, and Aura Connector v0.4.1 compatibility is preserved. It
+is **not** production HA — there is no production automatic failover, no
+linearizable follower reads, no distributed transactions, no dynamic membership,
+and no sharding or multi-region. Multi-node mode remains an experimental, opt-in
+preview; **single-node mode remains the recommended production mode.** All v0.7.1
+behavior is preserved.
+
+### Added
+- Single-node production-readiness checklist (`docs/PRODUCTION_READINESS.md`).
+- Storage corruption drills and additional consistency checks, surfaced through a
+  structured `auradb check --json` report (storage, catalog, indexes, planner
+  stats, raft, snapshots, warnings, errors).
+- Backup and restore drill coverage (mixed dataset, indexes/stats, relationships,
+  vectors, post-compaction, JSONL corruption rejection) and `auradb backup verify`.
+- Upgrade drill coverage across real release fixtures.
+- Resource limit validation and configurable defensive bounds (query
+  limit/offset, vector dimension, full-text query tokens, document nesting depth,
+  transaction write-set size, backup input line size).
+- Large dataset validation (CI-safe smokes plus ignored stress).
+- Soak and repeatability harness (`scripts/soak_single_node.sh`,
+  `scripts/soak_cluster_preview.sh`).
+- Performance regression threshold tooling (`scripts/compare_benchmarks.py`,
+  `auradb bench compare --fail-threshold-percent`) and a v0.8.0 baseline.
+- Security hardening review documentation and redaction tests.
+- Cluster preview recovery hardening (repeated restart, snapshot, reconnect,
+  doctor smokes).
+- Operator runbooks (`docs/RUNBOOKS.md`).
+- Release artifact reproducibility checks (`scripts/verify_release_artifacts.sh`).
+- `docs/V0_8_RELEASE_NOTES.md`.
+
+### Changed
+- Improved production-readiness documentation and the release checklist.
+- Improved operational guidance for backup, restore, upgrade, and recovery.
+- Improved CI coverage for recovery and artifact validation.
+
+### Fixed
+- Storage, backup/restore, upgrade, resource-limit, recovery, or diagnostics bugs
+  found during validation.
+
 ## [0.7.1] - 2026-06-06
 
 Connector ergonomics polish. This release coordinates with Aura Connector v0.4.1

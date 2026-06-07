@@ -1,5 +1,15 @@
 # Clustering
 
+> **AuraDB v0.8.0 hardens cluster-preview _recovery_ testing and adds operator
+> runbooks. It is _not_ production HA; the multi-node cluster remains an
+> experimental, opt-in preview, and single-node mode remains the recommended
+> production mode.** v0.8.0 adds no new cluster architecture and no wire or storage
+> change: it maps the recovery scenarios (leader loss, follower lag, snapshot
+> needed, peer reconnect churn, partition/heal) to the existing cross-process
+> preview suites rather than duplicating them, and adds operator runbooks for them.
+> See [RUNBOOKS.md](RUNBOOKS.md), [CLUSTER_TROUBLESHOOTING.md](CLUSTER_TROUBLESHOOTING.md),
+> and [V0_8_RELEASE_NOTES.md](V0_8_RELEASE_NOTES.md).
+
 > **AuraDB v0.6.0 improves the controlled multi-node preview and validates
 > fail-stop recovery. It is _not_ production HA. Single-node mode remains the
 > recommended production mode.** Real AuraDB server processes can form a

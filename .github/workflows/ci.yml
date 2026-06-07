@@ -52,6 +52,14 @@ jobs:
         # routing tests, and the live cluster CLI tests. A dedicated cluster.yml
         # workflow runs the multi-node integration suites in isolation as well.
         #
+        # v0.8.0 adds: the storage corruption drills (check.rs) and structured
+        # `check --json`; the backup/restore drills (backup_drills.rs) and
+        # `backup verify`; the upgrade drills into v0.8.0 over genuine fixtures
+        # (upgrade_to_v0_8_0.rs); the resource-limit tests (limits.rs); and the
+        # CI-safe large-dataset smokes (large_dataset.rs). The 100k large-dataset
+        # stress and the soak harnesses are #[ignore]d / manual and are not part of
+        # this required run.
+        #
         # Integration tests run serially (--test-threads=1): the process-level
         # multi-node cluster tests spawn real servers on reserved loopback ports
         # and multi-threaded Raft runtimes, so running them in parallel on a
@@ -67,3 +75,12 @@ jobs:
 
       - name: Compile benchmarks
         run: cargo bench --workspace --benches --no-run
+
+      - name: Benchmark comparator smoke
+        # Validate the committed v0.8.0 baseline JSON and the regression comparator
+        # without running the (hardware-sensitive) benchmarks: a self-comparison is
+        # a stable 0% regression and exercises the tool and the baseline shape.
+        run: |
+          python3 scripts/compare_benchmarks.py \
+            benches/baseline/v0.8.0.json benches/baseline/v0.8.0.json \
+            --fail-threshold-percent 5

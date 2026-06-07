@@ -14,9 +14,9 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: "Published image tag to smoke against (e.g. 0.7.1)"
+        description: "Published image tag to smoke against (e.g. 0.8.0)"
         required: false
-        default: "0.7.1"
+        default: "0.8.0"
       require_published_connector:
         description: "Fail (don't skip) if the published Aura Connector >=0.4.1,<0.5 is unavailable. Set for release/tag conformance."
         type: boolean
@@ -209,11 +209,11 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
 
       - name: Build the auradb image for the Compose cluster
-        run: docker build -t auradb:0.7.1 .
+        run: docker build -t auradb:0.8.0 .
 
       - name: Generate dev certs, run the cluster, and tear it down
         env:
-          AURADB_IMAGE: auradb:0.7.1
+          AURADB_IMAGE: auradb:0.8.0
         run: bash scripts/smoke_cluster_compose.sh
 
   published-image-smoke:

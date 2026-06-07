@@ -1,5 +1,52 @@
 # Upgrading
 
+## From v0.7.x to v0.8.0
+
+> **AuraDB v0.8.0 is a production-readiness candidate for single-node and a
+> stronger cluster preview. It is not production HA; single-node mode remains the
+> recommended production mode.**
+
+v0.8.0 is a **drop-in** binary replacement from any v0.7.x (or earlier v0.x)
+release. The on-disk **storage format is unchanged at v2** (manifest
+`format_version` 2) and the Aura Wire Protocol stays at **AWP 1**, so a v0.7.x data
+directory opens directly with no migration and the Aura Connector is unchanged
+(v0.4.1 remains recommended). v0.8.0 adds no new database features; it adds
+operability and validation tooling.
+
+Recommended upgrade procedure:
+
+```bash
+# 1. Back up the data directory and verify the backup WITHOUT importing it.
+auradb dump --data-dir /var/lib/auradb --output backup-before-0.8.0.jsonl
+auradb backup verify --input backup-before-0.8.0.jsonl --json
+
+# 2. Capture a structured pre-upgrade consistency report (exits non-zero on failure).
+auradb check --data-dir /var/lib/auradb --json
+
+# 3. Stop the old binary, swap in the v0.8.0 binary, and start it.
+
+# 4. Capture a structured post-upgrade consistency report and compare.
+auradb check --data-dir /var/lib/auradb --json
+```
+
+**New optional surface in v0.8.0:** `auradb check --json` (a structured
+consistency report), `auradb backup verify` (validate a dump without importing it),
+and the `[limits]` config section (five enforced, configurable resource bounds; a
+violation returns a structured `limit_exceeded` error without closing the
+connection). See [CLI.md](CLI.md) and [CONFIGURATION.md](CONFIGURATION.md).
+
+**Upgrade coverage.** `crates/auradb-cli/tests/upgrade_to_v0_8_0.rs` runs the
+v0.8.0 checklist over **genuine release fixtures spanning v0.1.0 through v0.7.1**,
+and rejects an unknown future storage format. v0.1.0–v0.2.1 are storage format v1;
+v0.3.x–v0.7.x share storage format v2, so the v0.3.0 fixture is the representative
+storage fixture for that range.
+
+**Rollback plan.** v0.7.x and v0.8.0 share the same on-disk and wire formats, so a
+v0.8.0 data directory can be reopened by v0.7.x. Keep the pre-upgrade backup; if
+`check --json` reports a problem after the swap, stop v0.8.0 and restart v0.7.x
+against the same directory (or restore the backup). For the step-by-step procedure,
+see [RUNBOOKS.md](RUNBOOKS.md) (runbook 5).
+
 ## From v0.6.1 to v0.6.2
 
 > **AuraDB v0.6.2 hardens repeated chaos and larger-state recovery behavior in

@@ -7,6 +7,18 @@ AuraDB v0.5.0 adds a controlled, experimental multi-node server preview (see
 [Multi-node preview operations](#multi-node-preview-operations-v050)); it is off
 by default and not a production path.
 
+v0.8.0 is a production-readiness candidate for single-node operations. For
+single-node production guidance and step-by-step operator runbooks, see
+[PRODUCTION_READINESS.md](PRODUCTION_READINESS.md) and [RUNBOOKS.md](RUNBOOKS.md).
+Three operability tools introduced in v0.8.0 are referenced throughout this guide:
+`auradb check --json` (a structured consistency report that exits non-zero on
+failure — schedule it to detect storage/catalog/index/stats/raft/snapshot
+problems), `auradb backup verify --input <file> --json` (validate a JSONL dump
+without importing it), and the `[limits]` config section (five enforced,
+configurable resource bounds; a violation returns a structured `limit_exceeded`
+error without closing the connection). See [CLI.md](CLI.md) and
+[CONFIGURATION.md](CONFIGURATION.md).
+
 ## MVCC version pressure
 
 AuraDB keeps multiple committed versions of each record so transactions can read
@@ -87,8 +99,14 @@ version history:
 
 ```bash
 auradb dump --data-dir /data --out backup.jsonl
+auradb backup verify --input backup.jsonl --json   # validate WITHOUT importing
 auradb restore --data-dir /restored --in backup.jsonl
 ```
+
+`auradb backup verify` (v0.8.0) validates a dump without importing it: every line
+parses, a per-line size bound holds, and records reference declared schemas. It
+exits non-zero on an invalid backup, so run it after `dump` and before relying on
+the backup. See [CLI.md](CLI.md).
 
 Properties that hold across GC:
 

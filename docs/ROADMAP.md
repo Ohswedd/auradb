@@ -4,9 +4,29 @@ This roadmap describes where AuraDB is headed beyond the first single-node
 release. It is a statement of direction, not a delivery commitment. Items are
 grouped by theme and listed roughly in the order we expect to approach them.
 
-## Current release: 0.6.2
+## Current release: 0.8.0
 
-AuraDB 0.6.2 **hardens repeated chaos and larger-state recovery** for the
+AuraDB 0.8.0 (released) is a **production-readiness candidate for single-node and
+a stronger cluster preview**. It is a hardening, validation, and operability
+release — not a feature release: a structured `auradb check --json` consistency
+report with broad corruption drills, a non-importing `auradb backup verify`,
+backup/restore and upgrade drills over genuine fixtures, a new `[limits]` config
+section with five enforced, configurable bounds, large-dataset / soak / performance
+tooling (including a dependency-free benchmark comparator and a refreshed
+`benches/baseline/v0.8.0.json`), a security hardening review, cluster-preview
+recovery coverage, operator runbooks, and release-artifact reproducibility. It
+adds **no** new database features and changes **no** on-disk or wire format
+(storage stays at v2, AWP 1 unchanged), so Aura Connector v0.4.1 stays compatible
+and no connector release is required. It is **not production HA** — there is no
+production multi-node clustering, production automatic failover, linearizable or
+follower reads, distributed transactions, dynamic membership, sharding, or
+multi-region. **Single-node mode remains the recommended production mode.** See
+[V0_8_RELEASE_NOTES.md](V0_8_RELEASE_NOTES.md) and
+[PRODUCTION_READINESS.md](PRODUCTION_READINESS.md).
+
+### Delivered in 0.6.2
+
+AuraDB 0.6.2 **hardened repeated chaos and larger-state recovery** for the
 controlled multi-node preview. It adds repeated leader restart / re-election
 cycles (a node is killed, the majority re-elects, the old leader rejoins and
 catches up, repeated across cycles), larger multi-model data-set recovery
