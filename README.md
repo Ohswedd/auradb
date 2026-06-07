@@ -7,7 +7,7 @@
 [![CI](https://github.com/Ohswedd/auradb/actions/workflows/ci.yml/badge.svg)](https://github.com/Ohswedd/auradb/actions/workflows/ci.yml)
 [![Security](https://github.com/Ohswedd/auradb/actions/workflows/security.yml/badge.svg)](https://github.com/Ohswedd/auradb/actions/workflows/security.yml)
 [![Docker](https://github.com/Ohswedd/auradb/actions/workflows/docker.yml/badge.svg)](https://github.com/Ohswedd/auradb/actions/workflows/docker.yml)
-[![Release](https://img.shields.io/badge/release-v0.8.0-green.svg)](CHANGELOG.md)
+[![Release](https://img.shields.io/badge/release-v0.8.1-green.svg)](CHANGELOG.md)
 [![Rust](https://img.shields.io/badge/rust-1.85%2B-orange.svg)](https://www.rust-lang.org)
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
 
@@ -72,17 +72,24 @@ the same as v0.7.0. It remains _not_ production HA; single-node mode stays the
 recommended production mode. See
 [docs/V0_7_1_RELEASE_NOTES.md](docs/V0_7_1_RELEASE_NOTES.md).
 
-**AuraDB v0.8.0 is a production-readiness candidate for single-node and a
-stronger cluster preview.** It is a hardening, validation, and operability
+**AuraDB v0.8.1 is a production-readiness stabilization patch for the v0.8.0
+candidate.** It narrows in on the operational edges of v0.8.0 — backup/restore
+corner cases, resource-limit boundaries, soak ergonomics, release-artifact
+verification, and runbook clarity — and adds **no** product features. It changes
+**no** Raft, storage, query, MVCC, replication, or snapshot semantics, keeps the
+storage format (v2) and Aura Wire Protocol (AWP 1) unchanged, and preserves Aura
+Connector v0.4.1 compatibility.
+
+The v0.8.0 candidate it builds on is a hardening, validation, and operability
 release: a structured `auradb check --json` consistency report with broad
 corruption drills, a non-importing `auradb backup verify`, backup/restore and
 upgrade drills over genuine fixtures, a new `[limits]` config section with five
 enforced, configurable bounds, large-dataset / soak / performance tooling, a
 security hardening review, cluster-preview recovery coverage, operator runbooks,
-and release-artifact reproducibility. It adds **no** new database features and
-changes neither the on-disk nor the wire format. It is **not** production HA;
-single-node mode remains the recommended production mode. See
-[docs/V0_8_RELEASE_NOTES.md](docs/V0_8_RELEASE_NOTES.md) and
+and release-artifact reproducibility. It is **not** production HA; single-node
+mode remains the recommended production mode. See
+[docs/V0_8_1_RELEASE_NOTES.md](docs/V0_8_1_RELEASE_NOTES.md),
+[docs/V0_8_RELEASE_NOTES.md](docs/V0_8_RELEASE_NOTES.md), and
 [docs/PRODUCTION_READINESS.md](docs/PRODUCTION_READINESS.md).
 
 AuraDB 0.4.0 adds the replication and Raft foundation for future clustered

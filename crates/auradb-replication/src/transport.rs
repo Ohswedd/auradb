@@ -534,6 +534,33 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn snapshot_payload_limit_error_structured() {
+        // A frame whose declared length exceeds the single-message snapshot bound
+        // is refused before its payload is allocated, with a structured error that
+        // names both the declared size and the limit.
+        let msg = PeerMessage::HelloAck(HelloAck {
+            node_id: NodeId::from_raw(1),
+        });
+        let mut buf = Vec::new();
+        write_message(&mut buf, &msg).await.unwrap();
+        // Overwrite the length field (bytes 5..9) with one past the snapshot bound.
+        let oversize = (MAX_SNAPSHOT_BYTES as u32) + 1;
+        buf[5..9].copy_from_slice(&oversize.to_be_bytes());
+
+        let mut cursor = std::io::Cursor::new(buf);
+        let err = read_message(&mut cursor, MAX_SNAPSHOT_BYTES as u32)
+            .await
+            .unwrap_err();
+        let text = err.to_string();
+        assert!(
+            matches!(err, TransportError::Oversized { len, limit }
+                if len == oversize && limit == MAX_SNAPSHOT_BYTES as u32),
+            "{err}"
+        );
+        assert!(text.contains("exceeds limit"), "{text}");
+    }
+
+    #[tokio::test]
     async fn peer_transport_rejects_bad_version() {
         let msg = PeerMessage::HelloAck(HelloAck {
             node_id: NodeId::from_raw(1),

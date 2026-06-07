@@ -128,7 +128,17 @@ format.
   CI-safe 10k-record smoke plus a `#[ignore]`d 100k stress run.
 - **Resource limits** (`crates/auradb-server/tests/limits.rs`) — the five `[limits]`
   bounds are enforced and a violation returns a structured `limit_exceeded` error
-  without closing the connection.
+  without closing the connection. v0.8.1 adds edge cases: exact-boundary
+  acceptance, one-past-boundary rejection, zero/absurd config validation,
+  error-shape stability, payload redaction, the no-partial-commit guarantee on a
+  refused staged write, the depth error naming the offending field, and a
+  structured single-message snapshot-size error
+  (`crates/auradb-replication/src/transport.rs`).
+- **Backup/restore edge cases** (`crates/auradb-cli/tests/backup_restore_edge_cases.rs`,
+  v0.8.1) — empty/schema-only/large/Unicode/nested/vector/relationship/full-text/
+  document-path round trips, plus the rejection contract (malformed JSONL,
+  unknown collection, duplicate primary key, truncated file, invalid schema, the
+  per-line size bound) and that `backup verify` never echoes record contents.
 - **Check corruption drills** (`crates/auradb-cli/tests/check.rs`) — `auradb check
   --json` over segment-checksum, manifest, catalog, index-manifest (recoverable →
   rebuilt, a warning), planner-stats (advisory → warning), raft-log, and
@@ -162,7 +172,19 @@ These cover the recovery scenarios, so v0.8.0 adds no duplicate tests for them.
   restore/check/stats/gc/compact and asserts `check` stays ok with a stable record
   count.
 - `scripts/soak_cluster_preview.sh` — a loopback three-node preview soak that
-  restarts a follower and asserts the leader and quorum recover.
+  restarts a follower and asserts the leader and quorum recover. Override the
+  polled leader with `LEADER_ADDR`.
+
+Both scripts (v0.8.1) timestamp every line, print the binary version and the
+data/log directories, exit non-zero on the first mismatch, and emit a final
+`summary: result=PASS …` line. They preserve all artifacts on failure; on success
+they clean up unless `KEEP_ARTIFACTS=1`. A 10-second smoke is enough to exercise
+them:
+
+```bash
+SOAK_DURATION_SECS=10 scripts/soak_single_node.sh
+SOAK_DURATION_SECS=10 scripts/soak_cluster_preview.sh
+```
 
 These are operator/manual tools and are not part of required CI.
 

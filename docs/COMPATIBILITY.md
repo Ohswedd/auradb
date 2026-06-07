@@ -1,7 +1,11 @@
 # AuraDB Compatibility Matrix
 
-This document records what AuraDB v0.8.0 implements and how it interoperates with
-the Aura Connector client library and the Aura Wire Protocol (AWP). v0.8.0 is a
+This document records what AuraDB v0.8.1 implements and how it interoperates with
+the Aura Connector client library and the Aura Wire Protocol (AWP). v0.8.1 is a
+stabilization patch over v0.8.0 — more backup/restore and resource-limit
+edge-case coverage, soak and release-artifact-verification improvements, and
+runbook polish — that adds no features and changes no semantics, storage format,
+or wire protocol. The v0.8.0 candidate it builds on is a
 hardening, validation, and operability release — a production-readiness candidate
 for single-node and a stronger cluster preview — coordinated with the unchanged
 Aura Connector v0.4.1. It adds no new database features and keeps the v0.7.x
@@ -17,7 +21,8 @@ from v0.4.x.
 
 | AuraDB | Aura Connector | Protocol | Status |
 | ------ | -------------- | -------- | ------ |
-| 0.8.0  | 0.4.1          | AWP 1    | Supported, recommended (AuraDB-focused hardening release; connector unchanged; wire payload identical to 0.7.x; storage format unchanged) |
+| 0.8.1  | 0.4.1          | AWP 1    | Supported, recommended (stabilization patch over 0.8.0; connector unchanged; wire payload, storage format, and semantics identical to 0.8.0) |
+| 0.8.0  | 0.4.1          | AWP 1    | Supported (AuraDB-focused hardening release; connector unchanged; wire payload identical to 0.7.x; storage format unchanged) |
 | 0.7.1  | 0.4.1          | AWP 1    | Supported, recommended (clearer `AuraNotLeaderError` messages, secure-by-default redirect, transaction-redirect docs; identical wire payload to 0.7.0) |
 | 0.7.1  | 0.3.x / 0.4.0  | AWP 1    | Supported (additive `not_leader` payload; older clients route the leader manually or via 0.4.0 helpers) |
 | 0.7.0  | 0.4.x          | AWP 1    | Supported (native AuraDB backend; structured `not_leader` payload + connector cluster ergonomics) |
@@ -45,7 +50,7 @@ and TLS). Use Aura Connector 0.3.x to connect to an AuraDB 0.2.x server. See
 
 ## Versions
 
-- **AuraDB:** 0.8.0
+- **AuraDB:** 0.8.1
 - **Storage format:** v2 (commit-timestamped MVCC version chains), unchanged from
   v0.4.x. A v1 (≤ 0.2.x) data directory is migrated to v2 transparently on first
   open; an unknown future format is rejected. See [UPGRADING.md](UPGRADING.md).

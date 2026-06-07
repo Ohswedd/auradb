@@ -1268,6 +1268,16 @@ pub fn cmd_backup_verify(input: &Path) -> Result<(String, bool)> {
     let mut records = 0usize;
     let mut collections: BTreeMap<String, usize> = BTreeMap::new();
     let mut declared: BTreeSet<String> = BTreeSet::new();
+    // Per-collection primary-key field name (from the schema line) and the set of
+    // primary-key values already seen, so a backup that carries two records with
+    // the same primary key is rejected. A faithful `auradb dump` exports exactly
+    // one record per primary key (latest visible MVCC state); a duplicate means a
+    // corrupt or hand-edited backup whose restore would silently collapse two
+    // logical records into one (data loss). Only the count is reported — never a
+    // primary-key value — so the report cannot leak record contents.
+    let mut pk_field: BTreeMap<String, Option<String>> = BTreeMap::new();
+    let mut pk_seen: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
+    let mut pk_dupes: BTreeMap<String, usize> = BTreeMap::new();
     let mut warnings = Vec::new();
     let mut errors = Vec::new();
     let mut line_no = 0usize;
@@ -1287,19 +1297,45 @@ pub fn cmd_backup_verify(input: &Path) -> Result<(String, bool)> {
         match serde_json::from_str::<DumpLine>(line) {
             Ok(DumpLine::Schema { schema }) => {
                 declared.insert(schema.name.clone());
+                pk_field.insert(
+                    schema.name.clone(),
+                    schema.primary_key().map(|f| f.name.clone()),
+                );
                 schemas += 1;
             }
-            Ok(DumpLine::Record { collection, .. }) => {
+            Ok(DumpLine::Record { collection, fields }) => {
                 if !declared.contains(&collection) {
                     warnings.push(format!(
                         "line {line_no}: record for collection `{collection}` precedes its schema"
                     ));
+                }
+                // Detect a repeated primary-key value within the collection. The
+                // value itself is canonicalized for comparison only and never
+                // stored in or printed by the report.
+                if let Some(Some(pk)) = pk_field.get(&collection) {
+                    if let Some(value) = fields.get(pk) {
+                        if !value.is_null() {
+                            let key = serde_json::to_string(&value.to_json())
+                                .unwrap_or_else(|_| format!("{value:?}"));
+                            let seen = pk_seen.entry(collection.clone()).or_default();
+                            if !seen.insert(key) {
+                                *pk_dupes.entry(collection.clone()).or_insert(0) += 1;
+                            }
+                        }
+                    }
                 }
                 *collections.entry(collection).or_insert(0) += 1;
                 records += 1;
             }
             Err(e) => errors.push(format!("line {line_no}: malformed dump line: {e}")),
         }
+    }
+    // A repeated primary key is fatal: the backup cannot be restored faithfully.
+    for (collection, count) in &pk_dupes {
+        errors.push(format!(
+            "collection `{collection}` has {count} duplicate primary key value(s); \
+             a faithful backup carries one record per primary key"
+        ));
     }
     let report = BackupVerifyReport {
         ok: errors.is_empty(),

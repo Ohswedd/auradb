@@ -1,8 +1,18 @@
 # Production readiness
 
-AuraDB **v0.8.0** is a **production-readiness candidate for single-node
-deployments** and a **stronger cluster preview**. It is **not** production HA.
-**Single-node mode remains the recommended production mode.**
+AuraDB **v0.8.1** is a **production-readiness stabilization patch** for the
+v0.8.0 **production-readiness candidate for single-node deployments** and
+**stronger cluster preview**. It is **not** production HA. **Single-node mode
+remains the recommended production mode.**
+
+"Production-readiness candidate" means **scoped**, not blanket production-ready:
+single-node mode, run with the checklist below (authentication, TLS, scheduled
+backups with a rehearsed restore, and monitoring), is the recommended production
+path. The cluster preview is **not** production HA — no production automatic
+failover, no linearizable follower reads, no distributed transactions, no dynamic
+membership, no sharding, no multi-region. v0.8.1 changes none of this scope; it
+stabilizes the operational edges (backup/restore, resource limits, soak,
+release-artifact verification, runbooks).
 
 This document states, honestly, what is supported at what level, and gives the
 checklists to run before and during a production single-node deployment. For

@@ -219,6 +219,22 @@ auradb bench compare --baseline benches/baseline/v0.6.2.json --current benches/b
 > and v0.7.1 were connector-ergonomics releases that did **not** refresh the engine
 > baseline, so v0.6.2 is the prior baseline to compare against.
 
+### v0.8.1 baseline (stabilization patch)
+
+v0.8.1 commits `benches/baseline/v0.8.1.json` for continuity. It is a
+stabilization patch that changes no query, storage, or MVCC hot path, so its
+numbers track v0.8.0 within run-to-run noise on the same machine:
+
+```bash
+cargo run --release -p auradb-cli -- bench --json --output benches/baseline/v0.8.1.json
+auradb bench compare --baseline benches/baseline/v0.8.0.json --current benches/baseline/v0.8.1.json
+```
+
+> **Comparison is warn-only and machine-specific.** No fail threshold is set for
+> this patch. On a shared developer machine, per-benchmark deltas from the
+> single-digit to low-tens percent range are hardware variance, not regressions;
+> compare only reports captured on the same machine and profile.
+
 Two comparators are available; both are **unit-aware** (`ops_per_sec` is
 higher-better; `ns_per_op` and `seconds` are lower-better) and **warn by default**:
 

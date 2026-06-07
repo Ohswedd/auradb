@@ -19,10 +19,14 @@ number from one laptop is not comparable to a number from another.
 The benchmark opens the engine with `sync_on_commit = false` so it measures
 engine work rather than disk-flush latency. See [docs/BENCHMARKS.md](../../docs/BENCHMARKS.md).
 
-The current baseline is `v0.8.0.json`, the refreshed single-node engine baseline.
-The previous baseline is `v0.6.2.json`: v0.7.0 and v0.7.1 were connector-ergonomics
-releases that did **not** refresh the engine baseline, so `v0.6.2.json` is the
-prior baseline to compare against. It is the single-node engine suite; multi-node
+The current baseline is `v0.8.1.json`, captured on the v0.8.1 stabilization
+branch. v0.8.1 changes no query, storage, or MVCC hot path, so its numbers track
+`v0.8.0.json` within run-to-run noise on the same machine; comparison is
+**warn-only and machine-specific** (no fail threshold), and any per-benchmark
+delta in the single-digit-to-low-tens percent range on a shared developer machine
+is hardware variance, not a regression. The prior engine baseline is `v0.8.0.json`
+(v0.7.0 and v0.7.1 were connector-ergonomics releases that did **not** refresh the
+engine baseline). It is the single-node engine suite; multi-node
 replicated-write and recovery latency (leader write, follower catch-up, snapshot
 install, reconnect recovery, cluster status) is topology- and network-dependent and
 is exercised — and bounded — by the cross-process preview tests

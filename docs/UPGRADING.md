@@ -1,5 +1,29 @@
 # Upgrading
 
+## From v0.8.0 to v0.8.1
+
+> **AuraDB v0.8.1 is a production-readiness stabilization patch. It is not
+> production HA; single-node mode remains the recommended production mode.**
+
+v0.8.1 is a **drop-in** binary replacement for v0.8.0. There is **no storage
+migration** (format stays at v2), the wire protocol is unchanged (AWP 1), and Aura
+Connector v0.4.1 remains compatible. It changes no semantics and adds no product
+features — only more backup/restore and resource-limit edge-case coverage,
+soak-script and release-artifact-verification improvements, and runbook polish.
+
+As always, take a backup and rehearse a restore before upgrading a production
+deployment:
+
+```bash
+auradb dump --data-dir /var/lib/auradb --output backup-before-0.8.1.jsonl
+auradb backup verify --input backup-before-0.8.1.jsonl --json
+# Stop the old binary, swap in the v0.8.1 binary, start it, then:
+auradb check --data-dir /var/lib/auradb --json
+```
+
+**Rollback plan.** v0.8.0 and v0.8.1 share the same on-disk and wire formats, so a
+v0.8.1 data directory can be reopened by v0.8.0. Keep the pre-upgrade backup.
+
 ## From v0.7.x to v0.8.0
 
 > **AuraDB v0.8.0 is a production-readiness candidate for single-node and a

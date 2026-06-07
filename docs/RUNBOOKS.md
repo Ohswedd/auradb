@@ -60,6 +60,15 @@ the upgrade path tested in staging, and a rollback plan.
   ```
 - **Expected**: `backup verify` reports `"ok": true`; `check` reports
   `"ok": true` with the expected record count.
+- **What `backup verify` rejects**: a malformed or truncated line, an invalid
+  schema section, a record for a collection no schema declares, a line past the
+  per-line size bound, and a backup that carries two records with the same primary
+  key (a corrupt or hand-edited dump whose restore would silently collapse two
+  logical records into one). The report names the collection and a count only —
+  it never prints field values or key contents.
+- **Required before trusting a backup**: run the restore rehearsal above (restore
+  into a fresh directory and `check`) — a backup you have never restored is not a
+  backup you can trust.
 - **Safe**: always restore into a *fresh* directory.
 - **Avoid**: restoring over a live data directory while the server is running.
 
