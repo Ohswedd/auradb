@@ -100,6 +100,16 @@ is high, the oldest snapshot is too old, retained versions exceed a threshold, G
 is disabled, transaction timeouts are disabled, statistics are stale, or the index
 consistency check fails. See [OPERATIONS.md](OPERATIONS.md).
 
+### Scheduled consistency checks (v0.8.0)
+
+`auradb check --json` emits a structured consistency report
+(`ok`, `storage`, `catalog`, `indexes`, `planner_stats`, `raft`, `snapshots`,
+`warnings`, `errors`) and **exits non-zero when any check fails**, so it can be run
+on a schedule (for example a cron job or sidecar) to detect on-disk corruption
+across the storage, catalog, indexes, planner statistics, Raft log, and snapshot
+boundaries. Alert on a non-zero exit or on `ok == false`. The report never prints
+secrets. See [CLI.md](CLI.md) and [STORAGE_ENGINE.md](STORAGE_ENGINE.md).
+
 ### Cluster health (v0.4.0, extended in v0.5.0 and v0.5.1)
 
 When cluster mode is enabled, the health report gains an additive `cluster`

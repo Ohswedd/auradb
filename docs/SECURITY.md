@@ -1,6 +1,6 @@
 # Security
 
-This document describes the implemented security posture of AuraDB `0.2.1`. See
+This document describes the implemented security posture of AuraDB `0.8.0`. See
 `SECURITY.md` at the repository root for the vulnerability reporting policy.
 
 AuraDB is a single-node server. It does not claim production-grade guarantees
@@ -229,9 +229,50 @@ or certificate or key material in their output.
   (`crates/auradb-protocol/tests/fuzz.rs`). Deterministic seeded recovery tests
   exercise corruption detection and repair (see [TESTING](TESTING.md)).
 
+## Security hardening checklist
+
+Use this checklist when preparing a deployment. It consolidates the controls
+described above; single-node mode is the recommended production mode.
+
+- **Authentication enabled.** `[auth] enabled = true` with a real Argon2id
+  `token_hash`. A public bind without auth is rejected at startup.
+- **TLS enabled.** `[tls] enabled = true` with certificate and key material issued
+  by your own CA (not the development certificates). Plaintext is never served
+  under a TLS configuration.
+- **Token rotation.** Rotate the client token in place with `auradb auth
+  rotate-token` and restart to enforce it.
+- **Peer token rotation.** In the multi-node preview, rotate `peer_auth_token` with
+  a rolling restart, one node at a time, keeping a quorum.
+- **Certificate rotation.** Re-issue per-node peer certificates from the shared CA
+  and roll one node at a time; rotate the CA itself with an old+new bundle across
+  two rolls.
+- **No secrets in logs.** Tokens, token hashes, the peer token, and TLS material
+  are never logged or echoed in error frames.
+- **No token hash in diagnostics.** `auradb doctor`, `auradb status --json`,
+  `auradb config validate`, and `auradb check --json` print a redacted summary and
+  never include the token hash or any secret. This redaction is tested across
+  `doctor`, `status`, `config validate`, and `check`.
+- **Non-root Docker.** The published image and the secure compose file run as a
+  non-root user.
+- **Read-only root filesystem.** `docker-compose.secure.yml` runs with a read-only
+  root filesystem.
+- **Capability drop.** The secure compose file drops Linux capabilities it does not
+  need.
+- **No public bind without auth and TLS.** A non-loopback bind with auth disabled is
+  rejected unless `allow_insecure_bind` is explicitly set (development only); a
+  public cluster additionally requires peer TLS and a `peer_auth_token`.
+- **Dependency audit.** `cargo audit` and `cargo deny` run in CI (`security.yml`)
+  against a RUSTSEC advisory policy; keep dependencies current.
+- **File permissions.** Restrict the data directory, config file, certificates, and
+  private keys to the service account; never commit `certs/`, keys, or tokens.
+- **Backup encryption.** Logical backups (`auradb dump`) are plaintext JSONL;
+  encrypt them at rest and in transit with your own tooling.
+- **Network exposure.** Keep AuraDB behind your own network controls; expose it
+  beyond the local host only with auth and TLS enabled.
+
 ## Not implemented (do not rely on)
 
-AuraDB is single node. The following are not implemented in `0.2.1`:
+AuraDB is single node. The following are not implemented in `0.8.0`:
 role-based access control (RBAC/ABAC), tenant isolation, field-level read/write
 policies, field-level encryption, encryption at rest, and audit logging. The
 recommended production deployment remains single-node. v0.5.0 adds a controlled,

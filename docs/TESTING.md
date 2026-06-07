@@ -107,6 +107,65 @@ unfinished-work vocabulary to ensure no unfinished behavior is presented as
 working. Unsupported operations must instead return a structured
 `Error::Unsupported`.
 
+## Hardening and validation suites (v0.8.0)
+
+> **AuraDB v0.8.0 is a production-readiness candidate for single-node and a
+> stronger cluster preview. It is not production HA; single-node mode remains the
+> recommended production mode.**
+
+v0.8.0 adds operability and validation coverage; it changes no storage or wire
+format.
+
+- **Backup/restore drills** (`crates/auradb-cli/tests/backup_drills.rs`) —
+  `dump` → `backup verify` → `restore` round trips, including that `backup verify`
+  validates a dump without importing it and rejects an invalid backup.
+- **Upgrade drills into v0.8.0** (`crates/auradb-cli/tests/upgrade_to_v0_8_0.rs`) —
+  runs the v0.8.0 checklist (open → `check --json` → analyze → index check → dump →
+  `backup verify` → restore → query smoke) over **all genuine release fixtures**,
+  rejecting an unknown future storage format. v0.1.0–v0.2.1 are storage format v1;
+  v0.3.0 is format v2 and is representative of v0.3.x–v0.7.x, which share format v2.
+- **Large-dataset smokes** (`crates/auradb-cli/tests/large_dataset.rs`) — a
+  CI-safe 10k-record smoke plus a `#[ignore]`d 100k stress run.
+- **Resource limits** (`crates/auradb-server/tests/limits.rs`) — the five `[limits]`
+  bounds are enforced and a violation returns a structured `limit_exceeded` error
+  without closing the connection.
+- **Check corruption drills** (`crates/auradb-cli/tests/check.rs`) — `auradb check
+  --json` over segment-checksum, manifest, catalog, index-manifest (recoverable →
+  rebuilt, a warning), planner-stats (advisory → warning), raft-log, and
+  snapshot-boundary corruption, rejection of unknown future storage formats, and
+  that the report never prints secrets.
+
+The redaction surface (`doctor`, `status`, `config validate`, and `check`) is
+tested to never emit the token hash or any secret.
+
+### Cluster-preview recovery coverage
+
+v0.8.0 hardens cluster-preview **recovery testing** by relying on the existing
+multi-node suites rather than duplicating them. The recovery scenarios map to:
+
+- `crates/auradb-replication/tests/multi_node.rs`:
+  `repeated_leader_restart_2_cycles_converges` (leader loss / re-election),
+  `install_snapshot_restores_follower_after_compaction` and the `snapshot_install_*`
+  tests (a follower needing a snapshot), `peer_reconnect_storm_*` (reconnect churn),
+  and
+  `partition_heals_and_follower_catches_up` (follower lag after a partition heals).
+- `crates/auradb-cli/tests/cluster_diagnostics.rs`: the `cluster doctor` recovery
+  warnings (`status_reports_leader_changes`, `doctor_warns_reconnect_storm`,
+  `doctor_warns_repeated_leader_changes`).
+
+These cover the recovery scenarios, so v0.8.0 adds no duplicate tests for them.
+
+### Soak scripts (manual, not required CI)
+
+- `scripts/soak_single_node.sh` — a bounded single-node soak (default 120s,
+  configurable via the first argument or `SOAK_DURATION_SECS`) that cycles
+  restore/check/stats/gc/compact and asserts `check` stays ok with a stable record
+  count.
+- `scripts/soak_cluster_preview.sh` — a loopback three-node preview soak that
+  restarts a follower and asserts the leader and quorum recover.
+
+These are operator/manual tools and are not part of required CI.
+
 ## MVCC stabilization suites (v0.3.1)
 
 - `crates/auradb/tests/transaction_lifecycle.rs` — the active transaction

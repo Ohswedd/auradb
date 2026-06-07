@@ -2,7 +2,7 @@
 //! so each command can be unit-tested without spawning a process.
 #![forbid(unsafe_code)]
 
-use std::io::{BufRead, Write};
+use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::time::Instant;
 
@@ -577,6 +577,375 @@ pub fn cmd_check(data_dir: &Path) -> Result<String> {
     Ok(format!("index consistency OK; {checked} records verified"))
 }
 
+/// Storage manifest and segment status within a [`CheckReport`].
+#[derive(Debug, Serialize)]
+pub struct StorageCheck {
+    /// Whether the storage layer is healthy (manifest readable, segments open).
+    pub ok: bool,
+    /// Whether a `MANIFEST` file is present.
+    pub manifest_present: bool,
+    /// The on-disk format version recorded in the manifest, if readable.
+    pub format_version: Option<u32>,
+    /// The newest on-disk format version this build can read.
+    pub max_readable_format_version: u32,
+    /// Number of live segments listed in the manifest, if readable.
+    pub segments: Option<usize>,
+    /// Total live records, available only when the engine opened successfully.
+    pub records: Option<usize>,
+    /// Total stored MVCC versions, available only when the engine opened.
+    pub versions: Option<usize>,
+    /// Whether the engine opened (segments replayed without fatal corruption).
+    pub opened: bool,
+    /// The reason storage is unhealthy, if any.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+}
+
+/// Schema catalog status within a [`CheckReport`].
+#[derive(Debug, Serialize)]
+pub struct CatalogCheck {
+    /// Whether the catalog is healthy (absent or well-formed).
+    pub ok: bool,
+    /// Whether a `catalog.json` file is present.
+    pub present: bool,
+    /// Number of registered collections, when the engine opened.
+    pub collections: Option<usize>,
+    /// The schema catalog version, when the engine opened.
+    pub schema_version: Option<u64>,
+    /// The reason the catalog is unhealthy, if any.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+}
+
+/// Secondary/index status within a [`CheckReport`].
+#[derive(Debug, Serialize)]
+pub struct IndexCheck {
+    /// Whether indexes are healthy (consistent against stored records).
+    pub ok: bool,
+    /// Whether an `indexes/INDEX_MANIFEST.json` file is present.
+    pub manifest_present: bool,
+    /// Collections whose indexes loaded from a valid snapshot, when opened.
+    pub loaded: Option<usize>,
+    /// Collections whose indexes were rebuilt from storage, when opened.
+    pub rebuilt: Option<usize>,
+    /// Whether the index-vs-storage consistency check passed, when run.
+    pub consistency_ok: Option<bool>,
+    /// Number of records verified by the consistency check, when run.
+    pub records_verified: Option<usize>,
+    /// The reason indexes are unhealthy, if any.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+}
+
+/// Planner statistics file status within a [`CheckReport`]. Statistics are
+/// advisory: a corrupt or stale file is a warning, not a fatal error.
+#[derive(Debug, Serialize)]
+pub struct PlannerStatsCheck {
+    /// Whether the statistics file is healthy (absent or well-formed).
+    pub ok: bool,
+    /// Whether a `planner_stats.json` file is present.
+    pub present: bool,
+    /// The reason the statistics are unusable, if any.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+}
+
+/// Raft consensus log/state status within a [`CheckReport`] (cluster mode only).
+#[derive(Debug, Serialize)]
+pub struct RaftCheck {
+    /// Whether the durable Raft state is healthy (or absent in single-node mode).
+    pub ok: bool,
+    /// Whether any durable Raft files are present (`cluster/raft-*`).
+    pub present: bool,
+    /// The reason the Raft state is unhealthy, if any.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+}
+
+/// Snapshot boundary status within a [`CheckReport`] (cluster mode only).
+#[derive(Debug, Serialize)]
+pub struct SnapshotCheck {
+    /// Whether the persisted snapshot boundary is healthy (or absent).
+    pub ok: bool,
+    /// Whether a snapshot/compaction boundary is recorded
+    /// (`cluster/raft-compaction.json`).
+    pub boundary_present: bool,
+    /// The last log index included in the snapshot boundary, when readable.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub last_included_index: Option<u64>,
+    /// The reason the snapshot boundary is unhealthy, if any.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+}
+
+/// A structured, machine-readable consistency report for a local data directory,
+/// emitted by `auradb check --json`.
+///
+/// Each layer is probed independently and best-effort: a fault in one layer is
+/// recorded and the remaining layers are still checked where possible. Fatal
+/// problems (storage, catalog, raft, snapshot corruption) populate `errors` and
+/// make `ok` false; recoverable conditions (index rebuilds, stale/corrupt
+/// advisory statistics) populate `warnings` and leave `ok` true. The report never
+/// includes secrets.
+#[derive(Debug, Serialize)]
+pub struct CheckReport {
+    /// Overall result: true only when `errors` is empty.
+    pub ok: bool,
+    /// The AuraDB version that produced this report.
+    pub auradb_version: String,
+    /// The inspected data directory.
+    pub data_dir: String,
+    /// Storage manifest and segment status.
+    pub storage: StorageCheck,
+    /// Schema catalog status.
+    pub catalog: CatalogCheck,
+    /// Secondary/index status and consistency.
+    pub indexes: IndexCheck,
+    /// Planner statistics file status (advisory).
+    pub planner_stats: PlannerStatsCheck,
+    /// Raft consensus state (cluster mode only).
+    pub raft: RaftCheck,
+    /// Snapshot boundary status (cluster mode only).
+    pub snapshots: SnapshotCheck,
+    /// Non-fatal advisories.
+    pub warnings: Vec<String>,
+    /// Fatal problems that make `ok` false.
+    pub errors: Vec<String>,
+}
+
+/// Parse a JSON file into a generic value, used for best-effort validity probes
+/// of advisory/metadata files that should never abort the whole check.
+fn probe_json(path: &Path) -> std::result::Result<serde_json::Value, String> {
+    let bytes = std::fs::read(path).map_err(|e| e.to_string())?;
+    serde_json::from_slice(&bytes).map_err(|e| e.to_string())
+}
+
+/// Run the full structured consistency check over `data_dir`. This never returns
+/// an error: every fault is captured into the returned [`CheckReport`].
+pub fn check_report(data_dir: &Path) -> CheckReport {
+    let mut warnings: Vec<String> = Vec::new();
+    let mut errors: Vec<String> = Vec::new();
+
+    // --- Storage manifest (probed independently of engine open) ---
+    let manifest_path = data_dir.join("MANIFEST");
+    let manifest_present = manifest_path.exists();
+    let mut storage = StorageCheck {
+        ok: true,
+        manifest_present,
+        format_version: None,
+        max_readable_format_version: auradb::storage::FORMAT_VERSION,
+        segments: None,
+        records: None,
+        versions: None,
+        opened: false,
+        error: None,
+    };
+    if !manifest_present {
+        storage.ok = false;
+        let msg = format!("no MANIFEST in {}", data_dir.display());
+        storage.error = Some(msg.clone());
+        errors.push(msg);
+    } else {
+        match auradb::storage::Manifest::load(&manifest_path) {
+            Ok(m) => {
+                storage.format_version = Some(m.format_version);
+                storage.segments = Some(m.segments.len());
+            }
+            Err(e) => {
+                storage.ok = false;
+                // Surface the recorded version even when the manifest is rejected
+                // (e.g. an unknown future format) for operator triage.
+                if let Ok(v) = probe_json(&manifest_path) {
+                    if let Some(fv) = v.get("format_version").and_then(|x| x.as_u64()) {
+                        storage.format_version = Some(fv as u32);
+                    }
+                }
+                let msg = format!("storage manifest: {e}");
+                storage.error = Some(msg.clone());
+                errors.push(msg);
+            }
+        }
+    }
+
+    // --- Catalog (probed independently; absent is healthy) ---
+    let catalog_path = data_dir.join("catalog.json");
+    let mut catalog = CatalogCheck {
+        ok: true,
+        present: catalog_path.exists(),
+        collections: None,
+        schema_version: None,
+        error: None,
+    };
+    if catalog.present {
+        if let Err(e) = auradb::storage::Catalog::load(&catalog_path) {
+            catalog.ok = false;
+            let msg = format!("schema catalog: {e}");
+            catalog.error = Some(msg.clone());
+            errors.push(msg);
+        }
+    }
+
+    // --- Index manifest presence (corruption here is repaired on open) ---
+    let index_manifest_present = data_dir
+        .join("indexes")
+        .join("INDEX_MANIFEST.json")
+        .exists();
+    let mut indexes = IndexCheck {
+        ok: true,
+        manifest_present: index_manifest_present,
+        loaded: None,
+        rebuilt: None,
+        consistency_ok: None,
+        records_verified: None,
+        error: None,
+    };
+
+    // --- Planner statistics (advisory; corruption is a warning) ---
+    let stats_path = data_dir.join("planner_stats.json");
+    let mut planner_stats = PlannerStatsCheck {
+        ok: true,
+        present: stats_path.exists(),
+        error: None,
+    };
+    if planner_stats.present {
+        if let Err(e) = probe_json(&stats_path) {
+            planner_stats.ok = false;
+            let msg =
+                format!("planner statistics are unreadable ({e}); run `auradb stats analyze`");
+            planner_stats.error = Some(msg.clone());
+            warnings.push(msg);
+        }
+    }
+
+    // --- Raft snapshot boundary + consensus state (cluster mode only) ---
+    let cluster_dir = data_dir.join("cluster");
+    let compaction_path = cluster_dir.join("raft-compaction.json");
+    let state_path = cluster_dir.join("raft-state.json");
+    let log_path = cluster_dir.join("raft-log.bin");
+
+    let mut snapshots = SnapshotCheck {
+        ok: true,
+        boundary_present: compaction_path.exists(),
+        last_included_index: None,
+        error: None,
+    };
+    if snapshots.boundary_present {
+        match probe_json(&compaction_path) {
+            Ok(v) => {
+                snapshots.last_included_index =
+                    v.get("last_included_index").and_then(|x| x.as_u64());
+            }
+            Err(e) => {
+                snapshots.ok = false;
+                let msg = format!("snapshot boundary metadata is corrupt: {e}");
+                snapshots.error = Some(msg.clone());
+                errors.push(msg);
+            }
+        }
+    }
+
+    let mut raft = RaftCheck {
+        ok: true,
+        present: log_path.exists() || state_path.exists(),
+        error: None,
+    };
+    if raft.present {
+        // Validate the durable hard state first for a precise message.
+        if state_path.exists() {
+            if let Err(e) = probe_json(&state_path) {
+                raft.ok = false;
+                let msg = format!("raft hard state is corrupt: {e}");
+                raft.error = Some(msg.clone());
+                errors.push(msg);
+            }
+        }
+        // Then validate the durable log itself. `FileStorage::open` re-reads the
+        // compaction boundary, so only run it when that probe already passed to
+        // keep attribution clean.
+        if raft.ok && snapshots.ok {
+            if let Err(e) = auradb_raft::FileStorage::open(&cluster_dir) {
+                raft.ok = false;
+                let msg = format!("raft log: {e}");
+                raft.error = Some(msg.clone());
+                errors.push(msg);
+            }
+        }
+    }
+
+    // --- Engine open for deep index consistency + live counts ---
+    match Engine::open(data_dir) {
+        Ok(engine) => {
+            storage.opened = true;
+            let stats = engine.stats();
+            storage.records = Some(stats.records);
+            storage.versions = Some(stats.versions);
+            if catalog.ok {
+                catalog.collections = Some(stats.collections);
+                catalog.schema_version = Some(stats.schema_version);
+            }
+            let load = engine.index_load_report();
+            indexes.loaded = Some(load.loaded);
+            indexes.rebuilt = Some(load.rebuilt);
+            if load.rebuilt > 0 {
+                warnings.push(format!(
+                    "{} index set(s) were rebuilt from storage (snapshot absent, stale, or corrupt)",
+                    load.rebuilt
+                ));
+            }
+            match engine.check_consistency() {
+                Ok(n) => {
+                    indexes.consistency_ok = Some(true);
+                    indexes.records_verified = Some(n);
+                }
+                Err(e) => {
+                    indexes.ok = false;
+                    indexes.consistency_ok = Some(false);
+                    let msg =
+                        format!("index consistency check failed: {e}; run `auradb index rebuild`");
+                    indexes.error = Some(msg.clone());
+                    errors.push(msg);
+                }
+            }
+        }
+        Err(e) => {
+            storage.opened = false;
+            // Attribute the open failure. If the manifest and catalog probes both
+            // passed, the fault is in the segment data itself (e.g. a checksum
+            // mismatch). Otherwise the already-recorded probe error is the cause.
+            if storage.ok && catalog.ok {
+                storage.ok = false;
+                let msg = format!("storage segments: {e}");
+                storage.error = Some(msg.clone());
+                errors.push(msg);
+            }
+        }
+    }
+
+    CheckReport {
+        ok: errors.is_empty(),
+        auradb_version: VERSION.to_string(),
+        data_dir: data_dir.display().to_string(),
+        storage,
+        catalog,
+        indexes,
+        planner_stats,
+        raft,
+        snapshots,
+        warnings,
+        errors,
+    }
+}
+
+/// `auradb check --json` - run the structured consistency check and return the
+/// pretty-printed JSON report together with the overall `ok` flag so the caller
+/// can set a non-zero exit code on failure.
+pub fn cmd_check_json(data_dir: &Path) -> Result<(String, bool)> {
+    let report = check_report(data_dir);
+    let ok = report.ok;
+    let json = serde_json::to_string_pretty(&report).context("serializing check report")?;
+    Ok((json, ok))
+}
+
 /// `auradb index check` - report how indexes loaded and verify their
 /// consistency against stored records.
 pub fn cmd_index_check(data_dir: &Path) -> Result<String> {
@@ -791,20 +1160,66 @@ pub fn cmd_dump(data_dir: &Path, out: &Path) -> Result<usize> {
     Ok(lines)
 }
 
+/// The maximum size of a single line accepted by `auradb restore`. A defensive
+/// bound: a malicious or corrupt dump with an unterminated, multi-gigabyte line
+/// would otherwise be buffered whole and exhaust memory.
+pub const MAX_RESTORE_LINE_BYTES: usize = 64 * 1024 * 1024;
+
+/// Read one newline-terminated line into `buf` (without the trailing newline),
+/// bounded to `cap` bytes so a single pathological line cannot exhaust memory.
+/// Returns `Ok(false)` at end of input. Errors with `LimitExceeded` before
+/// buffering past `cap`.
+fn read_capped_line<R: std::io::BufRead>(
+    reader: &mut R,
+    cap: usize,
+    buf: &mut Vec<u8>,
+) -> Result<bool> {
+    buf.clear();
+    loop {
+        let available = reader.fill_buf()?;
+        if available.is_empty() {
+            return Ok(!buf.is_empty());
+        }
+        match available.iter().position(|&b| b == b'\n') {
+            Some(pos) => {
+                if buf.len() + pos > cap {
+                    anyhow::bail!(
+                        "dump line exceeds the {cap}-byte restore limit (refusing to buffer it)"
+                    );
+                }
+                buf.extend_from_slice(&available[..pos]);
+                reader.consume(pos + 1);
+                return Ok(true);
+            }
+            None => {
+                let len = available.len();
+                if buf.len() + len > cap {
+                    anyhow::bail!(
+                        "dump line exceeds the {cap}-byte restore limit (refusing to buffer it)"
+                    );
+                }
+                buf.extend_from_slice(available);
+                reader.consume(len);
+            }
+        }
+    }
+}
+
 /// `auradb restore` - load schemas and records from a JSONL dump. Returns the
 /// number of records restored.
 pub fn cmd_restore(data_dir: &Path, input: &Path) -> Result<usize> {
     let engine = Engine::open(data_dir)?;
     let file = std::fs::File::open(input)
         .with_context(|| format!("opening dump file {}", input.display()))?;
-    let reader = std::io::BufReader::new(file);
+    let mut reader = std::io::BufReader::new(file);
     let mut records = 0;
-    for line in reader.lines() {
-        let line = line?;
+    let mut buf = Vec::new();
+    while read_capped_line(&mut reader, MAX_RESTORE_LINE_BYTES, &mut buf)? {
+        let line = std::str::from_utf8(&buf).context("dump line is not valid UTF-8")?;
         if line.trim().is_empty() {
             continue;
         }
-        let parsed: DumpLine = serde_json::from_str(&line).context("parsing dump line")?;
+        let parsed: DumpLine = serde_json::from_str(line).context("parsing dump line")?;
         match parsed {
             DumpLine::Schema { schema } => {
                 engine.create_schema(schema)?;
@@ -816,6 +1231,88 @@ pub fn cmd_restore(data_dir: &Path, input: &Path) -> Result<usize> {
         }
     }
     Ok(records)
+}
+
+/// A structured validation report for a JSONL backup, emitted by
+/// `auradb backup verify`.
+#[derive(Debug, Serialize)]
+pub struct BackupVerifyReport {
+    /// Whether the backup is well-formed (no parse errors and the line bound was
+    /// respected).
+    pub ok: bool,
+    /// The verified backup file.
+    pub input: String,
+    /// Number of schema lines.
+    pub schemas: usize,
+    /// Number of record lines.
+    pub records: usize,
+    /// Records per collection.
+    pub collections: std::collections::BTreeMap<String, usize>,
+    /// Non-fatal advisories (e.g. records before their schema).
+    pub warnings: Vec<String>,
+    /// Fatal problems that make `ok` false.
+    pub errors: Vec<String>,
+}
+
+/// `auradb backup verify` - validate a JSONL dump without importing it: every
+/// line must parse, the per-line size bound must hold, and every record's
+/// collection should be declared by a preceding schema. Returns the report JSON
+/// and the overall `ok` flag so the caller can set a non-zero exit code.
+pub fn cmd_backup_verify(input: &Path) -> Result<(String, bool)> {
+    use std::collections::{BTreeMap, BTreeSet};
+    let file = std::fs::File::open(input)
+        .with_context(|| format!("opening backup file {}", input.display()))?;
+    let mut reader = std::io::BufReader::new(file);
+    let mut buf = Vec::new();
+    let mut schemas = 0usize;
+    let mut records = 0usize;
+    let mut collections: BTreeMap<String, usize> = BTreeMap::new();
+    let mut declared: BTreeSet<String> = BTreeSet::new();
+    let mut warnings = Vec::new();
+    let mut errors = Vec::new();
+    let mut line_no = 0usize;
+    // An oversize line is a hard failure (it cannot be safely buffered).
+    while read_capped_line(&mut reader, MAX_RESTORE_LINE_BYTES, &mut buf)? {
+        line_no += 1;
+        let line = match std::str::from_utf8(&buf) {
+            Ok(s) => s,
+            Err(_) => {
+                errors.push(format!("line {line_no}: not valid UTF-8"));
+                continue;
+            }
+        };
+        if line.trim().is_empty() {
+            continue;
+        }
+        match serde_json::from_str::<DumpLine>(line) {
+            Ok(DumpLine::Schema { schema }) => {
+                declared.insert(schema.name.clone());
+                schemas += 1;
+            }
+            Ok(DumpLine::Record { collection, .. }) => {
+                if !declared.contains(&collection) {
+                    warnings.push(format!(
+                        "line {line_no}: record for collection `{collection}` precedes its schema"
+                    ));
+                }
+                *collections.entry(collection).or_insert(0) += 1;
+                records += 1;
+            }
+            Err(e) => errors.push(format!("line {line_no}: malformed dump line: {e}")),
+        }
+    }
+    let report = BackupVerifyReport {
+        ok: errors.is_empty(),
+        input: input.display().to_string(),
+        schemas,
+        records,
+        collections,
+        warnings,
+        errors,
+    };
+    let ok = report.ok;
+    let json = serde_json::to_string_pretty(&report).context("serializing backup report")?;
+    Ok((json, ok))
 }
 
 /// `auradb snapshot create` - capture the engine state as a portable snapshot
@@ -2012,6 +2509,32 @@ pub fn build_config(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn backup_input_line_limit_enforced() {
+        // A line longer than the cap is rejected before it is fully buffered.
+        let data = b"short\nthis-line-is-way-too-long-to-accept\nalso-short\n";
+        let mut reader = std::io::BufReader::new(&data[..]);
+        let mut buf = Vec::new();
+        // First (short) line is fine.
+        assert!(read_capped_line(&mut reader, 16, &mut buf).unwrap());
+        assert_eq!(buf, b"short");
+        // The oversize second line errors instead of buffering it whole.
+        let err = read_capped_line(&mut reader, 16, &mut buf).unwrap_err();
+        assert!(err.to_string().contains("restore limit"));
+    }
+
+    #[test]
+    fn capped_line_reader_reads_all_lines_within_bound() {
+        let data = b"a\nbb\nccc";
+        let mut reader = std::io::BufReader::new(&data[..]);
+        let mut buf = Vec::new();
+        let mut got = Vec::new();
+        while read_capped_line(&mut reader, 1024, &mut buf).unwrap() {
+            got.push(String::from_utf8(buf.clone()).unwrap());
+        }
+        assert_eq!(got, vec!["a", "bb", "ccc"]); // trailing line without newline included
+    }
 
     #[test]
     fn init_creates_dir_and_config() {

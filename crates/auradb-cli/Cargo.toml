@@ -22,6 +22,7 @@ auradb-observability = { workspace = true }
 auradb-conformance = { workspace = true }
 auradb-cluster = { workspace = true }
 auradb-replication = { workspace = true }
+auradb-raft = { workspace = true }
 clap = { workspace = true }
 tokio = { workspace = true }
 serde = { workspace = true }

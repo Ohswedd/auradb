@@ -60,3 +60,21 @@ enabled = false
 mode = "static-token"
 # token_hash = "$argon2id$v=19$m=19456,t=2,p=1$...$..."
 token_hash_algorithm = "argon2id"
+
+[limits]
+# Defensive resource limits. Each is a real, enforced bound that protects the
+# server from abusive or accidental requests; a violation is reported as a
+# structured `limit_exceeded` error and never tears down the connection. Defaults
+# are permissive for normal workloads. (The wire-level frame bound is
+# max_payload_bytes above.)
+#
+# Maximum limit/offset accepted on a read query.
+max_query_limit = 1000000
+# Maximum distinct tokens accepted in a full-text query.
+max_full_text_query_tokens = 64
+# Maximum container-nesting depth accepted in a written document.
+max_document_depth = 64
+# Maximum vector dimensionality accepted in a schema or a written record.
+max_vector_dimension = 4096
+# Maximum number of writes that may be staged in a single transaction.
+max_transaction_write_set = 100000

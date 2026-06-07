@@ -21,7 +21,7 @@ See [DEPLOYMENT.md](DEPLOYMENT.md) for the secure Docker Compose example.
 | `bind` | `127.0.0.1` | Bind address |
 | `port` | `7171` | Listen port |
 | `data_dir` | `.local/auradb` | Storage directory (segments, manifest, catalog, persisted indexes) |
-| `max_payload_bytes` | `16777216` | Max accepted frame payload (16 MiB) |
+| `max_payload_bytes` | `16777216` | Max accepted wire frame payload (16 MiB) |
 | `log_level` | `info` | Tracing env-filter directive |
 | `log_json` | `false` | Emit JSON logs |
 | `cursor_timeout_secs` | `300` | Idle cursor timeout |
@@ -32,6 +32,7 @@ See [DEPLOYMENT.md](DEPLOYMENT.md) for the secure Docker Compose example.
 | `[tls]` | disabled | Server-terminated TLS (see below) |
 | `[auth]` | disabled | Static-token authentication (see below) |
 | `[mvcc]` | enabled | MVCC version garbage collection (see below) |
+| `[limits]` | enabled | Enforced resource bounds on requests (see below) |
 
 ### Secure bind
 
@@ -100,6 +101,37 @@ min_retained_versions = 1     # minimum versions kept per record chain
 - `min_retained_versions` is the floor of versions kept per chain; the latest
   version is always retained regardless.
 - GC can also be run on demand with `auradb gc`. See [CLI.md](CLI.md).
+
+## `[limits]`
+
+Enforced, configurable resource bounds on incoming requests, added in v0.8.0. Each
+bound is validated **non-zero at startup** (a zero value fails closed). When a
+request would exceed one of these limits the server returns a structured
+`limit_exceeded` error and **keeps the connection open** — the limit rejects the
+offending operation, not the session.
+
+```toml
+[limits]
+max_query_limit = 1000000             # max rows a single query may request
+max_full_text_query_tokens = 64       # max tokens in a contains_text query
+max_document_depth = 64               # max nesting depth of a document value
+max_vector_dimension = 4096           # max declared/queried vector dimension
+max_transaction_write_set = 100000    # max staged writes in one transaction
+```
+
+| Key | Default | Bound |
+|---|---|---|
+| `max_query_limit` | `1000000` | Maximum `limit` accepted on a query |
+| `max_full_text_query_tokens` | `64` | Maximum tokens in a `contains_text` query |
+| `max_document_depth` | `64` | Maximum nesting depth of a document value |
+| `max_vector_dimension` | `4096` | Maximum declared or queried vector dimension |
+| `max_transaction_write_set` | `100000` | Maximum staged writes in a single transaction |
+
+These bounds are independent of `max_payload_bytes`, which is the **wire frame**
+bound (the largest accepted AWP frame payload, 16 MiB) enforced at the transport
+layer. The CLI `restore` command additionally enforces a 64 MiB per-line bound on
+its input JSONL. See [`examples/auradb.toml`](../examples/auradb.toml) for the
+documented section.
 
 ## Loading and overrides
 

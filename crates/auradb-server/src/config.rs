@@ -109,6 +109,9 @@ pub struct Config {
     /// server behaves exactly as the single-node engine.
     #[serde(default)]
     pub cluster: auradb_cluster::ClusterConfig,
+    /// Defensive resource limits.
+    #[serde(default)]
+    pub limits: LimitsConfig,
 }
 
 /// MVCC version garbage-collection configuration (`[mvcc]`).
@@ -161,6 +164,56 @@ impl Default for MvccConfig {
     }
 }
 
+/// Defensive resource limits (`[limits]`).
+///
+/// These bound abusive or accidental requests so a single client cannot exhaust
+/// server memory or stack. Defaults are permissive enough for normal workloads;
+/// every limit is a real, enforced bound (no placeholders). A violated limit is
+/// reported as a structured `limit_exceeded` error and never tears down the
+/// connection.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(default)]
+pub struct LimitsConfig {
+    /// Maximum `limit`/`offset` accepted on a read query.
+    pub max_query_limit: usize,
+    /// Maximum number of distinct tokens accepted in a full-text query.
+    pub max_full_text_query_tokens: usize,
+    /// Maximum container-nesting depth accepted in a written document.
+    pub max_document_depth: usize,
+    /// Maximum vector dimensionality accepted in a schema or a written record.
+    pub max_vector_dimension: usize,
+    /// Maximum number of writes that may be staged in a single transaction.
+    pub max_transaction_write_set: usize,
+}
+
+fn default_max_query_limit() -> usize {
+    1_000_000
+}
+fn default_max_full_text_query_tokens() -> usize {
+    64
+}
+fn default_max_document_depth() -> usize {
+    64
+}
+fn default_max_vector_dimension() -> usize {
+    4096
+}
+fn default_max_transaction_write_set() -> usize {
+    100_000
+}
+
+impl Default for LimitsConfig {
+    fn default() -> Self {
+        LimitsConfig {
+            max_query_limit: default_max_query_limit(),
+            max_full_text_query_tokens: default_max_full_text_query_tokens(),
+            max_document_depth: default_max_document_depth(),
+            max_vector_dimension: default_max_vector_dimension(),
+            max_transaction_write_set: default_max_transaction_write_set(),
+        }
+    }
+}
+
 fn is_false(b: &bool) -> bool {
     !*b
 }
@@ -183,6 +236,7 @@ impl Default for Config {
             auth: AuthConfig::default(),
             mvcc: MvccConfig::default(),
             cluster: auradb_cluster::ClusterConfig::default(),
+            limits: LimitsConfig::default(),
         }
     }
 }
@@ -263,6 +317,7 @@ impl Config {
             ));
         }
 
+        self.validate_limits()?;
         self.validate_auth()?;
         self.validate_tls(check_files)?;
         self.validate_cluster()?;
@@ -273,6 +328,31 @@ impl Config {
                  enable [auth] or pass --allow-insecure-bind to override",
                 self.bind
             )));
+        }
+        Ok(())
+    }
+
+    fn validate_limits(&self) -> Result<()> {
+        let checks = [
+            ("limits.max_query_limit", self.limits.max_query_limit),
+            (
+                "limits.max_full_text_query_tokens",
+                self.limits.max_full_text_query_tokens,
+            ),
+            ("limits.max_document_depth", self.limits.max_document_depth),
+            (
+                "limits.max_vector_dimension",
+                self.limits.max_vector_dimension,
+            ),
+            (
+                "limits.max_transaction_write_set",
+                self.limits.max_transaction_write_set,
+            ),
+        ];
+        for (name, value) in checks {
+            if value == 0 {
+                return Err(Error::Config(format!("{name} must be non-zero")));
+            }
         }
         Ok(())
     }

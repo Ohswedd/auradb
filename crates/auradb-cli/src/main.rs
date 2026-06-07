@@ -5,14 +5,14 @@ use std::path::PathBuf;
 
 use anyhow::Result;
 use auradb_cli::{
-    build_config, cmd_auth_hash_token, cmd_auth_rotate_token, cmd_bench, cmd_bench_compare,
-    cmd_bench_json, cmd_cert_generate_dev, cmd_check, cmd_cluster_backup_plan,
-    cmd_cluster_bootstrap, cmd_cluster_compact_log, cmd_cluster_doctor, cmd_cluster_doctor_live,
-    cmd_cluster_init, cmd_cluster_leader, cmd_cluster_peers, cmd_cluster_restore_plan,
-    cmd_cluster_status, cmd_cluster_status_live, cmd_cluster_wait_leader, cmd_cluster_wait_ready,
-    cmd_compact, cmd_compatibility, cmd_config_validate, cmd_doctor, cmd_doctor_json, cmd_dump,
-    cmd_gc, cmd_index_check, cmd_index_rebuild, cmd_init, cmd_restore, cmd_server,
-    cmd_snapshot_create, cmd_snapshot_inspect, cmd_snapshot_restore, cmd_stats_analyze,
+    build_config, cmd_auth_hash_token, cmd_auth_rotate_token, cmd_backup_verify, cmd_bench,
+    cmd_bench_compare, cmd_bench_json, cmd_cert_generate_dev, cmd_check, cmd_check_json,
+    cmd_cluster_backup_plan, cmd_cluster_bootstrap, cmd_cluster_compact_log, cmd_cluster_doctor,
+    cmd_cluster_doctor_live, cmd_cluster_init, cmd_cluster_leader, cmd_cluster_peers,
+    cmd_cluster_restore_plan, cmd_cluster_status, cmd_cluster_status_live, cmd_cluster_wait_leader,
+    cmd_cluster_wait_ready, cmd_compact, cmd_compatibility, cmd_config_validate, cmd_doctor,
+    cmd_doctor_json, cmd_dump, cmd_gc, cmd_index_check, cmd_index_rebuild, cmd_init, cmd_restore,
+    cmd_server, cmd_snapshot_create, cmd_snapshot_inspect, cmd_snapshot_restore, cmd_stats_analyze,
     cmd_stats_show, cmd_status, cmd_status_json, cmd_version,
 };
 use clap::{Parser, Subcommand};
@@ -91,10 +91,14 @@ enum Command {
         #[arg(long)]
         json: bool,
     },
-    /// Verify on-disk index consistency.
+    /// Verify on-disk consistency (storage, catalog, indexes, planner stats,
+    /// and any cluster Raft/snapshot state).
     Check {
         #[arg(long, default_value = ".local/auradb")]
         data_dir: PathBuf,
+        /// Emit a structured JSON report. Exits non-zero if any check fails.
+        #[arg(long)]
+        json: bool,
     },
     /// Compact the storage log.
     Compact {
@@ -132,6 +136,11 @@ enum Command {
         /// Input dump file.
         #[arg(long, name = "in", visible_alias = "input")]
         input: PathBuf,
+    },
+    /// Backup utilities (`backup verify`).
+    Backup {
+        #[command(subcommand)]
+        command: BackupCommand,
     },
     /// Run the local benchmark suite, or compare two baselines (`bench compare`).
     Bench {
@@ -433,6 +442,19 @@ enum IndexCommand {
 }
 
 #[derive(Subcommand)]
+enum BackupCommand {
+    /// Validate a JSONL backup without importing it.
+    Verify {
+        /// The backup (JSONL dump) file.
+        #[arg(long, name = "in", visible_alias = "input")]
+        input: PathBuf,
+        /// Emit a structured JSON report. Exits non-zero if the backup is invalid.
+        #[arg(long)]
+        json: bool,
+    },
+}
+
+#[derive(Subcommand)]
 enum AuthCommand {
     /// Hash a token with Argon2id for use as `auth.token_hash` in the config.
     HashToken {
@@ -534,7 +556,17 @@ async fn main() -> Result<()> {
                 println!("{}", cmd_status(&addr, token, tls_ca, &server_name).await?);
             }
         }
-        Command::Check { data_dir } => println!("{}", cmd_check(&data_dir)?),
+        Command::Check { data_dir, json } => {
+            if json {
+                let (report, ok) = cmd_check_json(&data_dir)?;
+                println!("{report}");
+                if !ok {
+                    std::process::exit(1);
+                }
+            } else {
+                println!("{}", cmd_check(&data_dir)?);
+            }
+        }
         Command::Compact { data_dir } => println!("{}", cmd_compact(&data_dir)?),
         Command::Gc {
             data_dir,
@@ -555,6 +587,21 @@ async fn main() -> Result<()> {
             let n = cmd_restore(&data_dir, &input)?;
             println!("restored {n} record(s)");
         }
+        Command::Backup { command } => match command {
+            BackupCommand::Verify { input, json } => {
+                let (report, ok) = cmd_backup_verify(&input)?;
+                if json {
+                    println!("{report}");
+                } else if ok {
+                    println!("backup is valid");
+                } else {
+                    println!("backup is INVALID; run with --json for details");
+                }
+                if !ok {
+                    std::process::exit(1);
+                }
+            }
+        },
         Command::Bench {
             command,
             data_dir,

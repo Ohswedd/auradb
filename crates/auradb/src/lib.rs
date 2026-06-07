@@ -50,9 +50,13 @@ pub mod query {
     pub use auradb_query::*;
 }
 
-/// Re-export of storage types (options, compaction and GC reports).
+/// Re-export of storage types (options, compaction and GC reports, and the
+/// on-disk manifest/catalog primitives consulted by consistency checks).
 pub mod storage {
-    pub use auradb_storage::{CompactionReport, GcReport, StorageOptions};
+    pub use auradb_storage::{
+        Catalog, CompactionReport, GcReport, Manifest, StorageOptions, FORMAT_VERSION,
+        MIN_READABLE_FORMAT_VERSION,
+    };
 }
 
 pub use auradb_txn::Transaction;

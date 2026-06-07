@@ -60,6 +60,28 @@ impl Value {
         matches!(self, Value::Null)
     }
 
+    /// The maximum container-nesting depth of this value. A scalar has depth 1;
+    /// each nested document or array adds one level. Used to enforce a defensive
+    /// bound against pathologically nested documents (a stack-exhaustion vector).
+    pub fn nesting_depth(&self) -> usize {
+        match self {
+            Value::Object(map) => 1 + map.values().map(Value::nesting_depth).max().unwrap_or(0),
+            Value::Array(items) => 1 + items.iter().map(Value::nesting_depth).max().unwrap_or(0),
+            _ => 1,
+        }
+    }
+
+    /// The largest vector dimensionality anywhere within this value (0 if there
+    /// is no vector). Used to enforce a defensive bound on vector payloads.
+    pub fn max_vector_dim(&self) -> usize {
+        match self {
+            Value::Vector(v) => v.len(),
+            Value::Object(map) => map.values().map(Value::max_vector_dim).max().unwrap_or(0),
+            Value::Array(items) => items.iter().map(Value::max_vector_dim).max().unwrap_or(0),
+            _ => 0,
+        }
+    }
+
     /// Borrow as a string slice if this is text.
     pub fn as_text(&self) -> Option<&str> {
         match self {
@@ -328,5 +350,26 @@ mod tests {
         );
         assert_eq!(v.get_path("metadata.missing"), None);
         assert_eq!(v.get_path("nope"), None);
+    }
+
+    #[test]
+    fn nesting_depth_counts_containers() {
+        assert_eq!(Value::Int(1).nesting_depth(), 1);
+        // {a: {b: [1]}} -> object(1) + object(1) + array(1) + scalar(1) = 4
+        let mut inner = Document::new();
+        inner.insert("b".into(), Value::Array(vec![Value::Int(1)]));
+        let mut outer = Document::new();
+        outer.insert("a".into(), Value::Object(inner));
+        assert_eq!(Value::Object(outer).nesting_depth(), 4);
+    }
+
+    #[test]
+    fn max_vector_dim_finds_largest() {
+        assert_eq!(Value::Int(1).max_vector_dim(), 0);
+        assert_eq!(Value::Vector(vec![0.0; 8]).max_vector_dim(), 8);
+        let mut doc = Document::new();
+        doc.insert("small".into(), Value::Vector(vec![0.0; 3]));
+        doc.insert("big".into(), Value::Vector(vec![0.0; 16]));
+        assert_eq!(Value::Object(doc).max_vector_dim(), 16);
     }
 }

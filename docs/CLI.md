@@ -33,9 +33,19 @@ connection; `--tls-server-name` overrides the expected server name. `--json`
 emits the report (address, reachability, status, readiness, server version,
 protocol version, collection count, and whether TLS was used).
 
-### `auradb check --data-dir <dir>`
+### `auradb check --data-dir <dir> [--json]`
 Opens the engine and verifies on-disk index consistency, validating and
-preserving persisted index snapshots.
+preserving persisted index snapshots. The plain form prints `index consistency
+OK; N records verified`. **(v0.8.0)** `--json` emits a structured consistency
+report with top-level fields `ok`, `auradb_version`, `data_dir`, `storage`,
+`catalog`, `indexes`, `planner_stats`, `raft`, `snapshots`, `warnings`, and
+`errors`, and **exits non-zero if any check fails** (so it can be scheduled and
+alerted on). The report covers segment checksums, the manifest, the catalog, the
+index manifest (a recoverable mismatch is rebuilt and reported as a warning),
+planner statistics (advisory — a problem is a warning, not a failure), the Raft
+log, and snapshot boundaries; an unknown future storage format is rejected. The
+report never prints secrets. See [STORAGE_ENGINE.md](STORAGE_ENGINE.md) and
+[OBSERVABILITY.md](OBSERVABILITY.md).
 
 ### `auradb gc [--data-dir <dir>] [--dry-run] [--json]`
 Runs version garbage collection over the MVCC version chains. It reclaims versions
@@ -66,7 +76,15 @@ of `--output`.
 
 ### `auradb restore --data-dir <dir> --input <file>`
 Recreates schemas and upserts records from a JSONL dump. `--in` is an accepted
-alias of `--input`.
+alias of `--input`. The restore enforces a 64 MiB per-line bound on its input.
+
+### `auradb backup verify --input <file> --json` (v0.8.0)
+Validates a JSONL dump **without importing it**: it checks that every line parses,
+that a per-line size bound holds, and that records reference declared schemas. The
+`--json` report carries `ok`, `input`, `schemas`, `records`, a `collections` map
+(per-collection counts), `warnings`, and `errors`, and the command **exits
+non-zero on an invalid backup**. Run it after `auradb dump` and before relying on
+a backup. See [OPERATIONS.md](OPERATIONS.md) and [UPGRADING.md](UPGRADING.md).
 
 ### `auradb bench --data-dir <dir> [--records <n>] [--json] [--output <file>]`
 Runs the benchmark suite (storage append, point lookup, secondary-index lookup,

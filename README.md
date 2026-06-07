@@ -7,7 +7,7 @@
 [![CI](https://github.com/Ohswedd/auradb/actions/workflows/ci.yml/badge.svg)](https://github.com/Ohswedd/auradb/actions/workflows/ci.yml)
 [![Security](https://github.com/Ohswedd/auradb/actions/workflows/security.yml/badge.svg)](https://github.com/Ohswedd/auradb/actions/workflows/security.yml)
 [![Docker](https://github.com/Ohswedd/auradb/actions/workflows/docker.yml/badge.svg)](https://github.com/Ohswedd/auradb/actions/workflows/docker.yml)
-[![Release](https://img.shields.io/badge/release-v0.7.1-green.svg)](CHANGELOG.md)
+[![Release](https://img.shields.io/badge/release-v0.8.0-green.svg)](CHANGELOG.md)
 [![Rust](https://img.shields.io/badge/rust-1.85%2B-orange.svg)](https://www.rust-lang.org)
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
 
@@ -71,6 +71,19 @@ neither the on-disk nor the wire format — the `not_leader` payload is byte-for
 the same as v0.7.0. It remains _not_ production HA; single-node mode stays the
 recommended production mode. See
 [docs/V0_7_1_RELEASE_NOTES.md](docs/V0_7_1_RELEASE_NOTES.md).
+
+**AuraDB v0.8.0 is a production-readiness candidate for single-node and a
+stronger cluster preview.** It is a hardening, validation, and operability
+release: a structured `auradb check --json` consistency report with broad
+corruption drills, a non-importing `auradb backup verify`, backup/restore and
+upgrade drills over genuine fixtures, a new `[limits]` config section with five
+enforced, configurable bounds, large-dataset / soak / performance tooling, a
+security hardening review, cluster-preview recovery coverage, operator runbooks,
+and release-artifact reproducibility. It adds **no** new database features and
+changes neither the on-disk nor the wire format. It is **not** production HA;
+single-node mode remains the recommended production mode. See
+[docs/V0_8_RELEASE_NOTES.md](docs/V0_8_RELEASE_NOTES.md) and
+[docs/PRODUCTION_READINESS.md](docs/PRODUCTION_READINESS.md).
 
 AuraDB 0.4.0 adds the replication and Raft foundation for future clustered
 deployments, on top of the 0.3.x MVCC and query-planner foundations: each record
@@ -167,7 +180,9 @@ and [`docs/COMPATIBILITY.md`](docs/COMPATIBILITY.md).
   and `doctor`), backup and restore, verified upgrade from a v0.1.0 data
   directory, a full CLI, a published Docker image, prebuilt binary release
   artifacts, a benchmark baseline ([`docs/BENCHMARKS.md`](docs/BENCHMARKS.md)),
-  and CI.
+  and CI. For single-node production guidance and operator runbooks, see
+  [`docs/PRODUCTION_READINESS.md`](docs/PRODUCTION_READINESS.md) and
+  [`docs/RUNBOOKS.md`](docs/RUNBOOKS.md).
 
 ## New in 0.4.0: replication and Raft groundwork
 
