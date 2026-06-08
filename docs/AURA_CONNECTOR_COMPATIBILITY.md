@@ -2,12 +2,26 @@
 
 This document is the connector-focused companion to the
 [Compatibility Matrix](COMPATIBILITY.md). It records which Aura Connector release
-talks to AuraDB 0.9.2, what it can drive, and what it cannot.
+talks to AuraDB 1.0.0, what it can drive, and what it cannot.
 
 > **AuraDB v0.7.x adds connector cluster ergonomics for the controlled multi-node
 > preview. It is _not_ production HA — there is no automatic failover,
 > linearizable follower reads, or distributed transactions. Single-node mode
 > remains the recommended production mode.**
+
+## Connector support (v1.0.0)
+
+AuraDB v1.0.0 uses **Aura Wire Protocol 1**, frozen for the v1.x line. The
+**supported, tested connector is Aura Connector v0.4.1** (and compatible 0.4.x); it
+is the recommended client. v0.3.x remains wire-compatible for basic single-node
+operations but lacks the typed cluster ergonomics (the structured `not_leader`
+object and leader-redirect helpers) that 0.4.x provides; v0.4.x is recommended.
+v1.0.0 touches **no** wire behavior, storage format (v2), config, or connector
+surface over v0.9.2, so no connector release is required. AWP 1 compatibility is
+preserved across v1.x unless a security or correctness issue requires a documented
+break, and connector conformance against v0.4.1 is a release requirement (see
+[CONFORMANCE.md](CONFORMANCE.md)). Multi-node leader-redirect ergonomics remain an
+HA candidate preview, not production HA.
 
 ## Final HA candidate stabilization (v0.9.2)
 

@@ -561,11 +561,14 @@ pub fn cmd_compatibility() -> String {
     format!(
         "AuraDB {ver}\n\
          Aura Wire Protocol: AWP {proto}\n\
-         Aura Connector (tested): 0.3.x\n\
+         Storage format: v{storage}\n\
+         Aura Connector (tested): 0.4.1\n\
+         Aura Connector (supported): 0.4.x\n\
          Capabilities: {caps}\n\
          See docs/COMPATIBILITY.md for the full matrix.",
         ver = VERSION,
         proto = auradb_protocol::PROTOCOL_VERSION,
+        storage = auradb::storage::FORMAT_VERSION,
         caps = caps.join(", "),
     )
 }
@@ -2914,6 +2917,16 @@ mod tests {
         assert!(out.contains("AWP"));
         assert!(out.contains("authentication"));
         assert!(out.contains("full_text_search"));
+        // The compatibility line must match the v1.0 support policy: Aura Connector
+        // v0.4.1 tested, v0.4.x supported, AWP 1, storage format v2.
+        assert!(out.contains("Aura Connector (tested): 0.4.1"));
+        assert!(out.contains("Aura Connector (supported): 0.4.x"));
+        assert!(!out.contains("0.3.x"));
+        assert!(out.contains(&format!("AWP {}", auradb_protocol::PROTOCOL_VERSION)));
+        assert!(out.contains(&format!(
+            "Storage format: v{}",
+            auradb::storage::FORMAT_VERSION
+        )));
     }
 
     #[test]

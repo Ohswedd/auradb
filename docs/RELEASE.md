@@ -1,21 +1,48 @@
 # Release guide
 
 This guide describes how a maintainer cuts an AuraDB release. The current release
-is `0.9.2` — the **final planned HA candidate stabilization** before the v1.0
-decision, still an **HA release candidate for the controlled static-cluster
-preview, not a production HA guarantee**. Single-node mode remains the recommended
-production mode. See [HA_RELEASE_CANDIDATE.md](HA_RELEASE_CANDIDATE.md) and the
+is `1.0.0` — a **single-node production release with a multi-node HA candidate
+preview**. Single-node mode is the recommended production mode; multi-node static
+clustering remains an HA candidate preview, **not** production HA. AWP 1 and storage
+format v2 are **frozen for v1**. See [SUPPORT_POLICY.md](SUPPORT_POLICY.md),
+[V1_0_RELEASE_NOTES.md](V1_0_RELEASE_NOTES.md),
+[HA_RELEASE_CANDIDATE.md](HA_RELEASE_CANDIDATE.md), and the
 [v1.0 decision checklist](V1_0_DECISION_CHECKLIST.md).
+
+### Backup and restore release gate
+
+A release must pass the backup/restore gate over a mixed dataset before tagging,
+exercised by the `auradb-cli` backup/restore and upgrade-gate tests
+([TESTING.md](TESTING.md)):
+
+1. Back up a mixed dataset (indexes, stats, relationships, vectors, full-text,
+   document-path) with `auradb dump`.
+2. `auradb backup verify --input <file> --json` (validate without importing).
+3. Restore into a fresh single-node directory with `auradb restore`.
+4. `auradb check --data-dir <restore> --json`.
+5. Query, relationship-include, vector, full-text, and document-path smokes.
+6. Index and planner-stats validation.
+7. Confirm no secrets in the backup-verify output.
 
 ### GitHub Actions maintenance (Node 24)
 
-v0.9.0 updated workflow actions to majors that run on Node 24, ahead of the Node
-20 deprecation: `actions/setup-python` (→ v6) and `actions/upload-artifact` /
-`actions/download-artifact` (→ v5). `actions/checkout` (v6), `actions/cache`
-(v5), and the `docker/*` actions were already on Node-24 majors. The release
-workflow's security posture (permissions, checksum/artifact verification) is
-unchanged. If an action later lacks a Node-24 replacement, record it here as a
-known maintenance item rather than pinning a deprecated major.
+Workflow actions are kept on majors that run on Node 24, ahead of the Node 20
+deprecation. v0.9.2 reported a non-blocking Node 20 warning on
+`docker/build-push-action@v6` and `docker/setup-buildx-action@v3`; v1.0.0 resolves
+it by upgrading the `docker/*` actions to their Node-24 majors:
+`docker/setup-buildx-action` v3 → **v4**, `docker/build-push-action` v6 → **v7**,
+`docker/login-action` v3 → **v4**, `docker/metadata-action` v5 → **v6**, and
+`docker/setup-qemu-action` v3 → **v4** (the Node-24 majors require Actions Runner
+v2.327.1 or later). The non-`docker/*` actions were already on Node-24 majors:
+`actions/checkout` (v6), `actions/cache` (v5), `actions/setup-python` (v6),
+`actions/upload-artifact` / `actions/download-artifact` (v5),
+`dtolnay/rust-toolchain` (Node-free), and `softprops/action-gh-release` (v2). With
+the upgrade, **no deprecated-Node-20 major remains pinned**, so no
+`FORCE_JAVASCRIPT_ACTIONS_TO_NODE24` mitigation is required. The Docker publish
+security posture (permissions, attestations, manifest checks) is unchanged. If an
+action later lacks a Node-24 replacement, record it here as a known maintenance
+item — and, only if necessary, set `env: FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true`
+on the affected job — rather than pinning a deprecated major.
 
 ### HA candidate smoke (v0.9.1, manual / post-release)
 
@@ -48,17 +75,17 @@ known maintenance item rather than pinning a deprecated major.
   manual `workflow_dispatch` jobs in `.github/workflows/cluster.yml` so they
   never block a PR.
 
-### Published-image post-release checklist (v0.9.2)
+### Published-image post-release checklist (v1.0.0)
 
 After the tag publishes the multi-arch image, run **both** published-image smokes
 as post-release gates (not PR blockers). Each prints the diagnostics needed to
-confirm a clean release and to attach as evidence to a v1.0 readiness report
-(see [V1_0_DECISION_CHECKLIST.md](V1_0_DECISION_CHECKLIST.md) §5):
+confirm a clean release and to record as HA-candidate evidence (see
+[V1_0_DECISION_CHECKLIST.md](V1_0_DECISION_CHECKLIST.md) §5):
 
-- [ ] **Cluster Compose smoke.** `AURADB_IMAGE=ghcr.io/ohswedd/auradb:0.9.2 bash
+- [ ] **Cluster Compose smoke.** `AURADB_IMAGE=ghcr.io/ohswedd/auradb:1.0.0 bash
       scripts/smoke_cluster_compose.sh` — image used and its digest, the node
       ports, the leader, quorum, per-peer states, and teardown.
-- [ ] **HA candidate smoke.** `AURADB_IMAGE=ghcr.io/ohswedd/auradb:0.9.2 bash
+- [ ] **HA candidate smoke.** `AURADB_IMAGE=ghcr.io/ohswedd/auradb:1.0.0 bash
       scripts/smoke_ha_candidate.sh` — image digest (when available), the server
       version reported by each node, the leader **before** and **after** the kill,
       the leader **client-address source** (advertised / status / fallback /
@@ -98,8 +125,16 @@ first** so AuraDB conformance can run against the published client:
 ## Pre-release checklist
 
 - [ ] `CHANGELOG.md` has an entry for the new version with today's date.
-- [ ] Workspace version in `Cargo.toml` is bumped.
+- [ ] Workspace version in `Cargo.toml` is bumped (and `Cargo.lock` regenerated).
 - [ ] Documentation reflects any new or changed behavior.
+- [ ] The support policy ([SUPPORT_POLICY.md](SUPPORT_POLICY.md)) and the support
+      matrix ([COMPATIBILITY.md](COMPATIBILITY.md)) are current.
+- [ ] AWP 1 and storage format v2 freeze statements are present and accurate.
+- [ ] The backup/restore release gate passes (see above and
+      [PRODUCTION_READINESS.md](PRODUCTION_READINESS.md)).
+- [ ] The GitHub release body carries the single-node production statement, the
+      multi-node preview disclaimer, the AWP 1 and storage v2 statements, and the
+      known limitations (verified by `verify_release_artifacts.sh --tag`).
 - [ ] All limitations are stated honestly; nothing unimplemented is claimed.
 - [ ] The backup/restore, v0.1.0 and v0.2.x upgrade, MVCC/snapshot-isolation,
       planner, and chaos restart tests pass.
@@ -113,8 +148,8 @@ first** so AuraDB conformance can run against the published client:
       off by default, and gated by two opt-ins.
 - [ ] The benchmark baseline under `benches/baseline/` is refreshed on the
       release machine with
-      `auradb bench --json --output benches/baseline/<version>.json` (v0.9.2
-      commits `benches/baseline/v0.9.2.json`). Benchmark numbers are
+      `auradb bench --json --output benches/baseline/<version>.json` (v1.0.0
+      commits `benches/baseline/v1.0.0.json`). Benchmark numbers are
       machine-specific and **warn-only** — never a release gate.
 
 ### Multi-node preview validation (v0.5.x, fail-stop recovery in v0.6.0)
@@ -285,23 +320,26 @@ integrity. It runs in three modes:
 
 ```bash
 # Verify a local directory of built artifacts (no network).
-scripts/verify_release_artifacts.sh --dir out --version 0.8.1
+scripts/verify_release_artifacts.sh --dir out --version 1.0.0
 
 # Download and verify the published assets for a tag (requires the gh CLI), and
-# confirm the release body carries the single-node / preview honesty wording.
-scripts/verify_release_artifacts.sh --tag v0.8.1
+# confirm the release body carries the required v1.0 statements.
+scripts/verify_release_artifacts.sh --tag v1.0.0
 
 # Network-free self-test of the verifier itself (good dir passes; missing
 # archive, bad checksum, and wrong-version name each fail).
 scripts/verify_release_artifacts.sh --self-test
 ```
 
-It verifies that every expected platform archive is present, that `SHA256SUMS`
+It verifies that all five expected platform archives are present, that `SHA256SUMS`
 lists **and** matches every archive (no stray, unlisted asset ships), that archive
 names carry the version, and that a host-matching binary prints the expected
-`auradb version`. The CI `release.yml` runs `--dir` verification after the collect
-step; the `--tag` body-wording check and the published-image smoke remain
-post-release steps.
+`auradb 1.0.0`. In `--tag` mode it additionally confirms the GitHub release body
+carries the **single-node production support statement**, the **multi-node preview
+disclaimer**, the **AWP 1 statement**, the **storage format v2 statement**, and
+**known limitations**. The CI `release.yml` runs `--dir` verification after the
+collect step; the `--tag` body-statement check and the published-image cluster and
+HA candidate smokes remain post-release steps.
 
 ## Tag and GitHub release
 

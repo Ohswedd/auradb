@@ -27,9 +27,12 @@ regular storage format. See [RAFT.md](RAFT.md) and [CLUSTERING.md](CLUSTERING.md
 
 ## Storage format and version chains
 
-The on-disk format is **v2** (`FORMAT_VERSION = 2`). Each record id maps to an
-ordered **version chain** — a list of `Version { commit_ts, value }` where
-`value` is the record and `value = None` is a **tombstone** (a committed delete).
+The on-disk format is **v2** (`FORMAT_VERSION = 2`). **Storage format v2 is frozen
+for v1:** it is the stable v1 single-node storage format, and AuraDB v1.x preserves
+storage format v2 compatibility unless a safety, corruption, or security issue
+requires a documented migration. Each record id maps to an ordered **version
+chain** — a list of `Version { commit_ts, value }` where `value` is the record and
+`value = None` is a **tombstone** (a committed delete).
 Versions are ordered by their commit timestamp. Every operation in the log
 carries a `commit_ts`, and the manifest tracks `last_commit_ts` so the commit
 clock never regresses across restarts.

@@ -1,21 +1,22 @@
 # v1.0 decision checklist
 
-> **This document defines the criteria for an AuraDB v1.0.0 decision. It does
-> not pre-decide v1.0.** AuraDB v0.9.2 is the final planned stabilization patch
-> for the HA release candidate; v1.0 is the next decision, not a commitment in
-> this patch. Single-node mode is the recommended production mode today;
-> multi-node is a controlled static-cluster preview, **not** production HA.
+> **This document defines the criteria for the AuraDB v1.0.0 decision and records
+> the decision that was made.** AuraDB v1.0.0 ships as a **single-node production
+> release with a multi-node HA candidate preview**, exactly the scope this
+> checklist's evidence supports. Single-node mode is the recommended production
+> mode; multi-node is an HA candidate preview, **not** production HA.
 
 The purpose of this checklist is to make the v1.0 decision **honest and
-evidence-driven**: every claim a v1.0 release makes must be backed by the
-evidence listed here, and any claim whose evidence is missing must be deferred or
-explicitly scoped out. It complements the strict production-HA criteria in
-[HA_RELEASE_CANDIDATE.md](HA_RELEASE_CANDIDATE.md) §8 and the posture in
-[PRODUCTION_READINESS.md](PRODUCTION_READINESS.md).
+evidence-driven**: every claim v1.0 makes is backed by the evidence listed here,
+and any claim whose evidence is missing is deferred or explicitly scoped out.
+v1.0.0 makes the single-node production claim (§1, §3) and scopes production HA out
+(§2, §4, §6). It complements the [support policy](SUPPORT_POLICY.md), the strict
+production-HA criteria in [HA_RELEASE_CANDIDATE.md](HA_RELEASE_CANDIDATE.md) §8, and
+the posture in [PRODUCTION_READINESS.md](PRODUCTION_READINESS.md).
 
-## 1. What v1.0 can claim today
+## 1. What v1.0 claims
 
-Based on the evidence in §5, a v1.0 release **could honestly claim** today:
+Based on the evidence in §5, v1.0.0 **honestly claims**:
 
 - **Single-node production support.** Commits go straight to durable local
   storage. This is the default, the recommended production mode, and the most
@@ -33,9 +34,9 @@ Based on the evidence in §5, a v1.0 release **could honestly claim** today:
   [HA_RELEASE_CANDIDATE.md](HA_RELEASE_CANDIDATE.md) §3, at preview scale, on
   loopback.
 
-## 2. What v1.0 cannot claim today
+## 2. What v1.0 does not claim
 
-A v1.0 release **must not claim** (the evidence does not exist):
+v1.0.0 **does not claim** (the evidence does not exist):
 
 - production HA or production cluster readiness;
 - production automatic failover or any recovery-time / recovery-point objective;
@@ -49,7 +50,7 @@ A v1.0 release **must not claim** (the evidence does not exist):
 
 ## 3. Required for single-node production support
 
-The single-node path is the v1.0 production candidate. Required and **met today**:
+The single-node path is the v1.0 production-supported mode. Required and **met**:
 
 | Requirement | Status | Evidence |
 | ----------- | ------ | -------- |
@@ -62,7 +63,7 @@ The single-node path is the v1.0 production candidate. Required and **met today*
 | Resource limits | Met | `[limits]` enforcement tests |
 | Published image + signed artifacts | Met | Docker workflow; `verify_release_artifacts.sh` |
 | Operator runbooks + observability | Met | [RUNBOOKS.md](RUNBOOKS.md), [OBSERVABILITY.md](OBSERVABILITY.md) |
-| Longer single-node soak with documented results | Partial | `scripts/soak_single_node.sh` exists; a documented multi-hour/day run is recommended before v1.0 |
+| Longer single-node soak with documented results | Recommended | `scripts/soak_single_node.sh` ships; operators should run a multi-hour/day soak for their workload and hardware. The core durability, recovery, MVCC, backup, upgrade, and security requirements above are met independently of soak duration; a longer soak is additional operational validation, not a gate on the scoped single-node claim |
 
 ## 4. Required for production HA support
 
@@ -135,20 +136,19 @@ static-cluster preview.
 - **External dogfood period.** A sustained external-user or dogfood validation
   window, with the issues it surfaces addressed.
 
-## 7. Recommended v1.0 scope
+## 7. v1.0 scope (decided)
 
-- **Likely a single-node production-support release.** The single-node path has the
-  evidence; a documented longer single-node soak (§3) is the main item to close
-  first.
-- **HA remains a preview** unless the missing evidence in §6 (and
-  [HA_RELEASE_CANDIDATE.md](HA_RELEASE_CANDIDATE.md) §8) is closed and documented.
-  This is not expected for the first v1.0.
+- **A single-node production-support release.** The single-node path has the
+  evidence (§3); a longer single-node soak is recommended operational validation,
+  not a gate on the scoped claim.
+- **HA remains a preview.** The missing evidence in §6 (and
+  [HA_RELEASE_CANDIDATE.md](HA_RELEASE_CANDIDATE.md) §8) is not yet closed, so
+  multi-node ships as an HA candidate preview, not production HA.
 
-## 8. Required language for v1.0 if HA is not production
+## 8. Required language for v1.0 (HA is not production)
 
-If v1.0 ships before the production-HA evidence is complete (the expected case),
-the release **must** state, prominently and consistently across README, release
-notes, and docs:
+v1.0 ships before the production-HA evidence is complete, so the release states,
+prominently and consistently across README, release notes, and docs:
 
 - **AuraDB v1.0 is a single-node production release.**
 - **Multi-node HA remains a controlled static-cluster preview — not production

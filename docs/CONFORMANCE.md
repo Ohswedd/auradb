@@ -255,6 +255,17 @@ in-network vs. host-published client-address explanation. Connector leader-chang
 behavior across **every** supported client remains an open v1.0 production-HA
 criterion — see [V1_0_DECISION_CHECKLIST.md](V1_0_DECISION_CHECKLIST.md) §4.
 
+### v1.0.0 (current release)
+
+v1.0.0 is a single-node production release with a multi-node HA candidate
+preview. It adds no wire, config, or connector change over v0.9.2 — the Aura
+Wire Protocol stays at AWP 1 and the storage format stays at v2 — so the
+v0.9.0/v0.9.1/v0.9.2 connector conformance scenarios above carry forward
+unchanged and are still run against **Aura Connector v0.4.1** (and compatible
+0.4.x). Connector leader-change behavior across **every** supported client
+remains an open production-HA criterion for the multi-node preview — see
+[V1_0_DECISION_CHECKLIST.md](V1_0_DECISION_CHECKLIST.md) §4.
+
 ## Running
 
 Rust (no server needed - the test spawns one):

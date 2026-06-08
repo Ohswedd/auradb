@@ -4,23 +4,39 @@ This roadmap describes where AuraDB is headed beyond the first single-node
 release. It is a statement of direction, not a delivery commitment. Items are
 grouped by theme and listed roughly in the order we expect to approach them.
 
-## Current release: 0.9.2
+## Current release: 1.0.0
 
-AuraDB 0.9.2 is the **final planned HA candidate stabilization** before the v1.0
-decision — still an **HA release candidate for the controlled static-cluster
-preview, not a production HA guarantee**. It adds **no** new configuration, cluster
-architecture, or semantics. It finalizes the HA candidate evidence and gap list,
-adds a [v1.0 decision checklist](V1_0_DECISION_CHECKLIST.md) (what v1.0 can and
-cannot claim, the requirements and evidence for single-node production and for
-production HA, the evidence still missing, and the recommended scope), strengthens
-the leader-hint / client-address tests and operator runbooks after
-`advertise_client_addr`, sharpens the HA smoke and the published-image post-release
-checklist, and maps the snapshot/compaction/old-leader-rejoin coverage to existing
-tests rather than duplicating them. The storage format (v2) and AWP 1 are
-unchanged and Aura Connector v0.4.1 stays compatible. **Single-node mode remains
-the recommended production mode**; multi-node remains a controlled static-cluster
-preview. See [V0_9_2_RELEASE_NOTES.md](V0_9_2_RELEASE_NOTES.md),
+AuraDB 1.0.0 is a **single-node production release with a multi-node HA candidate
+preview**. It supports production single-node deployments configured with auth,
+TLS, backups, monitoring, and the documented runbooks; multi-node static clustering
+remains an **HA candidate preview, not a production HA guarantee**. It carries
+forward all v0.9.2 behavior and adds **no** new configuration, cluster
+architecture, or semantics. v1.0 finalizes the [support policy](SUPPORT_POLICY.md),
+freezes Aura Wire Protocol 1 and storage format v2 for the v1.x line, and states
+the upgrade guarantee, the backup/restore release gate, and the security review.
+AWP 1 is the stable v1 wire protocol and storage format v2 is the stable v1
+single-node storage format; both are preserved across v1.x unless a security,
+correctness, safety, or corruption issue requires a documented change. Aura
+Connector v0.4.1 stays compatible. **Single-node mode is the recommended production
+mode**; multi-node remains an HA candidate preview. See
+[V1_0_RELEASE_NOTES.md](V1_0_RELEASE_NOTES.md),
+[SUPPORT_POLICY.md](SUPPORT_POLICY.md),
 [V1_0_DECISION_CHECKLIST.md](V1_0_DECISION_CHECKLIST.md), and
+[HA_RELEASE_CANDIDATE.md](HA_RELEASE_CANDIDATE.md).
+
+### Delivered in 0.9.2
+
+AuraDB 0.9.2 was the **final planned HA candidate stabilization** before the v1.0
+decision — an HA release candidate for the controlled static-cluster preview, not a
+production HA guarantee. It added **no** new configuration, cluster architecture, or
+semantics: it finalized the HA candidate evidence and gap list, added the
+[v1.0 decision checklist](V1_0_DECISION_CHECKLIST.md), strengthened the leader-hint
+/ client-address tests and operator runbooks after `advertise_client_addr`,
+sharpened the HA smoke and the published-image post-release checklist, and mapped
+the snapshot/compaction/old-leader-rejoin coverage to existing tests rather than
+duplicating them. The storage format (v2) and AWP 1 were unchanged and Aura
+Connector v0.4.1 stayed compatible. See
+[V0_9_2_RELEASE_NOTES.md](V0_9_2_RELEASE_NOTES.md) and
 [HA_RELEASE_CANDIDATE.md](HA_RELEASE_CANDIDATE.md).
 
 ### Delivered in 0.9.1
@@ -67,7 +83,7 @@ mode**; multi-node remains a controlled static-cluster preview. See
 ### Future production HA criteria
 
 AuraDB will **not** claim production HA until all of the following are met and
-documented with evidence (none are met in 0.9.2): repeated long soak; snapshot
+documented with evidence (none are met in v1.0.0): repeated long soak; snapshot
 install under large state (with chunked/streaming transfer if needed);
 backup/restore cluster drills with documented RPO/RTO; network partitions across
 real environments (not just loopback); disk-full and I/O-error behavior;

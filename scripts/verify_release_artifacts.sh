@@ -7,7 +7,8 @@
 #                    produced by the Release workflow's collect step). No network.
 #   --tag vX.Y.Z     Download the GitHub release assets for the tag (requires the
 #                    `gh` CLI) into a temp dir and verify them, and inspect the
-#                    release body for the required honesty wording.
+#                    release body for the required v1.0 statements (single-node
+#                    production, multi-node preview, AWP 1, storage v2, limitations).
 #   --self-test      Run a network-free self-test: build synthetic artifact
 #                    directories and assert that a good set passes while a
 #                    missing archive, a bad checksum, and a wrong-version name
@@ -22,7 +23,9 @@
 #   3. All current release targets are present as archives.
 #   4. Archive names include the version.
 #   5. If a host-matching archive exists, `auradb version` runs and prints it.
-#   6. (--tag) The GitHub release body carries the required honesty wording.
+#   6. (--tag) The GitHub release body carries the required v1.0 statements:
+#      single-node production support, multi-node preview disclaimer, AWP 1,
+#      storage format v2, and known limitations.
 #
 # Usage:
 #   scripts/verify_release_artifacts.sh --dir out --version 0.8.1
@@ -154,18 +157,35 @@ fi
 [ -d "$DIR" ] || { echo "no such directory: $DIR" >&2; exit 2; }
 
 # Inspect the release body for the required honesty wording (best-effort; only
-# when we have a tag and the gh CLI). A scoped release must not silently drop the
-# single-node-is-the-recommended-mode / preview-is-not-production-HA framing.
+# when we have a tag and the gh CLI). A scoped v1.0 release must carry, prominently:
+# the single-node production support statement, the multi-node preview disclaimer,
+# the AWP 1 statement, the storage format v2 statement, and known limitations.
 if [ -n "$TAG" ] && command -v gh >/dev/null 2>&1; then
-  echo "checking release body honesty wording for $TAG..."
+  echo "checking release body required statements for $TAG..."
   body="$(gh release view "$TAG" --json body -q .body 2>/dev/null || true)"
   if [ -n "$body" ]; then
     body_lc="$(printf '%s' "$body" | tr '[:upper:]' '[:lower:]')"
-    if printf '%s' "$body_lc" | grep -q "single-node" &&
-       printf '%s' "$body_lc" | grep -Eq "preview|not production"; then
-      echo "  ok: release body carries the scoped-readiness wording"
+    missing=""
+    # Single-node production support statement.
+    printf '%s' "$body_lc" | grep -q "single-node" &&
+      printf '%s' "$body_lc" | grep -q "production" ||
+      missing="$missing single-node-production-statement"
+    # Multi-node preview disclaimer.
+    printf '%s' "$body_lc" | grep -Eq "preview|not production ha|not production-ha" ||
+      missing="$missing multi-node-preview-disclaimer"
+    # AWP 1 statement.
+    printf '%s' "$body_lc" | grep -Eq "awp 1|aura wire protocol 1" ||
+      missing="$missing awp-1-statement"
+    # Storage format v2 statement.
+    printf '%s' "$body_lc" | grep -Eq "storage format v2|storage v2|format v2" ||
+      missing="$missing storage-v2-statement"
+    # Known limitations.
+    printf '%s' "$body_lc" | grep -Eq "known limitation|limitations" ||
+      missing="$missing known-limitations"
+    if [ -z "$missing" ]; then
+      echo "  ok: release body carries the single-node production, multi-node preview, AWP 1, storage v2, and limitations wording"
     else
-      echo "FAIL: release body is missing the single-node / preview honesty wording"
+      echo "FAIL: release body is missing required statement(s):$missing"
       exit 1
     fi
   else

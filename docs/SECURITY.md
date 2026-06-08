@@ -1,11 +1,23 @@
 # Security
 
-This document describes the implemented security posture of AuraDB `0.9.0`. See
-`SECURITY.md` at the repository root for the vulnerability reporting policy.
+This document describes the implemented security posture of AuraDB `1.0.0`. See
+`SECURITY.md` at the repository root for the vulnerability reporting policy and
+[SUPPORT_POLICY.md](SUPPORT_POLICY.md) for the v1.0 security support, supported
+versions, backport, and accepted-advisory policy.
 
 AuraDB is a single-node server. It does not claim production-grade guarantees
 beyond the controls described here, and it is honest about what is not
 implemented (see [Not implemented](#not-implemented-do-not-rely-on)).
+
+**v1.0 security review.** For the v1.0.0 release this posture was reviewed against
+the production single-node deployment mode: authentication and TLS are required for
+network exposure (a public bind without auth is refused unless an explicit dev
+override is set); client-token, peer-token, and certificate rotation are documented
+below; secrets are redacted from `doctor` / `status` / `config validate` /
+`check --json` / `backup verify` output; the Docker image and secure Compose file
+run non-root; and `cargo audit` / `cargo deny` run in CI against a documented
+advisory policy. Multi-node peer networking remains an HA candidate preview, off by
+default, with the fail-closed baseline described below.
 
 ## Authentication
 
@@ -278,7 +290,7 @@ described above; single-node mode is the recommended production mode.
 
 ## Not implemented (do not rely on)
 
-AuraDB is single node. The following are not implemented in `0.9.0`:
+AuraDB is single node. The following are not implemented in `1.0.0`:
 role-based access control (RBAC/ABAC), tenant isolation, field-level read/write
 policies, field-level encryption, encryption at rest, and audit logging. The
 recommended production deployment remains single-node. v0.5.0 adds a controlled,

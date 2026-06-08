@@ -1,14 +1,37 @@
 # Operator runbooks
 
-Practical, copy-pasteable procedures for running AuraDB **v0.8.0** in
-single-node production-candidate mode, plus the experimental cluster preview.
-Each runbook lists symptoms, the commands to run, safe actions, actions to avoid,
-expected output, and when to restore from backup.
+Practical, copy-pasteable procedures for running AuraDB **v1.0.0** in
+single-node production mode, plus the multi-node HA candidate preview. Each runbook
+lists symptoms, the commands to run, safe actions, actions to avoid, expected
+output, and when to restore from backup.
 
-> AuraDB v0.8.0 is a production-readiness candidate for **single-node**
-> deployments and a stronger cluster **preview**. It is **not** production HA.
-> Single-node mode remains the recommended production mode. See
+> **AuraDB v1.0.0 supports production single-node deployments** configured with
+> auth, TLS, backups, monitoring, and the documented runbooks. **Multi-node static
+> clustering remains an HA candidate preview, not production HA** — do not use it
+> as production HA yet. Single-node mode is the recommended production mode. See
+> [SUPPORT_POLICY.md](SUPPORT_POLICY.md) and
 > [PRODUCTION_READINESS.md](PRODUCTION_READINESS.md).
+
+> **Do not use multi-node as production HA.** The multi-node static cluster is an
+> HA candidate preview with strong release-candidate evidence, but it has no
+> production HA guarantee and no automatic-failover SLA. Run production workloads
+> on single-node mode with the production checklist.
+
+## 0. Production single-node runbook checklist
+
+Before declaring a single-node deployment production-ready (details in
+[PRODUCTION_READINESS.md](PRODUCTION_READINESS.md)):
+
+1. Configure authentication (`[auth] enabled = true`, Argon2id token hash).
+2. Configure TLS (`[tls] enabled = true`, valid cert/key).
+3. Configure scheduled backups (`auradb dump` + `auradb backup verify`).
+4. Run a restore drill (`auradb restore` + `auradb check`).
+5. Configure monitoring (health endpoint, Prometheus metrics, disk alerting).
+6. Configure log retention.
+7. Run `auradb check --json` and confirm `ok == true`.
+8. Run an upgrade rehearsal in a canary.
+9. Verify disk capacity and headroom.
+10. Document the rollback plan (restore from backup).
 
 Conventions: `DATA=/var/lib/auradb` is the data directory; `ADDR=127.0.0.1:7171`
 is a running server's client address. Replace as appropriate.
@@ -449,7 +472,7 @@ config or behavior; this gathers the existing guidance in one place.
   known" / `quorum_available: false` is a **no-leader** issue (wait for an
   election or restore quorum — runbooks 14, 18b, 18c).
 - **Run both published-image smokes** → after a release,
-  `AURADB_IMAGE=ghcr.io/ohswedd/auradb:0.9.2 bash scripts/smoke_cluster_compose.sh`
+  `AURADB_IMAGE=ghcr.io/ohswedd/auradb:1.0.0 bash scripts/smoke_cluster_compose.sh`
   and `… bash scripts/smoke_ha_candidate.sh` (see [RELEASE.md](RELEASE.md)). Use
   `KEEP_ARTIFACTS=1` to retain logs/certs.
 - **Collect evidence for a v1.0 readiness report** → record image digest, per-node

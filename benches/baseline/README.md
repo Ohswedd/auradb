@@ -19,15 +19,16 @@ number from one laptop is not comparable to a number from another.
 The benchmark opens the engine with `sync_on_commit = false` so it measures
 engine work rather than disk-flush latency. See [docs/BENCHMARKS.md](../../docs/BENCHMARKS.md).
 
-The current baseline is `v0.9.2.json`, captured on the v0.9.2 final HA candidate
-stabilization branch. v0.9.2 adds **no** new config, cluster architecture, or
-semantics over v0.9.1 — only tests, smoke and runbook polish, the v1.0 decision
-checklist, and documentation — so it changes no query, storage, or MVCC hot path
-and its numbers track `v0.9.1.json` within run-to-run noise on the same machine;
-comparison is **warn-only and machine-specific** (no fail threshold), and any
-per-benchmark delta in the single-digit-to-low-tens percent range on a shared
-developer machine is hardware variance — or concurrent load during capture — not a
-regression. The prior baseline is `v0.9.1.json`, before it `v0.9.0.json`, and
+The current baseline is `v1.0.0.json`, captured on the v1.0.0 single-node
+production release branch. v1.0.0 carries forward all v0.9.2 behavior and adds
+**no** new config, cluster architecture, or semantics — only the v1.0 support
+policy, compatibility freezes (AWP 1, storage format v2), and documentation — so it
+changes no query, storage, or MVCC hot path and its numbers track `v0.9.2.json`
+within run-to-run noise on the same machine; comparison is **warn-only and
+machine-specific** (no fail threshold), and any per-benchmark delta in the
+single-digit-to-low-tens percent range on a shared developer machine is hardware
+variance — or concurrent load during capture — not a regression. The prior baseline
+is `v0.9.2.json`, before it `v0.9.1.json` and `v0.9.0.json`, and
 before it `v0.8.1.json` and `v0.8.0.json`
 (v0.7.0 and v0.7.1 were connector-ergonomics releases that did **not** refresh the
 engine baseline). It is the single-node engine suite; multi-node

@@ -3,6 +3,22 @@
 This guide covers diagnosing and recovering AuraDB's optional cluster mode. It
 applies to **single-node cluster mode** and to the **multi-node preview**.
 
+> **AuraDB v1.0.0 is a single-node production release; multi-node static
+> clustering remains an HA candidate preview, not a production HA guarantee.
+> Single-node mode remains the recommended production mode.** Multi-node static
+> clustering in v1.0 remains an HA candidate preview. It has strong
+> release-candidate evidence, but it is not a production HA guarantee. v1.0.0 adds
+> no new cluster architecture and changes no Raft, storage (v2), or wire (AWP 1)
+> semantics over v0.9.2. For the support level, the operator assumptions, the
+> validated failure matrix, and the strict criteria required before any future
+> production HA claim — cross-host chaos, longer soak, disk-full and I/O-error
+> drills, larger-state snapshot streaming (the current install is a single bounded
+> 8 MiB message), documented operator SLOs, and an external dogfood period — see
+> [HA_RELEASE_CANDIDATE.md](HA_RELEASE_CANDIDATE.md) and the
+> [v1.0 decision checklist](V1_0_DECISION_CHECKLIST.md). The HA recovery runbooks
+> are in [RUNBOOKS.md](RUNBOOKS.md) (sections 18a–18o); runbook **18o** consolidates
+> the leader-hint / client-address guidance and v1.0 evidence collection.
+
 > **AuraDB v0.9.2 is the final planned HA candidate stabilization. It is still not
 > production HA; single-node mode remains the recommended production mode.** For
 > the support level, the operator assumptions,
