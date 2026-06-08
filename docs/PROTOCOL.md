@@ -3,7 +3,7 @@
 `auradb-protocol` implements AWP: a binary, checksummed, versioned frame format
 with opaque JSON payloads. The frame header layout is documented below.
 
-> **AWP 1 is frozen for v1.** AuraDB v1.0.0 uses Aura Wire Protocol 1 (the
+> **AWP 1 is frozen for v1.** AuraDB v1.0.1 uses Aura Wire Protocol 1 (the
 > `version` byte is `1`, `PROTOCOL_VERSION = 1`). AWP 1 is the stable v1 wire
 > protocol. AuraDB v1.x will preserve AWP 1 compatibility unless a security or
 > correctness issue requires a documented compatibility break. The recommended

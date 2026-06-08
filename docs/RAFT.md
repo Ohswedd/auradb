@@ -1,12 +1,12 @@
 # Raft Consensus Core
 
-> **AuraDB v1.0.0 is a single-node production release; multi-node static
+> **AuraDB v1.0.1 is a single-node production release; multi-node static
 > clustering remains an HA candidate preview, not a production HA guarantee.
 > Single-node mode remains the recommended production mode.** Multi-node static
 > clustering in v1.0 remains an HA candidate preview. It has strong
-> release-candidate evidence, but it is not a production HA guarantee. v1.0.0
+> release-candidate evidence, but it is not a production HA guarantee. v1.0.1
 > changes no consensus core, storage format (v2), or wire protocol (AWP 1) over
-> v0.9.2, and adds no new cluster architecture; Aura Connector v0.4.1 stays
+> v1.0.0, and adds no new cluster architecture; Aura Connector v0.4.1 stays
 > compatible. The evidence still outstanding before any production HA claim
 > includes cross-host chaos, longer soak, disk-full and I/O-error drills,
 > larger-state snapshot streaming (the current install is a single bounded 8 MiB

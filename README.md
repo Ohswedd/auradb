@@ -7,7 +7,7 @@
 [![CI](https://github.com/Ohswedd/auradb/actions/workflows/ci.yml/badge.svg)](https://github.com/Ohswedd/auradb/actions/workflows/ci.yml)
 [![Security](https://github.com/Ohswedd/auradb/actions/workflows/security.yml/badge.svg)](https://github.com/Ohswedd/auradb/actions/workflows/security.yml)
 [![Docker](https://github.com/Ohswedd/auradb/actions/workflows/docker.yml/badge.svg)](https://github.com/Ohswedd/auradb/actions/workflows/docker.yml)
-[![Release](https://img.shields.io/badge/release-v1.0.0-green.svg)](CHANGELOG.md)
+[![Release](https://img.shields.io/badge/release-v1.0.1-green.svg)](CHANGELOG.md)
 [![Rust](https://img.shields.io/badge/rust-1.85%2B-orange.svg)](https://www.rust-lang.org)
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
 
@@ -29,6 +29,15 @@ a real, persistent, recoverable, single-node server, not a mock or an in-memory
 demo.
 
 ## Scope and honesty
+
+**AuraDB v1.0.1 is the first production patch on the v1.0 single-node production
+line.** It is a documentation, validation, and release-engineering patch: it
+re-verifies the v1.0 production gates on the v1.0.1 build and refreshes the version
+pointers and support docs. It carries forward **all** v1.0.0 behavior and adds
+**no** new architecture, semantics, or on-disk or wire format change. Single-node
+mode remains the recommended production mode; multi-node remains an HA candidate
+preview, not production HA. See
+[`docs/V1_0_1_RELEASE_NOTES.md`](docs/V1_0_1_RELEASE_NOTES.md).
 
 **AuraDB v1.0.0 is a single-node production release with a multi-node HA candidate
 preview.** It supports production **single-node** deployments configured with
@@ -461,7 +470,7 @@ auradb check --data-dir .local/auradb
 auradb gc --data-dir .local/auradb
 auradb stats analyze --data-dir .local/auradb
 auradb stats show --data-dir .local/auradb --json
-auradb bench --json --output benches/baseline/v1.0.0.json
+auradb bench --json --output benches/baseline/v1.0.1.json
 auradb status --addr 127.0.0.1:7171 --json
 auradb cluster leader --addr 127.0.0.1:7171 --json
 auradb cluster wait-leader --addr 127.0.0.1:7171 --timeout-secs 30
@@ -566,7 +575,7 @@ are exposed. No external collector is required to run the server. See
 A published image is available on the GitHub Container Registry:
 
 ```bash
-docker run --rm -p 7171:7171 -v auradb-data:/data ghcr.io/ohswedd/auradb:1.0.0
+docker run --rm -p 7171:7171 -v auradb-data:/data ghcr.io/ohswedd/auradb:1.0.1
 ```
 
 The image runs as a non-root user, exposes `7171`, stores data in the `/data`
@@ -622,7 +631,7 @@ and `EXPLAIN ANALYZE`.
 The CLI also runs a baseline suite and writes a JSON snapshot:
 
 ```bash
-auradb bench --json --output benches/baseline/v1.0.0.json
+auradb bench --json --output benches/baseline/v1.0.1.json
 ```
 
 Benchmarks are hardware-dependent and exist to catch regressions on the same

@@ -1,9 +1,10 @@
 # Production readiness
 
-AuraDB **v1.0.0** is a **single-node production release with a multi-node HA
-candidate preview**. It supports production single-node deployments configured with
-authentication, TLS, backups, monitoring, and the documented runbooks. It is
-**not** production HA. **Single-node mode is the recommended production mode.**
+AuraDB **v1.0.1** is the **first production patch on the v1.0 single-node
+production line**, with a multi-node HA candidate preview. It supports production
+single-node deployments configured with authentication, TLS, backups, monitoring,
+and the documented runbooks. It is **not** production HA. **Single-node mode is the
+recommended production mode.**
 
 The production-support statement is **scoped**, not blanket: single-node mode, run
 with the checklist below (authentication, TLS, scheduled backups with a rehearsed
@@ -13,10 +14,11 @@ production configuration. The multi-node cluster is an **HA candidate preview** 
 controlled static-cluster preview with strong release-candidate evidence, validated
 against a failure matrix — and is **not** production HA: no production automatic
 failover, no linearizable follower reads, no distributed transactions, no dynamic
-membership, no sharding, no multi-region. v1.0.0 carries forward all v0.9.2
-behavior and changes none of this scope; it finalizes the v1.0 support policy,
-freezes the AWP 1 and storage format v2 compatibility surfaces, and states the
-upgrade guarantee, the backup/restore release gate, and the security review.
+membership, no sharding, no multi-region. v1.0.1 carries forward all v1.0.0
+behavior and changes none of this scope; it re-verifies the v1.0 production gates
+on the v1.0.1 build and keeps the AWP 1 and storage format v2 compatibility
+surfaces, the upgrade guarantee, the backup/restore release gate, and the security
+review unchanged.
 
 The authoritative support boundary is [SUPPORT_POLICY.md](SUPPORT_POLICY.md). The
 exact support level for each mode, the operator assumptions the static cluster
@@ -24,9 +26,9 @@ requires, the validated failure matrix, and the **strict criteria that must be m
 and documented before AuraDB ever claims production HA** are in
 [HA_RELEASE_CANDIDATE.md](HA_RELEASE_CANDIDATE.md) and the
 [v1.0 decision checklist](V1_0_DECISION_CHECKLIST.md). None of those production-HA
-criteria are met in v1.0.0; multi-node remains an HA candidate preview.
+criteria are met in v1.0.1; multi-node remains an HA candidate preview.
 
-**Frozen for v1.** AuraDB v1.0.0 uses Aura Wire Protocol 1 and storage format v2.
+**Frozen for v1.** AuraDB v1.0.1 uses Aura Wire Protocol 1 and storage format v2.
 AWP 1 is the stable v1 wire protocol and storage format v2 is the stable v1
 single-node storage format; AuraDB v1.x preserves both unless a security,
 correctness, safety, or corruption issue requires a documented change or migration.
@@ -180,7 +182,7 @@ auradb check --data-dir ./restore --json
 
 ## Validation that backs this candidate
 
-AuraDB v1.0.0 ships with, and is gated by, the following validation (see
+AuraDB v1.0.1 ships with, and is gated by, the following validation (see
 [TESTING.md](TESTING.md)):
 
 - storage corruption drills and a structured `auradb check --json`;

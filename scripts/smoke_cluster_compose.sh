@@ -12,10 +12,10 @@
 #
 # Image selection (AURADB_IMAGE):
 #   - Locally built image (the required PR/CI path; avoids registry flakiness):
-#       docker build -t auradb:1.0.0 .
-#       AURADB_IMAGE=auradb:1.0.0 bash scripts/smoke_cluster_compose.sh
+#       docker build -t auradb:1.0.1 .
+#       AURADB_IMAGE=auradb:1.0.1 bash scripts/smoke_cluster_compose.sh
 #   - Published image (post-release verification):
-#       AURADB_IMAGE=ghcr.io/ohswedd/auradb:1.0.0 bash scripts/smoke_cluster_compose.sh
+#       AURADB_IMAGE=ghcr.io/ohswedd/auradb:1.0.1 bash scripts/smoke_cluster_compose.sh
 #   - Default (no AURADB_IMAGE): the published image in docker-compose.cluster.yml.
 #
 # Keep artifacts (certs, compose project, logs) on success for inspection:
@@ -28,7 +28,7 @@ set -euo pipefail
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "${REPO_ROOT}"
 COMPOSE_FILE="docker-compose.cluster.yml"
-export AURADB_IMAGE="${AURADB_IMAGE:-ghcr.io/ohswedd/auradb:1.0.0}"
+export AURADB_IMAGE="${AURADB_IMAGE:-ghcr.io/ohswedd/auradb:1.0.1}"
 KEEP_ARTIFACTS="${KEEP_ARTIFACTS:-0}"
 
 if ! command -v docker >/dev/null 2>&1; then

@@ -2,9 +2,9 @@
 
 ## Upgrade guarantee (v1.0)
 
-AuraDB v1.0.0 supports in-place upgrade from documented v0.x release formats
-covered by genuine or representative release fixtures. Operators must take a backup
-first and run `auradb check` before and after upgrade.
+AuraDB v1.0.1 supports in-place upgrade from documented v0.x and v1.0.x release
+formats covered by genuine or representative release fixtures. Operators must take a
+backup first and run `auradb check` before and after upgrade.
 
 - **Backup first.** Take a logical dump and verify it without importing:
   `auradb dump` then `auradb backup verify`. Run a restore drill before a
@@ -25,6 +25,30 @@ first and run `auradb check` before and after upgrade.
   format v1, and v0.3.x–v0.9.x share storage format v2, so the v0.3.0 fixture is the
   representative v2 storage fixture for that range (see
   [`tests/fixtures/README.md`](../tests/fixtures/README.md)).
+
+## From v1.0.0 to v1.0.1
+
+> **AuraDB v1.0.1 is the first production patch on the v1.0 single-node production
+> line. It is not production HA; single-node mode is the recommended production
+> mode.**
+
+v1.0.1 is a **drop-in** binary replacement over v1.0.0 (and any earlier v2-format
+release). There is **no storage migration** (format stays at v2, **frozen for
+v1**), the wire protocol is unchanged (AWP 1, **frozen for v1**), and Aura Connector
+v0.4.1 remains compatible. It changes no semantics and adds no new architecture; it
+re-verifies the v1.0 production gates on the v1.0.1 build.
+
+```bash
+auradb dump --data-dir /var/lib/auradb --output backup-before-1.0.1.jsonl
+auradb backup verify --input backup-before-1.0.1.jsonl --json
+auradb check --data-dir /var/lib/auradb --json
+# Stop the old binary, swap in the v1.0.1 binary, start it, then:
+auradb check --data-dir /var/lib/auradb --json
+```
+
+**Rollback plan.** v1.0.0 and v1.0.1 share the same on-disk and wire formats, so a
+v1.0.1 data directory can be reopened by v1.0.0. Keep the pre-upgrade backup until
+the upgrade is verified in production.
 
 ## From v0.9.x to v1.0.0
 
