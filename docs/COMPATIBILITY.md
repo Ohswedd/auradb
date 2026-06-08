@@ -1,17 +1,17 @@
 # AuraDB Compatibility Matrix
 
-This document records what AuraDB v1.0.0 implements and how it interoperates with
-the Aura Connector client library and the Aura Wire Protocol (AWP). AuraDB v1.0.0
-is a **single-node production release with a multi-node HA candidate preview**: it
+This document records what AuraDB v1.0.1 implements and how it interoperates with
+the Aura Connector client library and the Aura Wire Protocol (AWP). AuraDB v1.0.1
+is the **first production patch on the v1.0 single-node production line**: it
 supports production single-node deployments configured with auth, TLS, backups,
 monitoring, and the documented runbooks, while multi-node static clustering remains
 an HA candidate preview, **not a production HA guarantee**. It carries forward all
-v0.9.2 behavior and adds no new configuration, cluster architecture, or semantics.
+v1.0.0 behavior and adds no new configuration, cluster architecture, or semantics.
 See [SUPPORT_POLICY.md](SUPPORT_POLICY.md),
 [HA_RELEASE_CANDIDATE.md](HA_RELEASE_CANDIDATE.md), and the
 [v1.0 decision checklist](V1_0_DECISION_CHECKLIST.md).
 
-**Aura Wire Protocol 1 is frozen for v1.** AuraDB v1.0.0 uses Aura Wire Protocol 1.
+**Aura Wire Protocol 1 is frozen for v1.** AuraDB v1.0.1 uses Aura Wire Protocol 1.
 AWP 1 is the stable v1 wire protocol. AuraDB v1.x will preserve AWP 1 compatibility
 unless a security or correctness issue requires a documented compatibility break.
 The `not_leader` error frame carries an additive structured `not_leader` object
@@ -21,7 +21,7 @@ alongside the additive cluster health and `retryable` fields. Aura Connector 0.4
 reads the new fields; Aura Connector 0.3.x stays fully compatible (it simply does
 not consume them).
 
-**Storage format v2 is frozen for v1.** AuraDB v1.0.0 uses storage format v2.
+**Storage format v2 is frozen for v1.** AuraDB v1.0.1 uses storage format v2.
 Storage format v2 is the stable v1 single-node storage format. AuraDB v1.x will
 preserve storage format v2 compatibility unless a safety, corruption, or security
 issue requires a documented migration. The on-disk format is unchanged from
@@ -29,7 +29,8 @@ v0.4.x. Single-node mode remains the recommended production mode.
 
 | AuraDB | Aura Connector | Protocol | Status |
 | ------ | -------------- | -------- | ------ |
-| 1.0.0  | 0.4.1          | AWP 1    | Supported, recommended (single-node production release; multi-node HA candidate preview, not production HA; no new config, architecture, or semantics over 0.9.2; connector unchanged; AWP 1 and storage format v2 frozen for v1) |
+| 1.0.1  | 0.4.1          | AWP 1    | Supported, recommended (first production patch on the v1.0 single-node production line; multi-node HA candidate preview, not production HA; no new config, architecture, or semantics over 1.0.0; connector unchanged; AWP 1 and storage format v2 frozen for v1) |
+| 1.0.0  | 0.4.1          | AWP 1    | Supported (single-node production release; multi-node HA candidate preview, not production HA; no new config, architecture, or semantics over 0.9.2; connector unchanged; AWP 1 and storage format v2 frozen for v1) |
 | 0.9.2  | 0.4.1          | AWP 1    | Supported, recommended (final HA candidate stabilization; no new config, architecture, or semantics over 0.9.1; connector unchanged; wire payload, storage format (v2), and semantics identical to 0.9.1) |
 | 0.9.1  | 0.4.1          | AWP 1    | Supported (HA release-candidate stabilization of the 0.9.0 candidate; adds the optional, backward-compatible `[cluster] advertise_client_addr` field; connector unchanged; wire payload, storage format (v2), and semantics identical to 0.9.0) |
 | 0.9.0  | 0.4.1          | AWP 1    | Supported (HA release candidate for the controlled static-cluster preview, not production HA; connector unchanged; wire payload, storage format (v2), and semantics identical to 0.8.x) |
@@ -62,7 +63,7 @@ and TLS). Use Aura Connector 0.3.x to connect to an AuraDB 0.2.x server. See
 
 ## Versions
 
-- **AuraDB:** 1.0.0
+- **AuraDB:** 1.0.1
 - **Storage format:** v2 (commit-timestamped MVCC version chains), **frozen for
   v1** and unchanged from v0.4.x. AuraDB v1.x preserves storage format v2 unless a
   safety, corruption, or security issue requires a documented migration. A v1

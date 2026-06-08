@@ -1,10 +1,11 @@
 # Release guide
 
 This guide describes how a maintainer cuts an AuraDB release. The current release
-is `1.0.0` — a **single-node production release with a multi-node HA candidate
-preview**. Single-node mode is the recommended production mode; multi-node static
+is `1.0.1` — the **first production patch on the v1.0 single-node production line**.
+Single-node mode is the recommended production mode; multi-node static
 clustering remains an HA candidate preview, **not** production HA. AWP 1 and storage
 format v2 are **frozen for v1**. See [SUPPORT_POLICY.md](SUPPORT_POLICY.md),
+[V1_0_1_RELEASE_NOTES.md](V1_0_1_RELEASE_NOTES.md),
 [V1_0_RELEASE_NOTES.md](V1_0_RELEASE_NOTES.md),
 [HA_RELEASE_CANDIDATE.md](HA_RELEASE_CANDIDATE.md), and the
 [v1.0 decision checklist](V1_0_DECISION_CHECKLIST.md).
@@ -75,17 +76,17 @@ on the affected job — rather than pinning a deprecated major.
   manual `workflow_dispatch` jobs in `.github/workflows/cluster.yml` so they
   never block a PR.
 
-### Published-image post-release checklist (v1.0.0)
+### Published-image post-release checklist (v1.0.1)
 
 After the tag publishes the multi-arch image, run **both** published-image smokes
 as post-release gates (not PR blockers). Each prints the diagnostics needed to
 confirm a clean release and to record as HA-candidate evidence (see
 [V1_0_DECISION_CHECKLIST.md](V1_0_DECISION_CHECKLIST.md) §5):
 
-- [ ] **Cluster Compose smoke.** `AURADB_IMAGE=ghcr.io/ohswedd/auradb:1.0.0 bash
+- [ ] **Cluster Compose smoke.** `AURADB_IMAGE=ghcr.io/ohswedd/auradb:1.0.1 bash
       scripts/smoke_cluster_compose.sh` — image used and its digest, the node
       ports, the leader, quorum, per-peer states, and teardown.
-- [ ] **HA candidate smoke.** `AURADB_IMAGE=ghcr.io/ohswedd/auradb:1.0.0 bash
+- [ ] **HA candidate smoke.** `AURADB_IMAGE=ghcr.io/ohswedd/auradb:1.0.1 bash
       scripts/smoke_ha_candidate.sh` — image digest (when available), the server
       version reported by each node, the leader **before** and **after** the kill,
       the leader **client-address source** (advertised / status / fallback /
@@ -148,8 +149,8 @@ first** so AuraDB conformance can run against the published client:
       off by default, and gated by two opt-ins.
 - [ ] The benchmark baseline under `benches/baseline/` is refreshed on the
       release machine with
-      `auradb bench --json --output benches/baseline/<version>.json` (v1.0.0
-      commits `benches/baseline/v1.0.0.json`). Benchmark numbers are
+      `auradb bench --json --output benches/baseline/<version>.json` (v1.0.1
+      commits `benches/baseline/v1.0.1.json`). Benchmark numbers are
       machine-specific and **warn-only** — never a release gate.
 
 ### Multi-node preview validation (v0.5.x, fail-stop recovery in v0.6.0)
@@ -320,11 +321,11 @@ integrity. It runs in three modes:
 
 ```bash
 # Verify a local directory of built artifacts (no network).
-scripts/verify_release_artifacts.sh --dir out --version 1.0.0
+scripts/verify_release_artifacts.sh --dir out --version 1.0.1
 
 # Download and verify the published assets for a tag (requires the gh CLI), and
 # confirm the release body carries the required v1.0 statements.
-scripts/verify_release_artifacts.sh --tag v1.0.0
+scripts/verify_release_artifacts.sh --tag v1.0.1
 
 # Network-free self-test of the verifier itself (good dir passes; missing
 # archive, bad checksum, and wrong-version name each fail).
@@ -334,7 +335,7 @@ scripts/verify_release_artifacts.sh --self-test
 It verifies that all five expected platform archives are present, that `SHA256SUMS`
 lists **and** matches every archive (no stray, unlisted asset ships), that archive
 names carry the version, and that a host-matching binary prints the expected
-`auradb 1.0.0`. In `--tag` mode it additionally confirms the GitHub release body
+`auradb 1.0.1`. In `--tag` mode it additionally confirms the GitHub release body
 carries the **single-node production support statement**, the **multi-node preview
 disclaimer**, the **AWP 1 statement**, the **storage format v2 statement**, and
 **known limitations**. The CI `release.yml` runs `--dir` verification after the

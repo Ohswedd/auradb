@@ -262,20 +262,20 @@ already covered by the v0.9.x suite and are **mapped** (not duplicated) in
 
 These run as part of the serial multi-node suite below.
 
-## Current release (v1.0.0)
+## Current release (v1.0.1)
 
-> **AuraDB v1.0.0 is a single-node production release with a multi-node HA
-> candidate preview. It is not production HA; single-node mode remains the
-> recommended production mode.** See
+> **AuraDB v1.0.1 is the first production patch on the v1.0 single-node production
+> line, with a multi-node HA candidate preview. It is not production HA;
+> single-node mode remains the recommended production mode.** See
 > [HA_RELEASE_CANDIDATE.md](HA_RELEASE_CANDIDATE.md) and the
 > [v1.0 decision checklist](V1_0_DECISION_CHECKLIST.md).
 
-v1.0.0 adds no new architecture and changes no storage, wire, or semantic behavior
-over v0.9.2 (storage format v2, AWP 1), so every suite above carries forward
+v1.0.1 adds no new architecture and changes no storage, wire, or semantic behavior
+over v1.0.0 (storage format v2, AWP 1), so every suite above carries forward
 unchanged — including the v0.9.x HA candidate stabilization suites and the
 connector conformance scenarios, still validated against **Aura Connector v0.4.1**
-(and compatible 0.4.x). No new tests are required to cover v1.0.0; the existing
-v0.9.2 suites are the release suites. The multi-node suites still run **serially**
+(and compatible 0.4.x). No new tests are required to cover v1.0.1; the existing
+v1.0.0/v0.9.2 suites are the release suites. The multi-node suites still run **serially**
 (`--test-threads=1`).
 
 ## HA release-candidate stabilization suites (v0.9.1)

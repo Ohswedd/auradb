@@ -1,6 +1,6 @@
 # AuraDB v1.0 support policy
 
-> **AuraDB v1.0.0 supports production single-node deployments when configured
+> **AuraDB v1.0.1 supports production single-node deployments when configured
 > with auth, TLS, backups, monitoring, and the documented runbooks. Multi-node
 > static clustering remains an HA candidate preview, not production HA.**
 
@@ -18,7 +18,7 @@ compatibility matrix in [COMPATIBILITY.md](COMPATIBILITY.md).
 
 ## Production support statement
 
-AuraDB v1.0.0 supports production **single-node** deployments when configured with
+AuraDB v1.0.1 supports production **single-node** deployments when configured with
 authentication, TLS, scheduled backups with a rehearsed restore, monitoring, and
 the documented runbooks. This is the recommended production deployment mode.
 
@@ -141,7 +141,7 @@ AuraDB v1.0 does **not** provide, and **must not** be relied on for, any of:
 
 ## Changes to this policy
 
-This policy applies to AuraDB v1.0.0 and the v1.x line. Material changes — for
+This policy applies to AuraDB v1.0.1 and the v1.x line. Material changes — for
 example promoting multi-node from preview to production HA once the evidence in
 [HA_RELEASE_CANDIDATE.md](HA_RELEASE_CANDIDATE.md) §8 is complete — will be
 documented here and in the release notes, never claimed implicitly.

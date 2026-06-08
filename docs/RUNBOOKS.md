@@ -1,11 +1,11 @@
 # Operator runbooks
 
-Practical, copy-pasteable procedures for running AuraDB **v1.0.0** in
+Practical, copy-pasteable procedures for running AuraDB **v1.0.1** in
 single-node production mode, plus the multi-node HA candidate preview. Each runbook
 lists symptoms, the commands to run, safe actions, actions to avoid, expected
 output, and when to restore from backup.
 
-> **AuraDB v1.0.0 supports production single-node deployments** configured with
+> **AuraDB v1.0.1 supports production single-node deployments** configured with
 > auth, TLS, backups, monitoring, and the documented runbooks. **Multi-node static
 > clustering remains an HA candidate preview, not production HA** — do not use it
 > as production HA yet. Single-node mode is the recommended production mode. See
@@ -472,7 +472,7 @@ config or behavior; this gathers the existing guidance in one place.
   known" / `quorum_available: false` is a **no-leader** issue (wait for an
   election or restore quorum — runbooks 14, 18b, 18c).
 - **Run both published-image smokes** → after a release,
-  `AURADB_IMAGE=ghcr.io/ohswedd/auradb:1.0.0 bash scripts/smoke_cluster_compose.sh`
+  `AURADB_IMAGE=ghcr.io/ohswedd/auradb:1.0.1 bash scripts/smoke_cluster_compose.sh`
   and `… bash scripts/smoke_ha_candidate.sh` (see [RELEASE.md](RELEASE.md)). Use
   `KEEP_ARTIFACTS=1` to retain logs/certs.
 - **Collect evidence for a v1.0 readiness report** → record image digest, per-node

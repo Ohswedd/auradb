@@ -4,6 +4,40 @@ All notable changes to AuraDB are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and the project uses
 [Semantic Versioning](https://semver.org/).
 
+## [1.0.1] - 2026-06-08
+
+**First production patch — single-node production line, multi-node HA candidate
+preview.** AuraDB v1.0.1 is the first patch on the v1.0 single-node production line:
+a documentation, validation, and release-engineering patch. It carries forward
+**all** v1.0.0 behavior and adds **no** new database or cluster architecture, changes
+**no** semantics, and touches **no** on-disk or wire format. Single-node mode remains
+the recommended production mode; multi-node static clustering remains an HA candidate
+preview — not production HA, no production automatic failover, no production cluster
+readiness. **Aura Wire Protocol 1 and storage format v2 stay frozen for v1**, and
+Aura Connector v0.4.1 (and compatible 0.4.x) is the supported client. Known
+limitations are unchanged. See [docs/V1_0_1_RELEASE_NOTES.md](docs/V1_0_1_RELEASE_NOTES.md),
+[docs/SUPPORT_POLICY.md](docs/SUPPORT_POLICY.md), and
+[docs/COMPATIBILITY.md](docs/COMPATIBILITY.md).
+
+### Changed
+- Bumped the workspace version to `1.0.1` (`auradb version` /
+  `auradb compatibility`, `Cargo.toml`, `Cargo.lock`).
+- Refreshed current-release version pointers and the support matrix to name v1.0.1
+  across the README and docs; the single-node production support statement and the
+  multi-node HA-candidate-preview disclaimer are unchanged in substance.
+- Refreshed the benchmark baseline (`benches/baseline/v1.0.1.json`); benchmark
+  numbers remain machine-specific and warn-only.
+
+### Fixed
+- Updated the developer-quickstart and secure-deployment Docker Compose examples
+  (`docker-compose.yml`, `docker-compose.secure.yml`) to reference the current
+  `ghcr.io/ohswedd/auradb:1.0.1` image. They had remained pinned to the obsolete
+  `0.2.1` tag, so the secure example pulled a long-superseded image.
+- Re-verified the v1.0 production gates on the v1.0.1 build (format, clippy, full
+  test suite, backup/restore and upgrade gates, `cargo audit` / `cargo deny`,
+  release-artifact verifier self-test, Docker image and Compose smokes, and
+  connector conformance). No engine behavior changes were required.
+
 ## [1.0.0] - 2026-06-08
 
 **Single-node production release, multi-node HA candidate preview.** AuraDB v1.0.0

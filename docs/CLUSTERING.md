@@ -1,12 +1,12 @@
 # Clustering
 
-> **AuraDB v1.0.0 is a single-node production release; multi-node static
+> **AuraDB v1.0.1 is a single-node production release; multi-node static
 > clustering remains an HA candidate preview, not a production HA guarantee.
 > Single-node mode remains the recommended production mode.** Multi-node static
 > clustering in v1.0 remains an HA candidate preview. It has strong
-> release-candidate evidence, but it is not a production HA guarantee. v1.0.0 adds
+> release-candidate evidence, but it is not a production HA guarantee. v1.0.1 adds
 > no new cluster architecture and changes no Raft, storage (v2), or wire (AWP 1)
-> semantics over v0.9.2; Aura Connector v0.4.1 stays compatible. The cluster
+> semantics over v1.0.0; Aura Connector v0.4.1 stays compatible. The cluster
 > backup story remains a **leader logical export → single-node restore** path. The
 > evidence still outstanding before any production HA claim includes cross-host
 > chaos, longer soak, disk-full and I/O-error drills, larger-state snapshot

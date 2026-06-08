@@ -1,7 +1,7 @@
 services:
   auradb:
     build: .
-    image: ghcr.io/ohswedd/auradb:0.2.1
+    image: ghcr.io/ohswedd/auradb:1.0.1
     container_name: auradb
     ports:
       - "7171:7171"

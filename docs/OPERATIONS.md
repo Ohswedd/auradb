@@ -7,10 +7,10 @@ AuraDB v0.5.0 adds a controlled, experimental multi-node server preview (see
 [Multi-node preview operations](#multi-node-preview-operations-v050)); it is off
 by default and not a production path.
 
-AuraDB v1.0.0 is a **single-node production release with a multi-node HA
-candidate preview**; it adds no new architecture and changes no semantics over
-v0.9.2 (storage format v2, AWP 1), so the operability surface below carries
-forward unchanged. Multi-node static clustering remains an **HA candidate
+AuraDB v1.0.1 is the **first production patch on the v1.0 single-node production
+line, with a multi-node HA candidate preview**; it adds no new architecture and
+changes no semantics over v1.0.0 (storage format v2, AWP 1), so the operability
+surface below carries forward unchanged. Multi-node static clustering remains an **HA candidate
 preview, not a production HA guarantee** (the v0.9.0 HA release candidate framing
 carries forward); the single-node operability surface below is unchanged, and
 single-node remains the recommended production mode. The cluster

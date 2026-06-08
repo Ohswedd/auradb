@@ -127,17 +127,17 @@ Because containers communicate over a non-loopback Docker network, this path is 
    image (the recommended preview path, no registry pull) or the published one:
 
    ```bash
-   # Local image (build it first: docker build -t auradb:1.0.0 .)
-   AURADB_IMAGE=auradb:1.0.0 bash scripts/smoke_cluster_compose.sh
+   # Local image (build it first: docker build -t auradb:1.0.1 .)
+   AURADB_IMAGE=auradb:1.0.1 bash scripts/smoke_cluster_compose.sh
    # Or the published image (post-release verification)
-   AURADB_IMAGE=ghcr.io/ohswedd/auradb:1.0.0 bash scripts/smoke_cluster_compose.sh
+   AURADB_IMAGE=ghcr.io/ohswedd/auradb:1.0.1 bash scripts/smoke_cluster_compose.sh
    ```
 
    The smoke prints the image used, the node ports, the leader, quorum, per-peer
    states, and the teardown result. The published image is **multi-arch**
    (`linux/amd64` + `linux/arm64`), so `docker pull` selects arm64 automatically
    on Apple Silicon; inspect the manifest with `docker buildx imagetools inspect
-   ghcr.io/ohswedd/auradb:1.0.0`.
+   ghcr.io/ohswedd/auradb:1.0.1`.
 
 4. **Inspect** (client ports are published to the host as `7171`/`7181`/`7191`):
 
@@ -170,7 +170,7 @@ Aura Connector v0.4.x is cluster-aware: a write to a follower raises
 `AuraNotLeaderError`, and the client can reconnect to the leader with
 `Client.connect_to_leader(exc)` or an opt-in bounded `Client.with_leader_redirect()`.
 Aura Connector **v0.4.1** (introduced alongside AuraDB v0.7.1 and still the
-recommended connector for the current AuraDB v1.0.0 release, which leaves the wire
+recommended connector for the current AuraDB v1.0.1 release, which leaves the wire
 protocol unchanged) is recommended: it renders clearer `AuraNotLeaderError`
 messages (the node reached, the leader address, and the redirect call) and refuses
 a redirect that would silently drop TLS. [`python_connector.py`](python_connector.py) demonstrates the host-side path

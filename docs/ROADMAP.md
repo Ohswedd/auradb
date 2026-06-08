@@ -4,7 +4,21 @@ This roadmap describes where AuraDB is headed beyond the first single-node
 release. It is a statement of direction, not a delivery commitment. Items are
 grouped by theme and listed roughly in the order we expect to approach them.
 
-## Current release: 1.0.0
+## Current release: 1.0.1
+
+AuraDB 1.0.1 is the **first production patch on the v1.0 single-node production
+line**. It is a documentation, validation, and release-engineering patch: it
+re-verifies the v1.0 production gates on the v1.0.1 build and refreshes the version
+pointers and support docs. It carries forward **all** v1.0.0 behavior and adds
+**no** new database or cluster architecture, changes **no** semantics, and touches
+**no** on-disk or wire format. **Single-node mode remains the recommended
+production mode**; multi-node static clustering remains an **HA candidate preview,
+not a production HA guarantee**. AWP 1 and storage format v2 stay frozen for v1, and
+Aura Connector v0.4.1 stays compatible. See
+[V1_0_1_RELEASE_NOTES.md](V1_0_1_RELEASE_NOTES.md),
+[SUPPORT_POLICY.md](SUPPORT_POLICY.md), and [COMPATIBILITY.md](COMPATIBILITY.md).
+
+### Delivered in 1.0.0
 
 AuraDB 1.0.0 is a **single-node production release with a multi-node HA candidate
 preview**. It supports production single-node deployments configured with auth,
@@ -83,7 +97,7 @@ mode**; multi-node remains a controlled static-cluster preview. See
 ### Future production HA criteria
 
 AuraDB will **not** claim production HA until all of the following are met and
-documented with evidence (none are met in v1.0.0): repeated long soak; snapshot
+documented with evidence (none are met in v1.0.1): repeated long soak; snapshot
 install under large state (with chunked/streaming transfer if needed);
 backup/restore cluster drills with documented RPO/RTO; network partitions across
 real environments (not just loopback); disk-full and I/O-error behavior;

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# AuraDB v1.0.0 HA release-candidate smoke test.
+# AuraDB v1.0.1 HA release-candidate smoke test.
 #
 # Drives the controlled static-cluster preview through a leader change end to
 # end: generate development peer certificates, start the three-node Compose
@@ -18,10 +18,10 @@
 #
 # Image selection (AURADB_IMAGE):
 #   - Locally built image:
-#       docker build -t auradb:1.0.0 .
-#       AURADB_IMAGE=auradb:1.0.0 bash scripts/smoke_ha_candidate.sh
+#       docker build -t auradb:1.0.1 .
+#       AURADB_IMAGE=auradb:1.0.1 bash scripts/smoke_ha_candidate.sh
 #   - Published image (post-release verification):
-#       AURADB_IMAGE=ghcr.io/ohswedd/auradb:1.0.0 bash scripts/smoke_ha_candidate.sh
+#       AURADB_IMAGE=ghcr.io/ohswedd/auradb:1.0.1 bash scripts/smoke_ha_candidate.sh
 #
 # Keep artifacts (certs, compose project, logs) for inspection instead of tearing
 # down on success: KEEP_ARTIFACTS=1 bash scripts/smoke_ha_candidate.sh
@@ -33,7 +33,7 @@ set -euo pipefail
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "${REPO_ROOT}"
 COMPOSE_FILE="docker-compose.cluster.yml"
-export AURADB_IMAGE="${AURADB_IMAGE:-ghcr.io/ohswedd/auradb:1.0.0}"
+export AURADB_IMAGE="${AURADB_IMAGE:-ghcr.io/ohswedd/auradb:1.0.1}"
 KEEP_ARTIFACTS="${KEEP_ARTIFACTS:-0}"
 
 # Host client ports published by docker-compose.cluster.yml and the container
