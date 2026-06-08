@@ -89,9 +89,47 @@ jobs:
         run: |
           bash scripts/verify_release_artifacts.sh --dir out --version "${GITHUB_REF_NAME#v}"
 
+      - name: Build release notes from changelog
+        # Extract the CHANGELOG.md section for this tag's version and use it as the
+        # GitHub release body, so the published release is never empty. Fail the
+        # release if the section is missing or does not carry the required v1.0
+        # support statements (the same wording verify_release_artifacts.sh --tag
+        # checks), catching the problem before publishing rather than after.
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          awk -v ver="$version" '
+            index($0, "## [" ver "]") == 1 { capture = 1; print; next }
+            capture && /^## \[/ { exit }
+            capture { print }
+          ' CHANGELOG.md > release-notes.md
+          if [ ! -s release-notes.md ]; then
+            echo "::error::no CHANGELOG.md section found for version $version" >&2
+            exit 1
+          fi
+          body_lc="$(tr '[:upper:]' '[:lower:]' < release-notes.md)"
+          missing=""
+          printf '%s' "$body_lc" | grep -q "single-node" &&
+            printf '%s' "$body_lc" | grep -q "production" ||
+            missing="$missing single-node-production-statement"
+          printf '%s' "$body_lc" | grep -Eq "preview|not production ha|not production-ha" ||
+            missing="$missing multi-node-preview-disclaimer"
+          printf '%s' "$body_lc" | grep -Eq "awp 1|aura wire protocol 1" ||
+            missing="$missing awp-1-statement"
+          printf '%s' "$body_lc" | grep -Eq "storage format v2|storage v2|format v2" ||
+            missing="$missing storage-v2-statement"
+          printf '%s' "$body_lc" | grep -Eq "known limitation|limitations" ||
+            missing="$missing known-limitations"
+          if [ -n "$missing" ]; then
+            echo "::error::CHANGELOG.md section for $version is missing required statement(s):$missing" >&2
+            exit 1
+          fi
+          echo "release body for $version ($(wc -l < release-notes.md) lines) carries the required statements"
+          cat release-notes.md
+
       - name: Create GitHub release
         uses: softprops/action-gh-release@v2
         with:
+          body_path: release-notes.md
           files: |
             out/*.tar.gz
             out/*.zip
