@@ -33,12 +33,17 @@ pub enum Access {
         /// The equality value.
         value: Value,
     },
-    /// Full-text index lookup.
+    /// Full-text index lookup (unranked boolean `contains_text`).
     FullText {
         /// The text field.
         field: String,
         /// The query text.
         query: String,
+    },
+    /// Ranked full-text (BM25) search.
+    TextRanked {
+        /// The text field.
+        field: String,
     },
     /// Exact vector nearest-neighbour search.
     Vector {
@@ -48,6 +53,13 @@ pub enum Access {
         k: usize,
         /// The metric name.
         metric: String,
+    },
+    /// Hybrid text-plus-vector search.
+    Hybrid {
+        /// The text field.
+        text_field: String,
+        /// The vector field.
+        vector_field: String,
     },
     /// Full collection scan.
     Scan,
@@ -60,8 +72,13 @@ impl Access {
             Access::PointLookup { field, .. }
             | Access::IndexLookup { field, .. }
             | Access::FullText { field, .. }
+            | Access::TextRanked { field, .. }
             | Access::Vector { field, .. } => Some(field.clone()),
             Access::DocumentPath { path, .. } => Some(path.clone()),
+            Access::Hybrid {
+                text_field,
+                vector_field,
+            } => Some(format!("{text_field}+{vector_field}")),
             Access::Scan => None,
         }
     }
@@ -97,12 +114,25 @@ pub enum PlanNode {
         /// Estimated rows produced.
         estimated_rows: usize,
     },
-    /// Full-text index lookup.
+    /// Full-text index lookup (unranked boolean `contains_text`).
     FullTextIndexLookup {
         /// The seeding index (field).
         index: String,
         /// The text field.
         field: String,
+        /// Estimated rows produced.
+        estimated_rows: usize,
+    },
+    /// Ranked full-text (BM25) search seeded by a full-text index.
+    FullTextBm25Search {
+        /// The seeding index (field).
+        index: String,
+        /// The text field.
+        field: String,
+        /// The ranking mode (`bm25` or `term_frequency`).
+        rank: String,
+        /// The term operator (`or` or `and`).
+        operator: String,
         /// Estimated rows produced.
         estimated_rows: usize,
     },
@@ -114,6 +144,21 @@ pub enum PlanNode {
         k: usize,
         /// The metric name.
         metric: String,
+        /// Estimated rows produced.
+        estimated_rows: usize,
+    },
+    /// Hybrid text-plus-vector search fusing BM25 and exact vector signals.
+    HybridSearch {
+        /// The text field.
+        text_field: String,
+        /// The vector field.
+        vector_field: String,
+        /// The fusion mode (`weighted_sum` or `reciprocal_rank_fusion`).
+        fusion: String,
+        /// The text candidate source (always the BM25 full-text index).
+        text_source: String,
+        /// The vector candidate source (always the exact vector index).
+        vector_source: String,
         /// Estimated rows produced.
         estimated_rows: usize,
     },

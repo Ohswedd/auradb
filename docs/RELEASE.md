@@ -1,10 +1,13 @@
 # Release guide
 
 This guide describes how a maintainer cuts an AuraDB release. The current release
-is `1.0.1` — the **first production patch on the v1.0 single-node production line**.
-Single-node mode is the recommended production mode; multi-node static
-clustering remains an HA candidate preview, **not** production HA. AWP 1 and storage
-format v2 are **frozen for v1**. See [SUPPORT_POLICY.md](SUPPORT_POLICY.md),
+is `1.1.0` — the **search and ranking release** on the v1 single-node production
+line, paired with Aura Connector v0.5.0. Single-node mode is the recommended
+production mode; multi-node static clustering remains an HA candidate preview,
+**not** production HA. AWP 1 and storage format v2 are **frozen for v1** (the
+v1.1.0 search clauses are additive Query IR). See
+[V1_1_RELEASE_NOTES.md](V1_1_RELEASE_NOTES.md),
+[SEARCH_AND_RANKING.md](SEARCH_AND_RANKING.md), [SUPPORT_POLICY.md](SUPPORT_POLICY.md),
 [V1_0_1_RELEASE_NOTES.md](V1_0_1_RELEASE_NOTES.md),
 [V1_0_RELEASE_NOTES.md](V1_0_RELEASE_NOTES.md),
 [HA_RELEASE_CANDIDATE.md](HA_RELEASE_CANDIDATE.md), and the
@@ -100,24 +103,37 @@ confirm a clean release and to record as HA-candidate evidence (see
 
 ## Connector-first coordinated releases
 
-Some AuraDB releases coordinate with an Aura Connector release (e.g. AuraDB v0.7.1
-with Aura Connector v0.4.1). When the connector changed, **release the connector
-first** so AuraDB conformance can run against the published client:
+Some AuraDB releases coordinate with an Aura Connector release (e.g. AuraDB v1.1.0
+with Aura Connector v0.5.0). AuraDB's connector conformance installs the matching
+client from PyPI, so the package must exist first. **Release the connector first.**
 
-1. Release Aura Connector first (tag, publish to PyPI, verify a clean
-   `pip install aura-connector==<x.y.z>` in a fresh venv).
-2. Re-run AuraDB's connector cluster conformance against the **published**
-   connector. Trigger `.github/workflows/cluster.yml` via *Run workflow* with the
-   `require_published_connector` input set so a missing/too-old connector fails
-   rather than skips. Locally:
+For the v1.1.0 / v0.5.0 search-and-ranking release, the order is:
+
+1. **Publish Aura Connector v0.5.0 first** (tag, publish to PyPI, verify a clean
+   `pip install aura-connector==0.5.0` in a fresh venv). The new search APIs are
+   additive Query IR over the unchanged AWP 1, so older connectors keep working for
+   non-search operations.
+2. **Verify the clean install** from PyPI.
+3. **Publish AuraDB v1.1.0.**
+4. **Run AuraDB conformance against the published Aura Connector v0.5.0**, including
+   the search and search-cluster harnesses (`run_connector_search.py`,
+   `run_connector_search_cluster.py`). Trigger `.github/workflows/conformance.yml`
+   and `.github/workflows/cluster.yml`; set `require_published_connector` so a
+   missing/too-old connector fails rather than skips. Locally:
 
    ```bash
-   python -m pip install "aura-connector>=0.4.1,<0.5"
+   python -m pip install "aura-connector>=0.5,<0.6"   # or: pip install ../aura-connector (pre-release)
    python tests/conformance/python/run_connector_smoke.py --addr <leader-client-addr>
    python tests/conformance/python/run_connector_conformance.py --addr <leader-client-addr>
    python tests/conformance/python/run_connector_cluster.py \
        --leader <leader-client-addr> --follower <follower-client-addr>
+   python tests/conformance/python/run_connector_search.py --addr <leader-client-addr>
+   python tests/conformance/python/run_connector_search_cluster.py \
+       --leader <leader-client-addr> --follower <follower-client-addr>
    ```
+
+5. **Run the Docker published-image smokes** (`smoke_cluster_compose.sh`,
+   `smoke_ha_candidate.sh`) against `ghcr.io/ohswedd/auradb:1.1.0`.
 
 3. Only after that passes, cut the AuraDB release. Never claim a connector version
    is published before it actually is; until then the conformance step skips with

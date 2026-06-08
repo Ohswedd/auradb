@@ -19,16 +19,16 @@ number from one laptop is not comparable to a number from another.
 The benchmark opens the engine with `sync_on_commit = false` so it measures
 engine work rather than disk-flush latency. See [docs/BENCHMARKS.md](../../docs/BENCHMARKS.md).
 
-The current baseline is `v1.0.1.json`, captured on the v1.0.1 first-production-patch
-release branch. v1.0.1 is a documentation, validation, and release-engineering patch:
-it carries forward all v1.0.0 behavior and adds
-**no** new config, cluster architecture, or semantics, so it
-changes no query, storage, or MVCC hot path and its numbers track `v1.0.0.json`
-within run-to-run noise on the same machine; comparison is **warn-only and
-machine-specific** (no fail threshold), and any per-benchmark delta in the
+The current baseline is `v1.1.0.json`, captured on the v1.1.0 search-and-ranking
+release branch. v1.1.0 adds two new measurements — `full_text_bm25` (BM25 ranked
+full-text search) and `hybrid_search` (fused text+vector ranking) — alongside the
+existing suite. The new search clauses are additive Query IR and do not change the
+existing query, storage, or MVCC hot paths, so the carried-over measurements track
+`v1.0.1.json` within run-to-run noise on the same machine; comparison is **warn-only
+and machine-specific** (no fail threshold), and any per-benchmark delta in the
 single-digit-to-low-tens percent range on a shared developer machine is hardware
 variance — or concurrent load during capture — not a regression. The prior baseline
-is `v1.0.0.json`, before it `v0.9.2.json`, `v0.9.1.json` and `v0.9.0.json`, and
+is `v1.0.1.json`, before it `v1.0.0.json`, `v0.9.2.json`, `v0.9.1.json` and `v0.9.0.json`, and
 before it `v0.8.1.json` and `v0.8.0.json`
 (v0.7.0 and v0.7.1 were connector-ergonomics releases that did **not** refresh the
 engine baseline). It is the single-node engine suite; multi-node

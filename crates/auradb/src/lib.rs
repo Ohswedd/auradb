@@ -37,7 +37,8 @@ mod idgen;
 
 pub use clock::WallClock;
 pub use engine::{
-    ActiveTransaction, Engine, EngineOptions, EngineStats, IndexLoadReport, ReplicatedLog, TxnState,
+    ActiveTransaction, Engine, EngineOptions, EngineStats, IndexLoadReport, ReplicatedLog,
+    SearchIndexInfo, TextIndexInfo, TxnState, VectorIndexInfo,
 };
 
 /// Re-export of core types.

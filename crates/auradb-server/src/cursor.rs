@@ -10,14 +10,18 @@ use std::collections::HashMap;
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
-use auradb::query::{FindQuery, Row};
+use auradb::query::{FindQuery, Row, Scored};
 use auradb::{Engine, Transaction};
-use auradb_core::{Error, RecordId, Result};
+use auradb_core::{Error, Result};
 
 struct CursorEntry {
     query: FindQuery,
-    ordered: Vec<(RecordId, Option<f32>)>,
+    ordered: Vec<Scored>,
     position: usize,
+    /// The rank (0-based) of this cursor's first row within the full result, so
+    /// reported `rank` values stay continuous when the first page was already
+    /// materialized before the cursor opened.
+    base_rank: usize,
     last_used: Instant,
 }
 
@@ -53,7 +57,14 @@ impl CursorRegistry {
     }
 
     /// Open a cursor over a planned query result, returning its id.
-    pub fn open(&self, query: FindQuery, ordered: Vec<(RecordId, Option<f32>)>) -> u64 {
+    pub fn open(&self, query: FindQuery, ordered: Vec<Scored>) -> u64 {
+        self.open_at(query, ordered, 0)
+    }
+
+    /// Open a cursor whose first row is at `base_rank` within the full ordered
+    /// result. Used when the caller already materialized and returned an earlier
+    /// page so paged `rank` values remain continuous.
+    pub fn open_at(&self, query: FindQuery, ordered: Vec<Scored>, base_rank: usize) -> u64 {
         let mut reg = self.inner.lock().expect("cursor registry poisoned");
         let id = reg.next_id;
         reg.next_id += 1;
@@ -63,6 +74,7 @@ impl CursorRegistry {
                 query,
                 ordered,
                 position: 0,
+                base_rank,
                 last_used: Instant::now(),
             },
         );
@@ -86,22 +98,23 @@ impl CursorRegistry {
         engine: &Engine,
         txn: Option<&Transaction>,
     ) -> Result<CursorPage> {
-        let (query, page_ids, more) = {
+        let (query, page_ids, start_rank, more) = {
             let mut reg = self.inner.lock().expect("cursor registry poisoned");
             let entry = reg
                 .cursors
                 .get_mut(&id)
                 .ok_or_else(|| Error::NotFound(format!("cursor {id}")))?;
             entry.last_used = Instant::now();
+            let start = entry.position;
             let end = (entry.position + limit.max(1)).min(entry.ordered.len());
-            let page_ids = entry.ordered[entry.position..end].to_vec();
+            let page_ids = entry.ordered[start..end].to_vec();
             entry.position = end;
             let more = entry.position < entry.ordered.len();
-            (entry.query.clone(), page_ids, more)
+            (entry.query.clone(), page_ids, entry.base_rank + start, more)
         };
         let rows = match txn {
-            Some(txn) => engine.txn_materialize(txn, &query, &page_ids)?,
-            None => engine.materialize(&query, &page_ids)?,
+            Some(txn) => engine.txn_materialize_page(txn, &query, &page_ids, start_rank)?,
+            None => engine.materialize_page(&query, &page_ids, start_rank)?,
         };
         if !more {
             self.close(id);

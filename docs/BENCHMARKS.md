@@ -357,3 +357,16 @@ deadlines rather than asserting fixed latencies. The committed `bench` baseline
 remains the single-node engine throughput suite. As always, the numbers are
 machine-specific and used only for same-machine regression tracking, never as a
 universal performance claim.
+
+## Search benchmarks (v1.1.0)
+
+The engine benchmark suite adds two ranked-retrieval measurements alongside the existing
+`full_text_lookup` and `vector_exact_nearest`:
+
+- `full_text_bm25` — BM25 ranked full-text search.
+- `hybrid_search` — fused text+vector ranking.
+
+They are captured in `benches/baseline/v1.1.0.json`. The new clauses are additive Query IR and
+do not change the existing hot paths, so the carried-over measurements track the v1.0.1
+baseline within run-to-run noise on the same machine and build profile. Comparison is
+warn-only and machine-specific (see `benches/baseline/README.md`).

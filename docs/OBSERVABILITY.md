@@ -176,3 +176,14 @@ registry above.
 OpenTelemetry export and per-query-fingerprint metrics are future work; the
 metrics registry and tracing here cover the first-release requirements without
 requiring a collector.
+
+## Search metrics (v1.1.0)
+
+Ranked-retrieval queries are counted by shape and timed:
+
+- `auradb_search_text_queries_total` — ranked full-text (BM25) queries.
+- `auradb_search_hybrid_queries_total` — hybrid text+vector queries.
+- `auradb_search_vector_queries_total` — exact vector nearest-neighbour queries.
+- `auradb_ranking_latency_us` — execution-latency summary for ranked queries.
+
+These are additive to the existing metrics surface.

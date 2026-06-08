@@ -67,13 +67,20 @@ pub struct VectorIndexData {
 }
 
 /// A persisted full-text inverted index: term to record-id postings with the
-/// per-record term frequency used for simple ranking.
+/// per-record term frequency, plus the per-document field length needed for
+/// BM25 length normalization.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TextIndexData {
     /// The text field name.
     pub field: String,
     /// `(term, [(record_id, term_frequency), ...])` postings.
     pub postings: Vec<(String, Vec<(RecordId, u32)>)>,
+    /// `(record_id, field_token_length)` entries used for BM25 length
+    /// normalization. Absent in snapshots written before BM25 ranking; when
+    /// missing it is rebuilt from the postings on open (every document length is
+    /// the sum of its term frequencies).
+    #[serde(default)]
+    pub doc_lengths: Vec<(RecordId, u32)>,
 }
 
 /// A serializable snapshot of one collection's indexes.

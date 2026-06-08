@@ -190,6 +190,31 @@ jobs:
           fi
           exit "$rc"
 
+      - name: Aura Connector search cluster conformance (v0.5.x, search and ranking)
+        # v1.1.0 search/ranking across the cluster preview: BM25 + hybrid on the
+        # leader, leader-only search-index writes, redirect-preserves-query,
+        # transaction no-auto-redirect, and search after a leader change. Requires
+        # the matching Aura Connector 0.5.x; coordinated releases publish it first.
+        # Pre-release runs install the local wheel instead:
+        #   python -m pip install ../aura-connector
+        run: |
+          set -eu
+          if ! python -m pip install --upgrade "aura-connector>=0.5,<0.6"; then
+            echo "Aura Connector >=0.5,<0.6 not installable yet; skipping search cluster conformance."
+            exit 0
+          fi
+          leader=$(./target/debug/auradb cluster leader --addr 127.0.0.1:7171 --json \
+            | python -c "import json,sys; print(json.load(sys.stdin).get('leader_client_addr') or '')")
+          [ -z "$leader" ] && { echo "no leader; skipping."; exit 0; }
+          follower=""
+          for cand in 127.0.0.1:7171 127.0.0.1:7181 127.0.0.1:7191; do
+            if [ "$cand" != "$leader" ]; then follower="$cand"; break; fi
+          done
+          python tests/conformance/python/run_connector_search.py --addr "$leader"
+          python tests/conformance/python/run_connector_search_cluster.py \
+            --leader "$leader" --follower "$follower" \
+            --candidate-addrs 127.0.0.1:7171,127.0.0.1:7181,127.0.0.1:7191
+
       - name: Tear down
         if: always()
         run: pkill -f 'auradb server --config examples/cluster' || true

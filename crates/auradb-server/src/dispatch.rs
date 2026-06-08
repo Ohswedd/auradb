@@ -565,6 +565,25 @@ fn handle(ctx: &ServerContext, session: &mut Session, frame: &Frame) -> Result<F
             Metrics::incr(&ctx.metrics.queries_total);
             let req: ReadRequest = frame.decode_json()?;
             enforce_read_limits(&ctx.config.limits, &req)?;
+            // Count ranked-retrieval queries by shape for observability.
+            if let ReadRequest::Find(q) = &req {
+                if q.hybrid.is_some() {
+                    Metrics::incr(&ctx.metrics.search_hybrid_queries_total);
+                } else if q.text_search.is_some() {
+                    Metrics::incr(&ctx.metrics.search_text_queries_total);
+                } else if q.vector.is_some() {
+                    Metrics::incr(&ctx.metrics.search_vector_queries_total);
+                }
+                let ranked = q.hybrid.is_some() || q.text_search.is_some() || q.vector.is_some();
+                if ranked {
+                    let started = std::time::Instant::now();
+                    let result = handle_query(ctx, session, frame, req);
+                    ctx.metrics
+                        .ranking_latency
+                        .record_us(started.elapsed().as_micros() as u64);
+                    return result;
+                }
+            }
             handle_query(ctx, session, frame, req)
         }
         Opcode::Mutate => {
@@ -711,7 +730,7 @@ fn handle_query(
             // Plan and materialize the first page, against the transaction view
             // when one applies. Results are owned, so the transaction borrow is
             // released before the cursor is registered below.
-            let (rows, remaining) = if frame.txn_id != 0 {
+            let (rows, remaining, base_rank) = if frame.txn_id != 0 {
                 let txn = session
                     .transactions
                     .get(&frame.txn_id)
@@ -721,17 +740,17 @@ fn handle_query(
                 let rows =
                     ctx.engine
                         .txn_materialize(txn, &query, &planned.ordered[..first_end])?;
-                (rows, planned.ordered[first_end..].to_vec())
+                (rows, planned.ordered[first_end..].to_vec(), first_end)
             } else {
                 let planned = ctx.engine.plan_find(&query)?;
                 let first_end = planned.ordered.len().min(page_size);
                 let rows = ctx
                     .engine
                     .materialize(&query, &planned.ordered[..first_end])?;
-                (rows, planned.ordered[first_end..].to_vec())
+                (rows, planned.ordered[first_end..].to_vec(), first_end)
             };
             let cursor_id = if !remaining.is_empty() {
-                let id = ctx.cursors.open(query.clone(), remaining);
+                let id = ctx.cursors.open_at(query.clone(), remaining, base_rank);
                 session.cursor_ids.insert(id);
                 Metrics::gauge_set(&ctx.metrics.active_cursors, ctx.cursors.len() as u64);
                 Some(id)

@@ -7,7 +7,10 @@ use auradb_core::{Cardinality, CollectionSchema, Error, Record, RecordId, Result
 use auradb_index::{CollectionIndexes, Metric};
 
 use crate::eval;
-use crate::ir::{CountQuery, ExistsQuery, FindQuery, OrderKey, Row, VectorSearch};
+use crate::ir::{
+    CountQuery, ExistsQuery, FindQuery, FusionMode, HybridSearch, OrderKey, Row, TextRank,
+    TextSearch, BM25_DEFAULT_B, BM25_DEFAULT_K1,
+};
 use crate::plan::{Access, PlanNode};
 use crate::planner;
 use crate::stats::CollectionStats;
@@ -45,8 +48,13 @@ pub trait DataSource {
 pub enum Strategy {
     /// Exact vector scan over a vector index, then post-filtering.
     VectorExactScan,
-    /// Full-text candidate selection seeded by an inverted index.
+    /// Unranked full-text candidate selection seeded by an inverted index
+    /// (the `contains_text` boolean predicate).
     FullTextScan,
+    /// Ranked full-text (BM25) search seeded by an inverted index.
+    FullTextBm25,
+    /// Hybrid text-plus-vector ranked retrieval with score fusion.
+    Hybrid,
     /// Equality lookup seeded by a secondary/unique/primary index.
     IndexLookup,
     /// Full collection scan with filtering.
@@ -68,6 +76,12 @@ pub struct ExplainPlan {
     pub filter_present: bool,
     /// Vector clause summary, if present.
     pub vector: Option<VectorPlan>,
+    /// Ranked full-text clause summary, if present.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub text_search: Option<TextSearchPlan>,
+    /// Hybrid clause summary, if present.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub hybrid: Option<HybridPlan>,
     /// Ordering keys.
     pub order_by: Vec<OrderKey>,
     /// Relationships hydrated.
@@ -131,14 +145,102 @@ pub struct VectorPlan {
     pub k: usize,
     /// The metric.
     pub metric: String,
+    /// Number of indexed vectors compared by the exact (brute-force) scan — the
+    /// size of the vector index for this field. Reported so an operator can see
+    /// the exact-search cost; exact search remains the correctness baseline (there
+    /// is no approximate/ANN index in v1.1.0).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub vectors_scored: Option<usize>,
+}
+
+/// Ranked full-text clause summary in an EXPLAIN plan.
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct TextSearchPlan {
+    /// The searched full-text field.
+    pub field: String,
+    /// The ranking mode (`bm25` or `term_frequency`).
+    pub rank: String,
+    /// The term operator (`or` or `and`).
+    pub operator: String,
+    /// Distinct query terms after tokenization.
+    pub query_terms: usize,
+    /// Indexed documents available for ranking (corpus size).
+    pub indexed_documents: usize,
+    /// Candidate documents matched (present only for `EXPLAIN ANALYZE`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub candidates: Option<usize>,
+}
+
+/// Hybrid clause summary in an EXPLAIN plan.
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct HybridPlan {
+    /// The text field.
+    pub text_field: String,
+    /// The vector field.
+    pub vector_field: String,
+    /// The fusion mode (`weighted_sum` or `reciprocal_rank_fusion`).
+    pub fusion: String,
+    /// The text candidate source description.
+    pub text_source: String,
+    /// The vector candidate source description.
+    pub vector_source: String,
+    /// The text-signal weight.
+    pub weight_text: f32,
+    /// The vector-signal weight.
+    pub weight_vector: f32,
+    /// Requested fused result count.
+    pub top_k: usize,
+    /// Text candidate documents (present only for `EXPLAIN ANALYZE`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub text_candidates: Option<usize>,
+    /// Vector candidate documents (present only for `EXPLAIN ANALYZE`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub vector_candidates: Option<usize>,
+}
+
+/// A ranked candidate: a record id with its primary (or fused) score and, for
+/// hybrid search, the component text and vector scores. Replaces the bare
+/// `(RecordId, Option<f32>)` so component scores survive cursor paging.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Scored {
+    /// The record id.
+    pub id: RecordId,
+    /// The primary/fused relevance or similarity score, if ranked.
+    pub score: Option<f32>,
+    /// The BM25 text-relevance component, for hybrid results.
+    pub text_score: Option<f32>,
+    /// The vector-similarity component, for hybrid results.
+    pub vector_score: Option<f32>,
+}
+
+impl Scored {
+    /// An unranked candidate (equality lookup or full scan).
+    pub fn plain(id: RecordId) -> Self {
+        Scored {
+            id,
+            score: None,
+            text_score: None,
+            vector_score: None,
+        }
+    }
+
+    /// A single-signal ranked candidate.
+    pub fn ranked(id: RecordId, score: f32) -> Self {
+        Scored {
+            id,
+            score: Some(score),
+            text_score: None,
+            vector_score: None,
+        }
+    }
 }
 
 /// The ordered result of planning a [`FindQuery`]: record ids with optional
 /// vector scores, plus the plan. Ids are cheap to hold so cursors can page
 /// without materializing every row up front.
 pub struct PlannedFind {
-    /// Ordered `(record id, score)` after offset/limit.
-    pub ordered: Vec<(RecordId, Option<f32>)>,
+    /// Ordered scored candidates after offset/limit.
+    pub ordered: Vec<Scored>,
     /// The EXPLAIN plan.
     pub plan: ExplainPlan,
 }
@@ -160,46 +262,137 @@ struct ExecCounts {
     planning: std::time::Duration,
 }
 
-/// Candidate ids plus optional per-record scores (vector similarity / text
-/// relevance) from an access path.
-type Candidates = (
-    Vec<RecordId>,
-    Option<std::collections::HashMap<RecordId, f32>>,
-);
+/// The outcome of candidate selection for an access path: the candidate set
+/// (with any per-record scores), whether results are score-ordered, and optional
+/// EXPLAIN summaries for ranked-text and hybrid retrieval.
+struct Selection {
+    candidates: Vec<Scored>,
+    score_ordered: bool,
+    text_search: Option<TextSearchPlan>,
+    hybrid: Option<HybridPlan>,
+}
 
-/// Resolve candidate ids (and optional scores) for the planner's chosen access
-/// path, executed against `ds`/`indexes`.
+/// Resolve candidates (and any scores) for the planner's chosen access path.
 fn select_candidates(
     ds: &dyn DataSource,
     indexes: &CollectionIndexes,
     query: &FindQuery,
     access: &Access,
-) -> Result<Candidates> {
+) -> Result<Selection> {
     match access {
         Access::Vector { .. } => {
             let vs = query
                 .vector
                 .as_ref()
                 .expect("vector access only chosen for a vector query");
-            let (ids, scores) = vector_candidates(indexes, vs)?;
-            Ok((ids, Some(scores)))
+            let metric = Metric::parse(&vs.metric)?;
+            let neighbors = indexes.vector_nearest(&vs.field, &vs.query, vs.k, metric)?;
+            let candidates = neighbors
+                .into_iter()
+                .map(|n| Scored::ranked(n.id, n.score))
+                .collect();
+            Ok(Selection {
+                candidates,
+                score_ordered: true,
+                text_search: None,
+                hybrid: None,
+            })
         }
         Access::FullText { field, query: q } => {
             let results = indexes.text_search(field, q)?;
-            let mut ids = Vec::with_capacity(results.len());
-            let mut scores = std::collections::HashMap::new();
-            for (id, score) in results {
-                ids.push(id);
-                scores.insert(id, score);
-            }
-            Ok((ids, Some(scores)))
+            let candidates = results
+                .into_iter()
+                .map(|(id, score)| Scored::ranked(id, score))
+                .collect();
+            Ok(Selection {
+                candidates,
+                score_ordered: true,
+                text_search: None,
+                hybrid: None,
+            })
+        }
+        Access::TextRanked { field } => {
+            let ts = query
+                .text_search
+                .as_ref()
+                .expect("ranked-text access only chosen for a text_search query");
+            let candidates = ranked_text_candidates(indexes, ts)?;
+            let summary = TextSearchPlan {
+                field: field.clone(),
+                rank: match ts.rank {
+                    crate::ir::TextRank::TermFrequency => "term_frequency".into(),
+                    crate::ir::TextRank::Bm25 => "bm25".into(),
+                },
+                operator: if ts.operator.require_all() {
+                    "and"
+                } else {
+                    "or"
+                }
+                .into(),
+                query_terms: auradb_index::tokenize(&ts.query).len(),
+                indexed_documents: indexes
+                    .text_index_stats(field)
+                    .map(|s| s.documents)
+                    .unwrap_or(0),
+                candidates: Some(candidates.len()),
+            };
+            Ok(Selection {
+                candidates,
+                score_ordered: true,
+                text_search: Some(summary),
+                hybrid: None,
+            })
+        }
+        Access::Hybrid { .. } => {
+            let hs = query
+                .hybrid
+                .as_ref()
+                .expect("hybrid access only chosen for a hybrid query");
+            let (candidates, text_n, vec_n) = hybrid_candidates(indexes, hs)?;
+            let summary = HybridPlan {
+                text_field: hs.text_field.clone(),
+                vector_field: hs.vector_field.clone(),
+                fusion: match hs.fusion {
+                    crate::ir::FusionMode::ReciprocalRankFusion => "reciprocal_rank_fusion".into(),
+                    crate::ir::FusionMode::WeightedSum => "weighted_sum".into(),
+                },
+                text_source: format!("bm25:{}", hs.text_field),
+                vector_source: format!("exact_vector:{}", hs.vector_field),
+                weight_text: hs.weights.text,
+                weight_vector: hs.weights.vector,
+                top_k: hs.top_k,
+                text_candidates: Some(text_n),
+                vector_candidates: Some(vec_n),
+            };
+            Ok(Selection {
+                candidates,
+                score_ordered: true,
+                text_search: None,
+                hybrid: Some(summary),
+            })
         }
         Access::PointLookup { field, value }
         | Access::IndexLookup { field, value }
-        | Access::DocumentPath { path: field, value } => {
-            Ok((indexes.lookup_eq(field, value).unwrap_or_default(), None))
-        }
-        Access::Scan => Ok((ds.scan(&query.collection).map(|r| r.id).collect(), None)),
+        | Access::DocumentPath { path: field, value } => Ok(Selection {
+            candidates: indexes
+                .lookup_eq(field, value)
+                .unwrap_or_default()
+                .into_iter()
+                .map(Scored::plain)
+                .collect(),
+            score_ordered: false,
+            text_search: None,
+            hybrid: None,
+        }),
+        Access::Scan => Ok(Selection {
+            candidates: ds
+                .scan(&query.collection)
+                .map(|r| Scored::plain(r.id))
+                .collect(),
+            score_ordered: false,
+            text_search: None,
+            hybrid: None,
+        }),
     }
 }
 
@@ -208,6 +401,8 @@ fn strategy_for(access: &Access) -> Strategy {
     match access {
         Access::Vector { .. } => Strategy::VectorExactScan,
         Access::FullText { .. } => Strategy::FullTextScan,
+        Access::TextRanked { .. } => Strategy::FullTextBm25,
+        Access::Hybrid { .. } => Strategy::Hybrid,
         Access::PointLookup { .. } | Access::IndexLookup { .. } | Access::DocumentPath { .. } => {
             Strategy::IndexLookup
         }
@@ -219,6 +414,9 @@ fn strategy_for(access: &Access) -> Strategy {
 /// selects candidates, filters, orders, and applies offset/limit. Returns the
 /// ordered ids, the plan, and execution counts.
 fn run_find(ds: &dyn DataSource, query: &FindQuery) -> Result<(PlannedFind, ExecCounts)> {
+    query
+        .validate_search_clauses()
+        .map_err(Error::InvalidRequest)?;
     let schema = require_schema(ds, &query.collection)?;
     let indexes = ds
         .indexes(&query.collection)
@@ -236,19 +434,17 @@ fn run_find(ds: &dyn DataSource, query: &FindQuery) -> Result<(PlannedFind, Exec
     let planning = plan_start.elapsed();
 
     // 2. Candidate selection per the chosen access path.
-    let (candidates, scores) = select_candidates(ds, indexes, query, &plan.access)?;
-    let scanned = candidates.len();
+    let selection = select_candidates(ds, indexes, query, &plan.access)?;
+    let scanned = selection.candidates.len();
     if matches!(plan.access, Access::Scan) && scanned > 10_000 {
         warnings.push(format!("full scan of {scanned} records; consider an index"));
     }
-    // Vector and full-text selections carry per-record scores and are ordered by
-    // descending score; other selections honor `order_by`.
-    let score_ordered = scores.is_some();
+    let score_ordered = selection.score_ordered;
 
     // 3. Filter candidates (always re-applied, even after an index seed).
-    let mut matched: Vec<(RecordId, Option<f32>)> = Vec::new();
-    for id in candidates {
-        let record = match ds.get(&query.collection, id) {
+    let mut matched: Vec<Scored> = Vec::new();
+    for cand in selection.candidates {
+        let record = match ds.get(&query.collection, cand.id) {
             Some(r) => r,
             None => continue,
         };
@@ -257,26 +453,30 @@ fn run_find(ds: &dyn DataSource, query: &FindQuery) -> Result<(PlannedFind, Exec
                 continue;
             }
         }
-        let score = scores.as_ref().and_then(|m| m.get(&id).copied());
-        matched.push((id, score));
+        matched.push(cand);
     }
     let matched_count = matched.len();
 
     // 4. Ordering.
     if score_ordered {
         matched.sort_by(|a, b| {
-            b.1.partial_cmp(&a.1)
+            b.score
+                .partial_cmp(&a.score)
                 .unwrap_or(Ordering::Equal)
-                .then(a.0.cmp(&b.0))
+                .then(a.id.cmp(&b.id))
         });
     } else if !query.order_by.is_empty() {
         order_records(ds, &query.collection, &mut matched, &query.order_by);
     }
 
-    // 5. Offset / limit.
+    // 5. Offset / limit. A hybrid clause's `top_k` acts as the limit when no
+    // explicit `limit` is set, so fusion+filter happen before the cut.
     let offset = query.offset.unwrap_or(0);
-    let mut ordered: Vec<(RecordId, Option<f32>)> = matched.into_iter().skip(offset).collect();
-    if let Some(limit) = query.limit {
+    let mut ordered: Vec<Scored> = matched.into_iter().skip(offset).collect();
+    let effective_limit = query
+        .limit
+        .or_else(|| query.hybrid.as_ref().map(|h| h.top_k));
+    if let Some(limit) = effective_limit {
         ordered.truncate(limit);
     }
     let returned = ordered.len();
@@ -291,7 +491,14 @@ fn run_find(ds: &dyn DataSource, query: &FindQuery) -> Result<(PlannedFind, Exec
             field: v.field.clone(),
             k: v.k,
             metric: v.metric.clone(),
+            // The exact scan compares every indexed vector for the field.
+            vectors_scored: indexes
+                .vector_field_stats()
+                .find(|(f, _, _)| *f == v.field)
+                .map(|(_, _, count)| count),
         }),
+        text_search: selection.text_search,
+        hybrid: selection.hybrid,
         order_by: query.order_by.clone(),
         includes: query.includes.clone(),
         warnings,
@@ -319,30 +526,165 @@ pub fn execute_find(ds: &dyn DataSource, query: &FindQuery) -> Result<PlannedFin
     Ok(run_find(ds, query)?.0)
 }
 
-fn vector_candidates(
-    indexes: &CollectionIndexes,
-    vs: &VectorSearch,
-) -> Result<(Vec<RecordId>, std::collections::HashMap<RecordId, f32>)> {
-    let metric = Metric::parse(&vs.metric)?;
-    let neighbors = indexes.vector_nearest(&vs.field, &vs.query, vs.k, metric)?;
-    let mut ids = Vec::with_capacity(neighbors.len());
-    let mut scores = std::collections::HashMap::new();
-    for n in neighbors {
-        ids.push(n.id);
-        scores.insert(n.id, n.score);
+/// Resolve BM25-ranked text candidates for a `text_search` clause.
+fn ranked_text_candidates(indexes: &CollectionIndexes, ts: &TextSearch) -> Result<Vec<Scored>> {
+    if auradb_index::tokenize(&ts.query).is_empty() {
+        return Err(Error::InvalidRequest(
+            "text_search query has no searchable terms".into(),
+        ));
     }
-    Ok((ids, scores))
+    let require_all = ts.operator.require_all();
+    let results = match ts.rank {
+        TextRank::TermFrequency => indexes.text_search(&ts.field, &ts.query)?,
+        TextRank::Bm25 => {
+            let k1 = ts.k1.unwrap_or(BM25_DEFAULT_K1);
+            let b = ts.b.unwrap_or(BM25_DEFAULT_B);
+            indexes.text_bm25_search(&ts.field, &ts.query, require_all, k1, b)?
+        }
+    };
+    Ok(results
+        .into_iter()
+        .map(|(id, score)| Scored::ranked(id, score))
+        .collect())
 }
 
-fn order_records(
-    ds: &dyn DataSource,
-    collection: &str,
-    matched: &mut [(RecordId, Option<f32>)],
-    keys: &[OrderKey],
-) {
+/// The reciprocal-rank-fusion smoothing constant. A larger value flattens the
+/// influence of high ranks; 60 is the value from the original RRF paper.
+const RRF_K: f32 = 60.0;
+
+/// Resolve fused hybrid candidates plus the per-signal candidate counts.
+fn hybrid_candidates(
+    indexes: &CollectionIndexes,
+    hs: &HybridSearch,
+) -> Result<(Vec<Scored>, usize, usize)> {
+    if auradb_index::tokenize(&hs.text_query).is_empty() {
+        return Err(Error::InvalidRequest(
+            "hybrid text query has no searchable terms".into(),
+        ));
+    }
+    if !(hs.weights.text.is_finite() && hs.weights.vector.is_finite())
+        || hs.weights.text < 0.0
+        || hs.weights.vector < 0.0
+        || (hs.weights.text == 0.0 && hs.weights.vector == 0.0)
+    {
+        return Err(Error::InvalidRequest(
+            "hybrid weights must be non-negative and not both zero".into(),
+        ));
+    }
+    if hs.top_k == 0 {
+        return Err(Error::InvalidRequest("hybrid top_k must be >= 1".into()));
+    }
+    // Text signal (BM25). The structured dimension-mismatch error comes from the
+    // vector index below; the text index validates its own field.
+    let k1 = hs.k1.unwrap_or(BM25_DEFAULT_K1);
+    let b = hs.b.unwrap_or(BM25_DEFAULT_B);
+    let text = indexes.text_bm25_search(
+        &hs.text_field,
+        &hs.text_query,
+        hs.operator.require_all(),
+        k1,
+        b,
+    )?;
+    // Vector signal (exact). Fetch a generous candidate pool so fusion has both
+    // signals to combine, then truncate after fusion.
+    let metric = Metric::parse(hs.metric_name())?;
+    let pool = hs.top_k.saturating_mul(4).max(hs.top_k);
+    let vectors = indexes.vector_nearest(&hs.vector_field, &hs.vector, pool, metric)?;
+
+    let text_n = text.len();
+    let vec_n = vectors.len();
+    let text_map: std::collections::HashMap<RecordId, f32> = text.iter().copied().collect();
+    let vec_map: std::collections::HashMap<RecordId, f32> =
+        vectors.iter().map(|n| (n.id, n.score)).collect();
+
+    // Deterministic candidate union ordered by id so fusion is reproducible.
+    let mut ids: Vec<RecordId> = text_map.keys().chain(vec_map.keys()).copied().collect();
+    ids.sort_unstable();
+    ids.dedup();
+
+    let fused: Vec<Scored> = match hs.fusion {
+        FusionMode::WeightedSum => {
+            let (tmin, tmax) = min_max(text.iter().map(|(_, s)| *s));
+            let (vmin, vmax) = min_max(vectors.iter().map(|n| n.score));
+            ids.iter()
+                .map(|id| {
+                    let t = text_map.get(id).copied();
+                    let v = vec_map.get(id).copied();
+                    let tn = t.map(|s| normalize(s, tmin, tmax)).unwrap_or(0.0);
+                    let vn = v.map(|s| normalize(s, vmin, vmax)).unwrap_or(0.0);
+                    Scored {
+                        id: *id,
+                        score: Some(hs.weights.text * tn + hs.weights.vector * vn),
+                        text_score: t,
+                        vector_score: v,
+                    }
+                })
+                .collect()
+        }
+        FusionMode::ReciprocalRankFusion => {
+            let text_rank = rank_map(&text);
+            let vec_rank = rank_map(&vectors.iter().map(|n| (n.id, n.score)).collect::<Vec<_>>());
+            ids.iter()
+                .map(|id| {
+                    let t_contrib = text_rank
+                        .get(id)
+                        .map(|r| hs.weights.text / (RRF_K + *r as f32))
+                        .unwrap_or(0.0);
+                    let v_contrib = vec_rank
+                        .get(id)
+                        .map(|r| hs.weights.vector / (RRF_K + *r as f32))
+                        .unwrap_or(0.0);
+                    Scored {
+                        id: *id,
+                        score: Some(t_contrib + v_contrib),
+                        text_score: text_map.get(id).copied(),
+                        vector_score: vec_map.get(id).copied(),
+                    }
+                })
+                .collect()
+        }
+    };
+    Ok((fused, text_n, vec_n))
+}
+
+/// Min and max of a score iterator, or `(0, 0)` when empty.
+fn min_max(scores: impl Iterator<Item = f32>) -> (f32, f32) {
+    let mut min = f32::INFINITY;
+    let mut max = f32::NEG_INFINITY;
+    for s in scores {
+        min = min.min(s);
+        max = max.max(s);
+    }
+    if min.is_finite() {
+        (min, max)
+    } else {
+        (0.0, 0.0)
+    }
+}
+
+/// Min-max normalize `s` into `[0, 1]`; a zero-width range maps any present value
+/// to `1.0` so a single candidate still counts.
+fn normalize(s: f32, min: f32, max: f32) -> f32 {
+    if (max - min).abs() < f32::EPSILON {
+        1.0
+    } else {
+        (s - min) / (max - min)
+    }
+}
+
+/// 1-based rank of each id in a descending-score list (input already ordered).
+fn rank_map(scored: &[(RecordId, f32)]) -> std::collections::HashMap<RecordId, usize> {
+    scored
+        .iter()
+        .enumerate()
+        .map(|(i, (id, _))| (*id, i + 1))
+        .collect()
+}
+
+fn order_records(ds: &dyn DataSource, collection: &str, matched: &mut [Scored], keys: &[OrderKey]) {
     matched.sort_by(|a, b| {
-        let ra = ds.get(collection, a.0);
-        let rb = ds.get(collection, b.0);
+        let ra = ds.get(collection, a.id);
+        let rb = ds.get(collection, b.id);
         for key in keys {
             let va = ra.and_then(|r| r.get_path(&key.field));
             let vb = rb.and_then(|r| r.get_path(&key.field));
@@ -357,20 +699,25 @@ fn order_records(
                 return ord;
             }
         }
-        a.0.cmp(&b.0)
+        a.id.cmp(&b.id)
     });
 }
 
-/// Materialize a page of rows (projection + relationship hydration + score).
-pub fn materialize(
+/// Materialize a page of rows (projection + relationship hydration + scores).
+/// `start_rank` is the 0-based offset of this page within the full ordered result
+/// so each row's reported `rank` is stable across cursor pages.
+pub fn materialize_page(
     ds: &dyn DataSource,
     query: &FindQuery,
-    page: &[(RecordId, Option<f32>)],
+    page: &[Scored],
+    start_rank: usize,
 ) -> Result<Vec<Row>> {
     let schema = require_schema(ds, &query.collection)?;
+    // Ranked clauses (vector / text_search / hybrid) expose a 1-based rank.
+    let ranked = query.vector.is_some() || query.text_search.is_some() || query.hybrid.is_some();
     let mut rows = Vec::with_capacity(page.len());
-    for (id, score) in page {
-        let record = match ds.get(&query.collection, *id) {
+    for (offset, cand) in page.iter().enumerate() {
+        let record = match ds.get(&query.collection, cand.id) {
             Some(r) => r,
             None => continue,
         };
@@ -403,13 +750,26 @@ pub fn materialize(
             includes.insert(rel_name.clone(), related);
         }
         rows.push(Row {
-            id: id.to_string(),
+            id: cand.id.to_string(),
             fields,
-            score: *score,
+            score: cand.score,
+            text_score: cand.text_score,
+            vector_score: cand.vector_score,
+            rank: if ranked {
+                Some(start_rank + offset + 1)
+            } else {
+                None
+            },
             includes,
         });
     }
     Ok(rows)
+}
+
+/// Materialize the first page of a result (rank starts at 1). Kept for callers
+/// that page from the beginning; cursors use [`materialize_page`] with an offset.
+pub fn materialize(ds: &dyn DataSource, query: &FindQuery, page: &[Scored]) -> Result<Vec<Row>> {
+    materialize_page(ds, query, page, 0)
 }
 
 fn hydrate(
@@ -516,6 +876,12 @@ fn selection_reason(plan: &ExplainPlan) -> String {
         }
         (Strategy::FullTextScan, Some(idx)) => {
             format!("full-text index `{idx}` serves the text query")
+        }
+        (Strategy::FullTextBm25, Some(idx)) => {
+            format!("full-text index `{idx}` serves the BM25 ranked search")
+        }
+        (Strategy::Hybrid, Some(idx)) => {
+            format!("hybrid fusion over `{idx}` (BM25 text + exact vector)")
         }
         (Strategy::VectorExactScan, Some(idx)) => {
             format!("vector index `{idx}` serves the nearest-neighbour search")

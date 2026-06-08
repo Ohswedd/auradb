@@ -7,7 +7,7 @@
 [![CI](https://github.com/Ohswedd/auradb/actions/workflows/ci.yml/badge.svg)](https://github.com/Ohswedd/auradb/actions/workflows/ci.yml)
 [![Security](https://github.com/Ohswedd/auradb/actions/workflows/security.yml/badge.svg)](https://github.com/Ohswedd/auradb/actions/workflows/security.yml)
 [![Docker](https://github.com/Ohswedd/auradb/actions/workflows/docker.yml/badge.svg)](https://github.com/Ohswedd/auradb/actions/workflows/docker.yml)
-[![Release](https://img.shields.io/badge/release-v1.0.1-green.svg)](CHANGELOG.md)
+[![Release](https://img.shields.io/badge/release-v1.1.0-green.svg)](CHANGELOG.md)
 [![Rust](https://img.shields.io/badge/rust-1.85%2B-orange.svg)](https://www.rust-lang.org)
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
 
@@ -30,14 +30,17 @@ demo.
 
 ## Scope and honesty
 
-**AuraDB v1.0.1 is the first production patch on the v1.0 single-node production
-line.** It is a documentation, validation, and release-engineering patch: it
-re-verifies the v1.0 production gates on the v1.0.1 build and refreshes the version
-pointers and support docs. It carries forward **all** v1.0.0 behavior and adds
-**no** new architecture, semantics, or on-disk or wire format change. Single-node
-mode remains the recommended production mode; multi-node remains an HA candidate
-preview, not production HA. See
-[`docs/V1_0_1_RELEASE_NOTES.md`](docs/V1_0_1_RELEASE_NOTES.md).
+**AuraDB v1.1.0 is the first larger post-1.0 release: search and ranking.** It adds
+BM25 ranked full-text search, hybrid text+vector ranking, planner awareness for
+ranked retrieval, search CLI improvements, and connector-native support, without
+changing the production support claim. The new query clauses are additive Query IR
+and response fields, so **Aura Wire Protocol 1 and storage format v2 are unchanged**.
+Exact vector search remains the correctness baseline; approximate (ANN/HNSW) vector
+search is not implemented. Single-node mode remains the recommended production mode;
+multi-node remains an HA candidate preview, not production HA. The paired client is
+Aura Connector v0.5.0 (compatible 0.5.x). See
+[`docs/V1_1_RELEASE_NOTES.md`](docs/V1_1_RELEASE_NOTES.md) and
+[`docs/SEARCH_AND_RANKING.md`](docs/SEARCH_AND_RANKING.md).
 
 **AuraDB v1.0.0 is a single-node production release with a multi-node HA candidate
 preview.** It supports production **single-node** deployments configured with
@@ -64,8 +67,10 @@ or corruption issue requires a documented change or migration. Aura Connector v0
 | Single-node with auth + TLS + backups + monitoring | Stable | **Yes (recommended)** |
 | Docker secure Compose | Stable | **Yes** |
 | Backup / restore, upgrade from v0.x | Stable | **Yes** |
-| Aura Connector 0.4.x, AWP 1, storage format v2 | Stable / frozen for v1 | **Yes** |
+| Aura Connector 0.5.x, AWP 1, storage format v2 | Stable / frozen for v1 | **Yes** |
 | Exact vector search, tokenized full-text | Stable | **Yes** |
+| BM25 ranked full-text, hybrid text+vector search | Stable (new in v1.1.0) | **Yes** |
+| Approximate (ANN/HNSW) vector search | Not implemented | No |
 | Static multi-node cluster, peer networking | HA candidate preview | No (not production HA) |
 
 See [`docs/SUPPORT_POLICY.md`](docs/SUPPORT_POLICY.md) for the full matrix and the
@@ -194,8 +199,9 @@ replication work, but the preview is off by default, gated behind two opt-ins
 and a single-node cluster provides no fault tolerance. The following are not
 implemented and not claimed: production multi-node clustering, automatic
 failover, dynamic membership, linearizable reads, follower reads, distributed
-transactions, sharding, multi-region; approximate (ANN/HNSW) vector indexes; BM25
-full-text and hybrid fusion ranking; and serializable isolation.
+transactions, sharding, multi-region; approximate (ANN/HNSW) vector indexes; and
+serializable isolation. (BM25 ranked full-text and hybrid text+vector fusion ranking
+are implemented in v1.1.0 — see [`docs/SEARCH_AND_RANKING.md`](docs/SEARCH_AND_RANKING.md).)
 Authentication and TLS are now implemented and enforced
 when enabled, but RBAC, field-level encryption, encryption at rest, and audit
 logging are not. Unsupported operations return a structured error. See

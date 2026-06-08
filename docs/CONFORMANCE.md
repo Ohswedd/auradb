@@ -42,6 +42,32 @@ forces cursor streaming via a small page size.
 
 These run as part of the conformance suite alongside the scenarios above.
 
+### Search and ranking scenarios (1.1.0)
+
+- **`text_search_bm25`** - a BM25 ranked full-text query returns documents ordered
+  by relevance (the dense, short document ranks first) with a 1-based `rank`.
+- **`hybrid_search`** - a hybrid text+vector query returns rows with a fused score.
+- **`search_explain_analyze`** - `EXPLAIN ANALYZE` of a ranked text query returns the
+  ranked-text plan summary plus execution metrics.
+
+These run as part of `run_all` alongside the scenarios above (exercising the additive
+`text_search` and `hybrid` Query IR clauses over AWP 1), and survive the
+`data_survives_server_restart` integration test. Exact vector search remains the
+correctness baseline; there is no approximate-vector scenario because ANN is not
+implemented.
+
+The Python connector search harness `tests/conformance/python/run_connector_search.py`
+drives BM25, exact vector, and hybrid search and capability negotiation against a live
+server through Aura Connector v0.5.0. For cluster mode,
+`tests/conformance/python/run_connector_search_cluster.py` adds: BM25 and hybrid on the
+leader, leader-only search-index writes, redirect-preserves-search-query, transaction
+no-auto-redirect, search after a leader change, and a non-failing observation of the
+follower read behavior (followers serve eventually-consistent, non-linearizable reads — send
+search to the leader for correctness). Multi-node remains an HA candidate preview, not
+production HA. At the engine level,
+`crates/auradb-replication/tests/multi_node.rs::cluster_search_bm25_and_hybrid_after_replication`
+confirms a follower rebuilds its BM25 and vector indexes from the replicated log.
+
 ### Cluster scenarios (0.4.0)
 
 These scenarios exercise single-node cluster mode end to end. They confirm the

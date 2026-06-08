@@ -130,7 +130,10 @@ experimental_multi_node = true
   dynamic membership.**
 - Writes go to the **leader**; followers reject writes with a structured
   `not_leader` error carrying a leader hint, and the connection stays healthy.
-  Followers reject reads by default.
+  Followers serve reads from their locally replicated state — these are
+  **eventually consistent and not linearizable** (they may be briefly stale
+  relative to the leader), so they are not a production read-consistency guarantee.
+  Send reads to the leader for fresh, correct results.
 - The leader write path **blocks until a majority commits**; a minority cannot
   commit.
 - A restarted follower replays its durable log and is brought current by the
@@ -343,10 +346,14 @@ error code safely. See [AURA_CONNECTOR_COMPATIBILITY.md](AURA_CONNECTOR_COMPATIB
 
 ### Read policy
 
-Reads are served by the leader. **Followers reject reads by default.** This
-release does **not** offer linearizable reads, follower reads, or stale-read
-tuning — those are not implemented and are not claimed. In a single-node cluster,
-leader-served reads are simply reads against the only node.
+The **recommended, supported path is to send reads to the leader** — they are fresh
+and correct. Followers also serve reads from their locally replicated state, but
+these are **eventually consistent and not linearizable**: they may be briefly stale
+relative to the leader, and the preview does **not** offer linearizable reads or any
+stale-read consistency tuning — those are not implemented and are not claimed as a
+production guarantee. In a single-node cluster, leader-served reads are simply reads
+against the only node. This applies uniformly to all reads, including ranked search
+(BM25, vector, hybrid) — see [SEARCH_AND_RANKING.md](SEARCH_AND_RANKING.md).
 
 ## Cluster health and status
 
@@ -396,7 +403,8 @@ This release deliberately does not provide, and does not claim:
 - Fault tolerance from a single-node cluster (it has the same availability as a
   single non-cluster node).
 - Automatic failover.
-- Linearizable reads or follower reads (followers reject reads).
+- Linearizable reads or a production read-consistency guarantee (followers serve
+  only eventually-consistent, non-linearizable reads; send reads to the leader).
 - Distributed transactions, sharding, or multi-region deployment.
 - Dynamic membership (`join` / `leave` / `step-down`) or joint consensus;
   membership is static.

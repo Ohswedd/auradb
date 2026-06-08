@@ -55,7 +55,8 @@ The static multi-node cluster explicitly does **not** provide:
 - dynamic membership (no `join` / `leave` / `step-down`; membership is static);
 - distributed transactions;
 - sharding or multi-region deployment;
-- linearizable follower reads (followers reject reads by default);
+- linearizable follower reads or a production read-consistency guarantee (followers
+  serve only eventually-consistent, non-linearizable reads; send reads to the leader);
 - an operator-driven automatic-failover SLA.
 
 See [CLUSTERING.md](CLUSTERING.md) for the architecture and

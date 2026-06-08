@@ -102,3 +102,14 @@ in this release.
 Primary/secondary lookup, unique violation, update-vs-self, delete removes
 entry, rebuild + consistency check, vector nearest ordering, and dimension
 enforcement.
+
+## BM25 statistics (v1.1.0)
+
+Each full-text inverted index additionally tracks the per-document field length and a running
+total, which — together with per-term document frequency (the length of a term's posting
+list) and the corpus size — are the statistics BM25 needs (`avgdl`, `N`, `df`, `tf`). These
+persist additively inside the existing index snapshot (`TextIndexData.doc_lengths`); the
+storage log format and index file framing are unchanged. A snapshot written before v1.1.0
+has no length table and is rebuilt safely on open by summing each document's term
+frequencies. `auradb index check` reports BM25 document counts, distinct terms, and average
+document length, and warns if length statistics look incomplete (run `auradb index rebuild`).

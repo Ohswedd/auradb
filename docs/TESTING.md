@@ -564,3 +564,23 @@ no flaky sleeps.
   open unchanged; compaction metadata initializes safely; v0.4.0 snapshot manifests
   still decode; future formats are rejected.
 - `cmd_bench_compare` unit tests cover the benchmark regression comparison logic.
+
+## Search and ranking tests (v1.1.0)
+
+The search and ranking surface is covered at every layer:
+
+- **Index unit tests** (`crates/auradb-index`): BM25 ranking by term density and rarity,
+  document-length normalization, AND/OR semantics, empty-query/corpus handling, missing-index
+  errors, and BM25 statistics persistence and rebuild from a pre-v1.1.0 snapshot.
+- **Query/planner unit tests** (`crates/auradb-query`): ranked-text and hybrid IR round-trips,
+  conflicting-clause rejection, and planner selection of BM25 and hybrid access paths.
+- **Engine integration tests** (`crates/auradb/tests/search_ranking.rs`,
+  `crates/auradb/tests/exact_vector.rs`): end-to-end BM25, hybrid (weighted-sum and RRF,
+  weight/dimension validation, deterministic tie-breaks), EXPLAIN/EXPLAIN ANALYZE shapes,
+  restart persistence, and a large-dataset exact-vector regression against a brute-force
+  reference.
+- **CLI tests** (`crates/auradb-cli`): `index check` BM25/vector reporting, `stats analyze`
+  full-text refresh, `search explain`, and a dump/restore round-trip that re-ranks correctly.
+- **Conformance** (`crates/auradb-conformance`): `text_search_bm25`, `hybrid_search`, and
+  `search_explain_analyze` scenarios run by `run_all`, plus the Python
+  `run_connector_search.py` harness against a live server.

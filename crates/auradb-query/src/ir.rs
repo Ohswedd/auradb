@@ -102,6 +102,137 @@ pub struct VectorSearch {
     pub metric: String,
 }
 
+/// The default BM25 term-saturation parameter `k1`.
+pub const BM25_DEFAULT_K1: f32 = 1.2;
+/// The default BM25 length-normalization parameter `b`.
+pub const BM25_DEFAULT_B: f32 = 0.75;
+
+/// How a ranked full-text query combines its terms.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TextOperator {
+    /// A document matches if it contains any query term; all matching terms
+    /// contribute to its relevance score. This is the relevance-ranking default.
+    #[default]
+    Or,
+    /// A document matches only if it contains every distinct query term.
+    And,
+}
+
+impl TextOperator {
+    /// Whether every query term is required (AND semantics).
+    pub fn require_all(self) -> bool {
+        matches!(self, TextOperator::And)
+    }
+}
+
+/// The ranking function applied to a ranked full-text query.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TextRank {
+    /// Okapi BM25 relevance ranking (the default for ranked text search).
+    #[default]
+    Bm25,
+    /// Summed term-frequency ranking, matching legacy `contains_text` scoring.
+    TermFrequency,
+}
+
+/// A ranked full-text search clause (BM25-style relevance). Distinct from the
+/// `contains_text` filter, which is an unranked boolean-AND predicate preserved
+/// for compatibility; this clause returns documents ordered by relevance score.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct TextSearch {
+    /// The full-text indexed field (dotted path supported).
+    pub field: String,
+    /// The query text.
+    pub query: String,
+    /// How query terms are combined.
+    #[serde(default)]
+    pub operator: TextOperator,
+    /// The ranking function.
+    #[serde(default)]
+    pub rank: TextRank,
+    /// BM25 `k1` override (defaults to [`BM25_DEFAULT_K1`]).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub k1: Option<f32>,
+    /// BM25 `b` override (defaults to [`BM25_DEFAULT_B`]).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub b: Option<f32>,
+}
+
+/// The score-fusion strategy for a hybrid query.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum FusionMode {
+    /// Min-max normalize each signal's scores to `[0, 1]`, then combine with the
+    /// configured weights.
+    #[default]
+    WeightedSum,
+    /// Reciprocal rank fusion: combine `weight / (rrf_k + rank)` over each
+    /// signal's rank ordering. Robust to score-scale differences.
+    ReciprocalRankFusion,
+}
+
+/// Per-signal weights for hybrid fusion. Both default to `0.5`.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct HybridWeights {
+    /// Weight applied to the text relevance signal.
+    pub text: f32,
+    /// Weight applied to the vector similarity signal.
+    pub vector: f32,
+}
+
+impl Default for HybridWeights {
+    fn default() -> Self {
+        HybridWeights {
+            text: 0.5,
+            vector: 0.5,
+        }
+    }
+}
+
+/// A hybrid text-plus-vector search clause combining BM25 text relevance with
+/// exact vector similarity under a deterministic fusion of the two signals.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct HybridSearch {
+    /// The full-text indexed field.
+    pub text_field: String,
+    /// The text query.
+    pub text_query: String,
+    /// The vector field.
+    pub vector_field: String,
+    /// The query vector.
+    pub vector: Vec<f32>,
+    /// The number of fused results to return.
+    pub top_k: usize,
+    /// The vector metric name (`cosine`, `euclidean`, `dot_product`); defaults to
+    /// `cosine` when omitted.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub metric: Option<String>,
+    /// Per-signal fusion weights.
+    #[serde(default)]
+    pub weights: HybridWeights,
+    /// The fusion strategy.
+    #[serde(default)]
+    pub fusion: FusionMode,
+    /// How the text terms are combined.
+    #[serde(default)]
+    pub operator: TextOperator,
+    /// BM25 `k1` override (defaults to [`BM25_DEFAULT_K1`]).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub k1: Option<f32>,
+    /// BM25 `b` override (defaults to [`BM25_DEFAULT_B`]).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub b: Option<f32>,
+}
+
+impl HybridSearch {
+    /// The vector metric, defaulting to `cosine`.
+    pub fn metric_name(&self) -> &str {
+        self.metric.as_deref().unwrap_or("cosine")
+    }
+}
+
 /// A read query returning matching rows.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct FindQuery {
@@ -113,8 +244,18 @@ pub struct FindQuery {
     /// Optional vector nearest-neighbour clause (applied before ordering).
     #[serde(default)]
     pub vector: Option<VectorSearch>,
-    /// Ordering keys (ignored when a vector clause is present, which orders by
-    /// similarity).
+    /// Optional ranked full-text (BM25) clause. Mutually exclusive with `vector`
+    /// and `hybrid`; orders results by relevance score. Boxed to keep the
+    /// `ReadRequest` enum compact.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub text_search: Option<Box<TextSearch>>,
+    /// Optional hybrid text-plus-vector clause. Mutually exclusive with `vector`
+    /// and `text_search`; orders results by fused score. Boxed to keep the
+    /// `ReadRequest` enum compact.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub hybrid: Option<Box<HybridSearch>>,
+    /// Ordering keys (ignored when a vector, text-search, or hybrid clause is
+    /// present, which order by score).
     #[serde(default)]
     pub order_by: Vec<OrderKey>,
     /// Maximum number of rows to return.
@@ -138,12 +279,33 @@ impl FindQuery {
             collection: collection.into(),
             filter: None,
             vector: None,
+            text_search: None,
+            hybrid: None,
             order_by: Vec::new(),
             limit: None,
             offset: None,
             projection: None,
             includes: Vec::new(),
         }
+    }
+
+    /// Validate that at most one ranked-retrieval clause is set. Returns a
+    /// structured error otherwise so the engine rejects ambiguous requests.
+    pub fn validate_search_clauses(&self) -> Result<(), String> {
+        let set = [
+            self.vector.is_some(),
+            self.text_search.is_some(),
+            self.hybrid.is_some(),
+        ]
+        .into_iter()
+        .filter(|x| *x)
+        .count();
+        if set > 1 {
+            return Err(
+                "at most one of `vector`, `text_search`, or `hybrid` may be set on a query".into(),
+            );
+        }
+        Ok(())
     }
 }
 
@@ -271,9 +433,19 @@ pub struct Row {
     pub id: String,
     /// The (possibly projected) fields.
     pub fields: Document,
-    /// Vector similarity score, when the query had a vector clause.
+    /// Relevance/similarity score, when the query had a vector, text-search, or
+    /// hybrid clause. For hybrid this is the fused score.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub score: Option<f32>,
+    /// The text-relevance component of a hybrid score, when applicable.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub text_score: Option<f32>,
+    /// The vector-similarity component of a hybrid score, when applicable.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub vector_score: Option<f32>,
+    /// The 1-based rank of this row within a ranked result set, when applicable.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rank: Option<usize>,
     /// Hydrated related records keyed by relationship name.
     #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
     pub includes: std::collections::BTreeMap<String, Vec<Document>>,
@@ -310,6 +482,8 @@ mod tests {
                 ],
             }),
             vector: None,
+            text_search: None,
+            hybrid: None,
             order_by: vec![OrderKey {
                 field: "created_at".into(),
                 desc: true,
@@ -322,6 +496,74 @@ mod tests {
         let json = serde_json::to_string(&q).unwrap();
         let back: FindQuery = serde_json::from_str(&json).unwrap();
         assert_eq!(q, back);
+    }
+
+    #[test]
+    fn text_search_roundtrips_with_defaults() {
+        let mut q = FindQuery::new("Doc");
+        q.text_search = Some(Box::new(TextSearch {
+            field: "body".into(),
+            query: "raft consensus".into(),
+            operator: TextOperator::default(),
+            rank: TextRank::default(),
+            k1: None,
+            b: None,
+        }));
+        let json = serde_json::to_string(&q).unwrap();
+        let back: FindQuery = serde_json::from_str(&json).unwrap();
+        assert_eq!(q, back);
+        assert!(q.validate_search_clauses().is_ok());
+    }
+
+    #[test]
+    fn hybrid_roundtrips_and_defaults_apply() {
+        let h = HybridSearch {
+            text_field: "body".into(),
+            text_query: "vector index".into(),
+            vector_field: "embedding".into(),
+            vector: vec![0.1, 0.2, 0.3],
+            top_k: 5,
+            metric: None,
+            weights: HybridWeights::default(),
+            fusion: FusionMode::default(),
+            operator: TextOperator::default(),
+            k1: None,
+            b: None,
+        };
+        let json = serde_json::to_string(&h).unwrap();
+        let back: HybridSearch = serde_json::from_str(&json).unwrap();
+        assert_eq!(h, back);
+        assert_eq!(back.metric_name(), "cosine");
+        assert_eq!(back.weights.text, 0.5);
+    }
+
+    #[test]
+    fn conflicting_search_clauses_rejected() {
+        let mut q = FindQuery::new("Doc");
+        q.vector = Some(VectorSearch {
+            field: "embedding".into(),
+            query: vec![1.0],
+            k: 1,
+            metric: "cosine".into(),
+        });
+        q.text_search = Some(Box::new(TextSearch {
+            field: "body".into(),
+            query: "x".into(),
+            operator: TextOperator::default(),
+            rank: TextRank::default(),
+            k1: None,
+            b: None,
+        }));
+        assert!(q.validate_search_clauses().is_err());
+    }
+
+    #[test]
+    fn legacy_find_query_json_without_search_fields_deserializes() {
+        // A request from an older connector that omits text_search/hybrid.
+        let json = r#"{"collection":"Doc"}"#;
+        let q: FindQuery = serde_json::from_str(json).unwrap();
+        assert!(q.text_search.is_none());
+        assert!(q.hybrid.is_none());
     }
 
     #[test]

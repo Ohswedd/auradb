@@ -85,13 +85,15 @@ jobs:
       - name: Build server
         run: cargo build --release -p auradb-cli
 
-      - name: Install Aura Connector (>= 0.3, < 0.4)
+      - name: Install Aura Connector (>= 0.5, < 0.6)
         run: |
-          # The native AuraDB backend ships in aura-connector 0.3.x, the matching
-          # client for AuraDB 0.2.x. It is published, so this install is required
-          # and must succeed; a failure fails the job.
-          python -m pip install --upgrade "aura-connector>=0.3,<0.4"
-          python -c "import aura; assert aura.__version__ >= '0.3.0', aura.__version__"
+          # Aura Connector 0.5.x is the matching client for AuraDB 1.1.0 (search and
+          # ranking APIs over the unchanged AWP 1). Coordinated releases publish the
+          # connector first, so this install is required and must succeed; a failure
+          # fails the job. For a pre-release run, install the local wheel instead:
+          #   python -m pip install ../aura-connector
+          python -m pip install --upgrade "aura-connector>=0.5,<0.6"
+          python -c "import aura; assert aura.__version__ >= '0.5.0', aura.__version__"
 
       - name: Connector smoke (auth disabled)
         run: |
@@ -118,4 +120,12 @@ jobs:
           SRV=$!
           sleep 2
           python tests/conformance/python/run_connector_conformance.py --addr 127.0.0.1:7181
+          kill $SRV
+
+      - name: Connector search conformance (v1.1.0 search and ranking)
+        run: |
+          ./target/release/auradb server --data-dir .local/search --bind 127.0.0.1 --port 7184 &
+          SRV=$!
+          sleep 2
+          python tests/conformance/python/run_connector_search.py --addr 127.0.0.1:7184
           kill $SRV

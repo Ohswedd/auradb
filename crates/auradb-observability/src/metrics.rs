@@ -74,6 +74,12 @@ pub struct Metrics {
     pub queries_total: AtomicU64,
     /// Total mutations executed.
     pub mutations_total: AtomicU64,
+    /// Total ranked full-text (BM25) search queries executed (counter).
+    pub search_text_queries_total: AtomicU64,
+    /// Total hybrid text+vector search queries executed (counter).
+    pub search_hybrid_queries_total: AtomicU64,
+    /// Total exact vector nearest-neighbour search queries executed (counter).
+    pub search_vector_queries_total: AtomicU64,
     /// Total failed authentication attempts (invalid or missing credentials).
     pub auth_failures_total: AtomicU64,
     /// Bytes read from the wire.
@@ -164,6 +170,8 @@ pub struct Metrics {
     pub request_latency: Histogram,
     /// Query execution latency.
     pub query_latency: Histogram,
+    /// Ranked-retrieval (text / vector / hybrid) execution latency.
+    pub ranking_latency: Histogram,
     /// Storage (mutation commit) latency.
     pub storage_latency: Histogram,
     /// Raft apply latency.
@@ -311,6 +319,9 @@ impl Metrics {
             errors_total: self.errors_total.load(Ordering::Relaxed),
             queries_total: self.queries_total.load(Ordering::Relaxed),
             mutations_total: self.mutations_total.load(Ordering::Relaxed),
+            search_text_queries_total: self.search_text_queries_total.load(Ordering::Relaxed),
+            search_hybrid_queries_total: self.search_hybrid_queries_total.load(Ordering::Relaxed),
+            search_vector_queries_total: self.search_vector_queries_total.load(Ordering::Relaxed),
             auth_failures_total: self.auth_failures_total.load(Ordering::Relaxed),
             bytes_read: self.bytes_read.load(Ordering::Relaxed),
             bytes_written: self.bytes_written.load(Ordering::Relaxed),
@@ -380,6 +391,7 @@ impl Metrics {
             cluster_snapshot_last_error: self.cluster_snapshot_last_error.load(Ordering::Relaxed),
             request_latency: self.request_latency.snapshot(),
             query_latency: self.query_latency.snapshot(),
+            ranking_latency: self.ranking_latency.snapshot(),
             storage_latency: self.storage_latency.snapshot(),
             raft_apply_latency: self.raft_apply_latency.snapshot(),
         }
@@ -397,6 +409,12 @@ pub struct MetricsSnapshot {
     pub queries_total: u64,
     /// Total mutations.
     pub mutations_total: u64,
+    /// Total ranked full-text (BM25) search queries.
+    pub search_text_queries_total: u64,
+    /// Total hybrid text+vector search queries.
+    pub search_hybrid_queries_total: u64,
+    /// Total exact vector nearest-neighbour search queries.
+    pub search_vector_queries_total: u64,
     /// Total failed authentication attempts.
     pub auth_failures_total: u64,
     /// Bytes read.
@@ -483,6 +501,8 @@ pub struct MetricsSnapshot {
     pub request_latency: HistogramSnapshot,
     /// Query latency histogram.
     pub query_latency: HistogramSnapshot,
+    /// Ranked-retrieval latency histogram.
+    pub ranking_latency: HistogramSnapshot,
     /// Storage latency histogram.
     pub storage_latency: HistogramSnapshot,
     /// Raft apply latency histogram.
@@ -500,6 +520,18 @@ impl MetricsSnapshot {
         counter("auradb_errors_total", self.errors_total);
         counter("auradb_queries_total", self.queries_total);
         counter("auradb_mutations_total", self.mutations_total);
+        counter(
+            "auradb_search_text_queries_total",
+            self.search_text_queries_total,
+        );
+        counter(
+            "auradb_search_hybrid_queries_total",
+            self.search_hybrid_queries_total,
+        );
+        counter(
+            "auradb_search_vector_queries_total",
+            self.search_vector_queries_total,
+        );
         counter("auradb_auth_failures_total", self.auth_failures_total);
         counter("auradb_bytes_read_total", self.bytes_read);
         counter("auradb_bytes_written_total", self.bytes_written);
@@ -619,6 +651,7 @@ impl MetricsSnapshot {
         for (label, h) in [
             ("request", &self.request_latency),
             ("query", &self.query_latency),
+            ("ranking", &self.ranking_latency),
             ("storage", &self.storage_latency),
             ("raft_apply", &self.raft_apply_latency),
         ] {

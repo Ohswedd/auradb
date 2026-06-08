@@ -556,14 +556,17 @@ pub fn cmd_compatibility() -> String {
             Capability::PersistedIndexes => "persisted_indexes",
             Capability::DocumentPathIndexes => "document_path_indexes",
             Capability::FullTextSearch => "full_text_search",
+            Capability::FullTextBm25Ranking => "full_text_bm25_ranking",
+            Capability::HybridSearch => "hybrid_search",
         })
         .collect();
     format!(
         "AuraDB {ver}\n\
          Aura Wire Protocol: AWP {proto}\n\
          Storage format: v{storage}\n\
-         Aura Connector (tested): 0.4.1\n\
-         Aura Connector (supported): 0.4.x\n\
+         Aura Connector (tested): 0.5.0\n\
+         Aura Connector (supported): 0.5.x\n\
+         Search features: bm25, hybrid, vector_exact (ann_preview: not implemented)\n\
          Capabilities: {caps}\n\
          See docs/COMPATIBILITY.md for the full matrix.",
         ver = VERSION,
@@ -950,16 +953,56 @@ pub fn cmd_check_json(data_dir: &Path) -> Result<(String, bool)> {
 }
 
 /// `auradb index check` - report how indexes loaded and verify their
-/// consistency against stored records.
+/// consistency against stored records, including BM25 full-text and exact
+/// vector search indexes.
 pub fn cmd_index_check(data_dir: &Path) -> Result<String> {
     let engine = Engine::open(data_dir)?;
     let report = engine.index_load_report();
     let checked = engine.check_consistency()?;
-    Ok(format!(
+    let mut out = format!(
         "indexes: {} loaded from snapshot, {} rebuilt from storage; \
          consistency OK ({checked} records verified)",
         report.loaded, report.rebuilt
-    ))
+    );
+    let search = engine.search_index_report();
+    if search.is_empty() {
+        out.push_str("\nsearch indexes: none");
+    }
+    for c in &search {
+        for t in &c.text_fields {
+            out.push_str(&format!(
+                "\nbm25 {}.{}: {} document(s), {} term(s), avg len {:.2}",
+                c.collection, t.field, t.documents, t.distinct_terms, t.avg_doc_len
+            ));
+            if let Some(w) = &t.warning {
+                out.push_str(&format!(" [warning: {w}]"));
+            }
+        }
+        for v in &c.vector_fields {
+            out.push_str(&format!(
+                "\nvector {}.{}: {} vector(s), dim {}",
+                c.collection, v.field, v.vectors, v.dim
+            ));
+        }
+    }
+    Ok(out)
+}
+
+/// `auradb search explain` - explain (or EXPLAIN ANALYZE) a query read from a
+/// JSON file as a `FindQuery` IR, reporting the chosen plan as JSON. Useful for
+/// inspecting ranked text / vector / hybrid plans without a client.
+pub fn cmd_search_explain(data_dir: &Path, input: &Path, analyze: bool) -> Result<String> {
+    let bytes =
+        std::fs::read(input).with_context(|| format!("reading query file {}", input.display()))?;
+    let query: FindQuery =
+        serde_json::from_slice(&bytes).context("parsing query JSON as a FindQuery IR")?;
+    let engine = Engine::open(data_dir)?;
+    let plan = if analyze {
+        engine.explain_analyze(&query)?
+    } else {
+        engine.explain(&query)?
+    };
+    Ok(serde_json::to_string_pretty(&plan)?)
 }
 
 /// `auradb index rebuild` - rebuild every index from storage and persist fresh
@@ -1030,13 +1073,20 @@ pub fn cmd_gc(data_dir: &Path, dry_run: bool, json: bool) -> Result<String> {
     }
 }
 
-/// `auradb stats analyze` - recompute and persist planner statistics.
+/// `auradb stats analyze` - recompute and persist planner statistics, including
+/// the full-text document counts BM25 ranking uses for cost estimation.
 pub fn cmd_stats_analyze(data_dir: &Path) -> Result<String> {
     let engine = Engine::open(data_dir)?;
     engine.analyze()?;
     let stats = engine.planner_stats();
+    let text_fields: usize = stats
+        .collections
+        .values()
+        .map(|c| c.text_field_docs.len())
+        .sum();
     Ok(format!(
-        "analyzed {} collection(s); planner statistics persisted",
+        "analyzed {} collection(s) ({text_fields} full-text field stat(s) refreshed); \
+         planner statistics persisted",
         stats.collections.len()
     ))
 }
@@ -2300,6 +2350,54 @@ pub fn run_bench(data_dir: &Path, records: usize, commit: Option<String>) -> Res
         iterations: probes.clamp(1, 200),
     });
 
+    // BM25 ranked full-text search.
+    let bm25 = ops_per_sec(probes, || {
+        let mut q = FindQuery::new("Bench");
+        q.text_search = Some(Box::new(auradb::query::TextSearch {
+            field: "body".into(),
+            query: "alpha delta".into(),
+            operator: auradb::query::TextOperator::Or,
+            rank: auradb::query::TextRank::Bm25,
+            k1: None,
+            b: None,
+        }));
+        q.limit = Some(10);
+        engine.find(&q)?;
+        Ok(())
+    })?;
+    m.push(BenchMeasurement {
+        name: "full_text_bm25".into(),
+        unit: "ops_per_sec".into(),
+        value: bm25,
+        iterations: probes,
+    });
+
+    // Hybrid text + vector search.
+    let hybrid = ops_per_sec(probes.clamp(1, 200), || {
+        let mut q = FindQuery::new("Bench");
+        q.hybrid = Some(Box::new(auradb::query::HybridSearch {
+            text_field: "body".into(),
+            text_query: "alpha delta".into(),
+            vector_field: "embedding".into(),
+            vector: vec![1.0; DIM],
+            top_k: 10,
+            metric: None,
+            weights: auradb::query::HybridWeights::default(),
+            fusion: auradb::query::FusionMode::WeightedSum,
+            operator: auradb::query::TextOperator::Or,
+            k1: None,
+            b: None,
+        }));
+        engine.find(&q)?;
+        Ok(())
+    })?;
+    m.push(BenchMeasurement {
+        name: "hybrid_search".into(),
+        unit: "ops_per_sec".into(),
+        value: hybrid,
+        iterations: probes.clamp(1, 200),
+    });
+
     // Cursor paging: walk the collection in pages.
     let page = 100usize;
     let pages = records.div_ceil(page).max(1);
@@ -2754,6 +2852,201 @@ mod tests {
         assert!(json.contains("\"versions_reclaimed\""), "{json}");
     }
 
+    fn seed_search_engine(data: &Path) {
+        use auradb::core::{CollectionSchema, FieldDef, FieldType, IndexDef, IndexKind};
+        let engine = Engine::open(data).unwrap();
+        engine
+            .create_schema(
+                CollectionSchema::new("Doc")
+                    .with_field(FieldDef {
+                        name: "id".into(),
+                        field_type: FieldType::Uuid,
+                        primary_key: true,
+                        unique: true,
+                        nullable: false,
+                        indexed: false,
+                    })
+                    .with_field(FieldDef::new("body", FieldType::String))
+                    .with_field(FieldDef::new("embedding", FieldType::Vector { dim: 3 }))
+                    .with_index(IndexDef {
+                        path: "body".into(),
+                        kind: IndexKind::FullText,
+                    }),
+            )
+            .unwrap();
+        for (i, body) in [
+            "raft consensus raft",
+            "vector search engine",
+            "storage compaction",
+        ]
+        .iter()
+        .enumerate()
+        {
+            let mut f = Document::new();
+            f.insert("id".into(), Value::Text(format!("d{i}")));
+            f.insert("body".into(), Value::Text((*body).into()));
+            f.insert("embedding".into(), Value::Vector(vec![i as f32, 1.0, 0.0]));
+            engine.insert("Doc", f).unwrap();
+        }
+        engine.checkpoint().unwrap();
+    }
+
+    #[test]
+    fn index_check_reports_bm25_and_vector_stats() {
+        let dir = tempfile::tempdir().unwrap();
+        let data = dir.path().join("data");
+        seed_search_engine(&data);
+        let out = cmd_index_check(&data).unwrap();
+        assert!(out.contains("consistency OK"), "{out}");
+        assert!(out.contains("bm25 Doc.body:"), "{out}");
+        assert!(out.contains("document(s)"), "{out}");
+        assert!(out.contains("vector Doc.embedding:"), "{out}");
+        assert!(out.contains("dim 3"), "{out}");
+    }
+
+    #[test]
+    fn stats_analyze_refreshes_bm25_stats() {
+        let dir = tempfile::tempdir().unwrap();
+        let data = dir.path().join("data");
+        seed_search_engine(&data);
+        let out = cmd_stats_analyze(&data).unwrap();
+        assert!(out.contains("full-text field stat"), "{out}");
+        let show = cmd_stats_show(&data, false).unwrap();
+        assert!(show.contains("full-text document(s)"), "{show}");
+    }
+
+    #[test]
+    fn bm25_and_hybrid_survive_backup_restore() {
+        use auradb::query::{
+            FindQuery, HybridSearch, HybridWeights, TextOperator, TextRank, TextSearch,
+        };
+        let dir = tempfile::tempdir().unwrap();
+        let src = dir.path().join("src");
+        seed_search_engine(&src);
+
+        // Dump and restore into a fresh data dir.
+        let dump = dir.path().join("dump.jsonl");
+        cmd_dump(&src, &dump).unwrap();
+        let dst = dir.path().join("dst");
+        cmd_restore(&dst, &dump).unwrap();
+
+        // The restored database rebuilds its search indexes and ranks correctly.
+        let engine = Engine::open(&dst).unwrap();
+        let mut text = FindQuery::new("Doc");
+        text.text_search = Some(Box::new(TextSearch {
+            field: "body".into(),
+            query: "raft".into(),
+            operator: TextOperator::Or,
+            rank: TextRank::Bm25,
+            k1: None,
+            b: None,
+        }));
+        let rows = engine.find(&text).unwrap();
+        assert_eq!(rows.len(), 1, "one body mentions raft");
+        assert_eq!(rows[0].rank, Some(1));
+
+        let mut hybrid = FindQuery::new("Doc");
+        hybrid.hybrid = Some(Box::new(HybridSearch {
+            text_field: "body".into(),
+            text_query: "vector".into(),
+            vector_field: "embedding".into(),
+            vector: vec![1.0, 1.0, 0.0],
+            top_k: 3,
+            metric: None,
+            weights: HybridWeights::default(),
+            fusion: auradb::query::FusionMode::WeightedSum,
+            operator: TextOperator::Or,
+            k1: None,
+            b: None,
+        }));
+        assert!(!engine.find(&hybrid).unwrap().is_empty());
+
+        // index check confirms the BM25 stats are present after restore.
+        assert!(cmd_index_check(&dst).unwrap().contains("bm25 Doc.body:"));
+    }
+
+    #[test]
+    fn search_scores_and_stats_survive_backup_verify_restore() {
+        use auradb::query::{
+            FindQuery, HybridSearch, HybridWeights, TextOperator, TextRank, TextSearch,
+        };
+        let dir = tempfile::tempdir().unwrap();
+        let src = dir.path().join("src");
+        seed_search_engine(&src);
+
+        // Backup, verify the backup is valid (non-importing), then restore.
+        let dump = dir.path().join("dump.jsonl");
+        cmd_dump(&src, &dump).unwrap();
+        let (_report, ok) = cmd_backup_verify(&dump).unwrap();
+        assert!(ok, "backup verify should pass for a valid dump");
+        let dst = dir.path().join("dst");
+        cmd_restore(&dst, &dump).unwrap();
+
+        let engine = Engine::open(&dst).unwrap();
+        // BM25 scores are present and ordered (not stale/zero) after restore.
+        let mut bm = FindQuery::new("Doc");
+        bm.text_search = Some(Box::new(TextSearch {
+            field: "body".into(),
+            query: "raft".into(),
+            operator: TextOperator::Or,
+            rank: TextRank::Bm25,
+            k1: None,
+            b: None,
+        }));
+        let rows = engine.find(&bm).unwrap();
+        assert_eq!(rows.len(), 1);
+        assert!(
+            rows[0].score.unwrap() > 0.0,
+            "BM25 score not stale/zero after restore"
+        );
+        assert_eq!(rows[0].rank, Some(1));
+
+        // Hybrid component scores survive restore.
+        let mut hy = FindQuery::new("Doc");
+        hy.hybrid = Some(Box::new(HybridSearch {
+            text_field: "body".into(),
+            text_query: "vector".into(),
+            vector_field: "embedding".into(),
+            vector: vec![1.0, 1.0, 0.0],
+            top_k: 3,
+            metric: None,
+            weights: HybridWeights::default(),
+            fusion: auradb::query::FusionMode::WeightedSum,
+            operator: TextOperator::Or,
+            k1: None,
+            b: None,
+        }));
+        let hrows = engine.find(&hy).unwrap();
+        assert!(!hrows.is_empty());
+        assert!(hrows.iter().any(|r| r.score.is_some()));
+        drop(engine);
+
+        // `stats analyze` after restore refreshes the full-text statistics, and
+        // `index check` reports the rebuilt BM25 stats.
+        assert!(cmd_stats_analyze(&dst)
+            .unwrap()
+            .contains("full-text field stat"));
+        assert!(cmd_index_check(&dst).unwrap().contains("bm25 Doc.body:"));
+    }
+
+    #[test]
+    fn search_explain_reads_query_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let data = dir.path().join("data");
+        seed_search_engine(&data);
+        let query = serde_json::json!({
+            "collection": "Doc",
+            "text_search": { "field": "body", "query": "raft" }
+        });
+        let qfile = dir.path().join("q.json");
+        std::fs::write(&qfile, serde_json::to_vec(&query).unwrap()).unwrap();
+        let out = cmd_search_explain(&data, &qfile, false).unwrap();
+        assert!(out.contains("full_text_bm25"), "{out}");
+        // With --analyze, execution metrics are attached.
+        let analyzed = cmd_search_explain(&data, &qfile, true).unwrap();
+        assert!(analyzed.contains("\"analysis\""), "{analyzed}");
+    }
+
     fn stats_with(
         active: usize,
         oldest_age: Option<u64>,
@@ -2917,10 +3210,14 @@ mod tests {
         assert!(out.contains("AWP"));
         assert!(out.contains("authentication"));
         assert!(out.contains("full_text_search"));
-        // The compatibility line must match the v1.0 support policy: Aura Connector
-        // v0.4.1 tested, v0.4.x supported, AWP 1, storage format v2.
-        assert!(out.contains("Aura Connector (tested): 0.4.1"));
-        assert!(out.contains("Aura Connector (supported): 0.4.x"));
+        // v1.1.0 search capabilities are advertised.
+        assert!(out.contains("full_text_bm25_ranking"));
+        assert!(out.contains("hybrid_search"));
+        assert!(out.contains("Search features: bm25, hybrid, vector_exact"));
+        // v1.1.0 pairs with Aura Connector v0.5.0 tested, v0.5.x supported,
+        // AWP 1, storage format v2 (both preserved).
+        assert!(out.contains("Aura Connector (tested): 0.5.0"));
+        assert!(out.contains("Aura Connector (supported): 0.5.x"));
         assert!(!out.contains("0.3.x"));
         assert!(out.contains(&format!("AWP {}", auradb_protocol::PROTOCOL_VERSION)));
         assert!(out.contains(&format!(

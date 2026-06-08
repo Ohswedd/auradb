@@ -145,15 +145,27 @@ still applies.
 
 ### `auradb compatibility`
 Prints the AuraDB version, the AWP protocol version, advertised server
-capabilities, and the tested Aura Connector version. See
-[COMPATIBILITY.md](COMPATIBILITY.md).
+capabilities (including the v1.1.0 search capabilities and the search-feature line:
+`bm25, hybrid, vector_exact`), and the tested/supported Aura Connector versions
+(0.5.0 / 0.5.x). See [COMPATIBILITY.md](COMPATIBILITY.md).
 
 ### `auradb index check [--data-dir <dir>]`
 Reports how indexes loaded on open (how many from a snapshot and how many were
-rebuilt) and verifies consistency.
+rebuilt) and verifies consistency. As of v1.1.0 it also reports each full-text
+(BM25) index's document count, distinct terms, and average document length, and each
+vector index's dimension and vector count, warning if BM25 length statistics look
+incomplete (run `auradb index rebuild`).
 
 ### `auradb index rebuild [--data-dir <dir>]`
 Rebuilds indexes from storage and persists fresh snapshots.
+
+### `auradb search explain --input <query.json> [--analyze] [--data-dir <dir>]` (v1.1.0)
+Reads a `FindQuery` IR from a JSON file and prints its plan as JSON. With
+`--analyze`, executes the query and attaches EXPLAIN ANALYZE metrics. Useful for
+inspecting ranked text, vector, and hybrid plans (ranking mode, candidate sources
+and counts, fusion mode, weights) without a client. See
+[SEARCH_AND_RANKING.md](SEARCH_AND_RANKING.md); example queries are in
+`examples/search_bm25.json` and `examples/search_hybrid.json`.
 
 ### `auradb cluster ...` (v0.4.0)
 Cluster (Raft) administration. These commands operate offline on a data

@@ -436,6 +436,125 @@ async fn leader_replicates_write_to_followers() {
     cluster.shutdown().await;
 }
 
+/// A search-capable collection (full-text body + exact vector) for cluster
+/// search-replication tests.
+fn search_schema() -> CollectionSchema {
+    CollectionSchema::new("S")
+        .with_field(FieldDef {
+            name: "id".into(),
+            field_type: FieldType::Int,
+            primary_key: true,
+            unique: true,
+            nullable: false,
+            indexed: false,
+        })
+        .with_field(FieldDef::new("body", FieldType::String))
+        .with_field(FieldDef::new("embedding", FieldType::Vector { dim: 3 }))
+        .with_index(IndexDef {
+            path: "body".into(),
+            kind: IndexKind::FullText,
+        })
+}
+
+fn search_doc_mutation(id: i64, body: &str, vec: Vec<f32>) -> Mutation {
+    let mut f = Document::new();
+    f.insert("id".into(), Value::Int(id));
+    f.insert("body".into(), Value::Text(body.into()));
+    f.insert("embedding".into(), Value::Vector(vec));
+    Mutation::Insert {
+        collection: "S".into(),
+        fields: f,
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn cluster_search_bm25_and_hybrid_after_replication() {
+    // Search writes go through the leader and replicate; a follower rebuilds its
+    // BM25 and vector indexes from the replicated log and serves ranked search.
+    // Multi-node is an HA candidate preview, not production HA — and follower reads
+    // are eventually consistent, not linearizable.
+    let cluster = TestCluster::start_with(3, search_schema()).await;
+    let leader = cluster.wait_for_leader(Duration::from_secs(10)).await;
+    let docs = [
+        (1i64, "raft consensus raft", vec![1.0, 0.0, 0.0]),
+        (
+            2,
+            "the raft module coordinates replicas",
+            vec![0.0, 1.0, 0.0],
+        ),
+        (3, "storage compaction and flushing", vec![0.0, 0.0, 1.0]),
+    ];
+    for (id, body, v) in &docs {
+        let engine = cluster.nodes[leader].engine.clone();
+        let (id, body, v) = (*id, body.to_string(), v.clone());
+        tokio::task::spawn_blocking(move || {
+            engine.apply_mutation(search_doc_mutation(id, &body, v))
+        })
+        .await
+        .unwrap()
+        .unwrap();
+    }
+
+    // Wait until a follower has replicated all three documents.
+    let follower = (0..3).find(|&i| i != leader).unwrap();
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        let n = cluster.nodes[follower]
+            .engine
+            .find(&FindQuery::new("S"))
+            .unwrap()
+            .len();
+        if n >= 3 {
+            break;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "follower did not replicate search docs"
+        );
+        tokio::time::sleep(Duration::from_millis(25)).await;
+    }
+
+    // BM25 ranked search on the follower's locally rebuilt full-text index.
+    let mut bm = FindQuery::new("S");
+    bm.text_search = Some(Box::new(auradb::query::TextSearch {
+        field: "body".into(),
+        query: "raft".into(),
+        operator: auradb::query::TextOperator::Or,
+        rank: auradb::query::TextRank::Bm25,
+        k1: None,
+        b: None,
+    }));
+    let rows = cluster.nodes[follower].engine.find(&bm).unwrap();
+    assert_eq!(rows.len(), 2, "BM25 on follower after replication");
+    assert_eq!(
+        rows[0].fields.get("id"),
+        Some(&Value::Int(1)),
+        "dense doc ranks first"
+    );
+
+    // Hybrid search on the follower's locally rebuilt indexes.
+    let mut hy = FindQuery::new("S");
+    hy.hybrid = Some(Box::new(auradb::query::HybridSearch {
+        text_field: "body".into(),
+        text_query: "raft".into(),
+        vector_field: "embedding".into(),
+        vector: vec![1.0, 0.0, 0.0],
+        top_k: 3,
+        metric: None,
+        weights: auradb::query::HybridWeights::default(),
+        fusion: auradb::query::FusionMode::WeightedSum,
+        operator: auradb::query::TextOperator::Or,
+        k1: None,
+        b: None,
+    }));
+    assert!(
+        !cluster.nodes[follower].engine.find(&hy).unwrap().is_empty(),
+        "hybrid on follower after replication"
+    );
+
+    cluster.shutdown().await;
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn replicated_transaction_batch_atomic() {
     let cluster = TestCluster::start(3).await;

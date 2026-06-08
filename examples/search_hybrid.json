@@ -1,0 +1,14 @@
+{
+  "collection": "Doc",
+  "hybrid": {
+    "text_field": "body",
+    "text_query": "raft consensus",
+    "vector_field": "embedding",
+    "vector": [0.1, 0.2, 0.3],
+    "top_k": 10,
+    "metric": "cosine",
+    "weights": { "text": 0.5, "vector": 0.5 },
+    "fusion": "weighted_sum",
+    "operator": "or"
+  }
+}
