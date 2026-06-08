@@ -33,9 +33,9 @@
 
 x-node-common: &node-common
   # Override the image with AURADB_IMAGE to run the smoke against a locally built
-  # image (AURADB_IMAGE=auradb:0.9.0) or a published one
-  # (AURADB_IMAGE=ghcr.io/ohswedd/auradb:0.9.0). Defaults to the published image.
-  image: ${AURADB_IMAGE:-ghcr.io/ohswedd/auradb:0.9.0}
+  # image (AURADB_IMAGE=auradb:0.9.1) or a published one
+  # (AURADB_IMAGE=ghcr.io/ohswedd/auradb:0.9.1). Defaults to the published image.
+  image: ${AURADB_IMAGE:-ghcr.io/ohswedd/auradb:0.9.1}
   user: "10001:10001"
   networks:
     - aura-cluster

@@ -225,6 +225,10 @@ cluster_id = "0000000000000000000000000000a1a2"  # identical on every node
 node_id    = "00000000000000a1"                  # distinct per node
 listen_addr    = "127.0.0.1:7172"
 advertise_addr = "127.0.0.1:7172"
+# This node's own client-facing address (v0.9.1). While this node is the leader it
+# reports this in the `not_leader` hint and in cluster status/health. It should
+# match the client_addr the other nodes list for this node below.
+advertise_client_addr = "127.0.0.1:7171"
 bootstrap = true
 # Static membership: every other node, by id and cluster address. The optional
 # client_addr (v0.5.1) lets a `not_leader` response and the cluster diagnostics
@@ -240,6 +244,17 @@ plus an optional `client_addr` (the peer's client-facing `host:port`). When
 `client_addr` is set, a `not_leader` error and `auradb cluster status --addr`
 report the leader's client address; when omitted, that address is reported as
 unknown rather than guessed.
+
+A node never appears in its own `peers` list, so the optional `advertise_client_addr`
+field **(v0.9.1)** lets a node declare its **own** client-facing `host:port`. While
+this node is the leader it reports that address in the `not_leader` hint and in
+cluster status/health, so a client that queries the leader directly still learns
+its client address instead of an empty value. The field is operator-declared and
+honest: it is never guessed and is never the peer/Raft transport address. It
+should match the `client_addr` the other nodes list for this node. When it is
+omitted the leader simply reports its own client address as unknown and clients
+fall back to re-resolving the leader. The field is additive and backward
+compatible — a config that omits it behaves exactly as before v0.9.1.
 
 A public (non-loopback) preview additionally requires
 `allow_experimental_public_cluster = true`, peer TLS, and a token:
@@ -277,6 +292,12 @@ Fields:
   ids are enforced; a mismatch with the persisted id is rejected.
 - `listen_addr` / `advertise_addr` — the dedicated peer (Raft) transport. A
   non-loopback address fails closed unless `allow_experimental_public_cluster`.
+- `advertise_client_addr` — **(v0.9.1)** optional; this node's own client-facing
+  `host:port`. While this node is the leader it is reported as the leader client
+  address in the `not_leader` hint and in cluster status/health. It is
+  operator-declared (never guessed, never the transport address), should match the
+  `client_addr` peers list for this node, and is omitted from the report when
+  unset. Additive and backward compatible.
 - `peer_auth_token` — **(v0.5.0)** shared token verified in the `PeerHello`
   handshake; required for a public cluster. It is treated as a secret and never
   printed or logged.

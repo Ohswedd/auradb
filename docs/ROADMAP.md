@@ -4,7 +4,31 @@ This roadmap describes where AuraDB is headed beyond the first single-node
 release. It is a statement of direction, not a delivery commitment. Items are
 grouped by theme and listed roughly in the order we expect to approach them.
 
-## Current release: 0.9.0
+## Current release: 0.9.1
+
+AuraDB 0.9.1 is an **HA release-candidate stabilization** of the v0.9.0
+candidate — still an **HA release candidate for the controlled static-cluster
+preview, not a production HA guarantee**. It adds one optional, additive
+configuration field, `[cluster] advertise_client_addr` (this node's own
+client-facing `host:port`), so a leader can report its **own** client address in
+the `not_leader` hint and in cluster status/health while it is the leader — a node
+never appears in its own peer list, so before v0.9.1 a leader could not name its
+own client address and a client querying the leader directly saw an empty leader
+client address. The field is operator-declared and honest: never guessed, never
+the peer transport address, omitted when unset (clients then fall back to
+re-resolving the leader), and it should match the `client_addr` the other nodes
+list for this node. It is backward compatible — a config omitting it behaves
+exactly as in v0.9.0. v0.9.1 also extends snapshot/compaction and
+connector-leader-change test coverage **across a leader change**, and sharpens the
+HA candidate smoke and connector conformance diagnostics (each reports the
+leader-resolution path and distinguishes the expected in-network/host fallback
+from a real failure). It adds **no** new cluster architecture and changes **no**
+semantics; the storage format (v2) and AWP 1 are unchanged and Aura Connector
+v0.4.1 stays compatible. **Single-node mode remains the recommended production
+mode**; multi-node remains a controlled static-cluster preview. See
+[HA_RELEASE_CANDIDATE.md](HA_RELEASE_CANDIDATE.md).
+
+### Delivered in 0.9.0
 
 AuraDB 0.9.0 is an **HA release candidate for the controlled static-cluster
 preview, not a production HA guarantee**. It strengthens cluster failure testing
@@ -24,7 +48,7 @@ mode**; multi-node remains a controlled static-cluster preview. See
 ### Future production HA criteria
 
 AuraDB will **not** claim production HA until all of the following are met and
-documented with evidence (none are met in 0.9.0): repeated long soak; snapshot
+documented with evidence (none are met in 0.9.1): repeated long soak; snapshot
 install under large state (with chunked/streaming transfer if needed);
 backup/restore cluster drills with documented RPO/RTO; network partitions across
 real environments (not just loopback); disk-full and I/O-error behavior;

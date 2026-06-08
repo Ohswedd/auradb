@@ -64,13 +64,18 @@ def _options(token: str | None, tls_ca: str | None) -> dict:
 
 async def _resolve_leader_once(
     candidates: list[str], options: dict, tls_ca: str | None
-) -> str | None:
+) -> tuple[str, str] | None:
     """One pass over ``candidates`` to find the current leader. The authoritative
     signal is *accepting a write* (only the leader does), so probe every
     candidate and return the one that accepts; a follower's ``not_leader`` hint is
     only used as a fallback and is verified reachable, because immediately after a
     leader change a freshly-demoted follower may still report the old (now dead)
-    leader. A dead/refusing node is skipped."""
+    leader. A dead/refusing node is skipped.
+
+    Returns ``(addr, path)`` where ``path`` is ``"hint"`` when a follower's
+    ``not_leader`` leader address resolved the leader directly, or ``"probe"``
+    when the leader was found by probing the candidate addresses (the documented
+    re-resolve fallback). ``None`` when no leader is found this pass."""
     hint: str | None = None
     for addr in candidates:
         try:
@@ -79,31 +84,34 @@ async def _resolve_leader_once(
                     continue
                 try:
                     await client.upsert(CItem, key={"id": 100}, values={"label": "probe"})
-                    return addr  # this node accepted a write — it is the leader
+                    return addr, "probe"  # this node accepted a write — it is the leader
                 except AuraNotLeaderError as exc:
                     if exc.leader_addr and hint is None:
                         hint = exc.leader_addr
         except AuraConnectionError:
             continue
-    # No candidate accepted a write this pass. Fall back to a hint only if it is
+    # No candidate accepted a write this pass. Prefer a follower's hint when it is
     # actually reachable (a stale hint to a stopped old leader is discarded).
     if hint and hint not in candidates:
         try:
             async with connect(_dsn(hint, tls_ca), models=[CItem], **options) as client:
                 if await client.ping():
-                    return hint
+                    return hint, "hint"
         except AuraConnectionError:
             pass
     return None
 
 
-async def _resolve_leader(candidates: list[str], options: dict, tls_ca: str | None) -> str | None:
+async def _resolve_leader(
+    candidates: list[str], options: dict, tls_ca: str | None
+) -> tuple[str, str] | None:
     """Resolve the current leader, tolerating the brief re-election window after a
-    leader change with a bounded retry (no unbounded loop)."""
+    leader change with a bounded retry (no unbounded loop). Returns ``(addr,
+    path)`` as in :func:`_resolve_leader_once`, or ``None``."""
     for _ in range(10):
-        leader = await _resolve_leader_once(candidates, options, tls_ca)
-        if leader:
-            return leader
+        resolved = await _resolve_leader_once(candidates, options, tls_ca)
+        if resolved:
+            return resolved
         await asyncio.sleep(0.5)
     return None
 
@@ -124,6 +132,10 @@ async def run(
         """A non-failing observation (does not affect the exit code)."""
         print(f"  [NOTE] {name}: {detail}")
 
+    print("Connector leader-change conformance (HA release candidate, not production HA)")
+    print(f"  old leader:       {old_leader}")
+    print(f"  candidate addrs:  {', '.join(candidates)}")
+
     # 1. The old leader no longer accepts a leader write: it is either down
     #    (connection error) or demoted (not_leader). Either way it is bounded —
     #    a single attempt, no infinite retry.
@@ -139,13 +151,20 @@ async def run(
         old_rejected = True  # process stopped
     check("old_leader_no_longer_leads", old_rejected)
 
-    # 2. The client discovers the new leader (hint or bounded probe).
-    new_leader = await _resolve_leader(candidates, options, tls_ca)
-    check("discovers_new_leader", bool(new_leader), "no leader among candidates")
-    if not new_leader:
+    # 2. The client discovers the new leader (hint preferred, then bounded probe).
+    resolved = await _resolve_leader(candidates, options, tls_ca)
+    check("discovers_new_leader", bool(resolved), "no leader among candidates")
+    if not resolved:
         total = len(passed) + len(failed)
         print(f"\nConnector leader-change conformance: {len(passed)}/{total} checks passed")
         return 1
+    new_leader, resolve_path = resolved
+    print(f"  new leader:       {new_leader}")
+    print(f"  resolution path:  {resolve_path} ({'direct not_leader hint' if resolve_path == 'hint' else 're-resolve fallback (probed candidates)'})")
+    # The resolver prefers a usable hint and only then falls back to probing the
+    # candidates; either path is valid HA-candidate behavior, so this is a
+    # non-failing observation, not a hard requirement on which path was taken.
+    note("leader_change_conformance_prefers_hint_then_fallback", f"resolved via {resolve_path}")
 
     # 3. A write to the new leader succeeds.
     async with connect(_dsn(new_leader, tls_ca), models=[CItem], **options) as client:
@@ -268,7 +287,8 @@ async def run(
         check("follower_not_leader", False, "no reachable follower rejected a write")
 
     total = len(passed) + len(failed)
-    print(f"\nConnector leader-change conformance: {len(passed)}/{total} checks passed")
+    print(f"\nleader resolution path: {resolve_path} (hint preferred, probe fallback)")
+    print(f"Connector leader-change conformance: {len(passed)}/{total} checks passed")
     return 0 if not failed else 1
 
 

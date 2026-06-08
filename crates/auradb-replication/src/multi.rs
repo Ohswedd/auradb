@@ -515,9 +515,11 @@ impl PeerCluster {
     }
 
     /// The client-facing address of the leader this node currently recognizes,
-    /// if that leader is a configured peer that declared a `client_addr`. `None`
-    /// when no leader is known, this node is the leader, or the leader did not
-    /// declare a client address (honest "unknown" rather than a guess).
+    /// if it was operator-declared. When this node *is* the leader, the address
+    /// is this node's own `advertise_client_addr`; when a peer is the leader, it
+    /// is that peer's declared `client_addr`. `None` when no leader is known or
+    /// the relevant client address was not declared (honest "unknown" rather than
+    /// a guess) — clients then fall back to re-resolving the leader.
     pub fn leader_client_addr(&self) -> Option<String> {
         let leader = self.shared.raft.lock().expect("raft mutex").leader_id()?;
         self.shared.leader_client_addr(leader)
@@ -752,9 +754,18 @@ pub struct SnapshotDiagnostics {
 }
 
 impl Shared {
-    /// The client-facing address of `leader`, if a configured peer with that id
-    /// declared one.
+    /// The client-facing address of `leader`, if it was operator-declared.
+    ///
+    /// When `leader` is *this* node, the address comes from this node's own
+    /// `advertise_client_addr` (a node can only ever name its own client address
+    /// from its own config — it does not appear in its peer list). Otherwise it
+    /// comes from the matching peer's `client_addr`. Either source is an honest,
+    /// operator-declared client address; a missing one yields `None` rather than a
+    /// guess, and never the peer *transport* address.
     fn leader_client_addr(&self, leader: NodeId) -> Option<String> {
+        if leader == self.identity.node_id() {
+            return self.config.advertise_client_addr.clone();
+        }
         self.config
             .peers
             .iter()

@@ -13,8 +13,22 @@ experimental_multi_node = true
 ```
 
 Membership is **static** — every node lists every other node by `node_id` and
-`addr`. There is no join, leave, or dynamic membership. Writes go to the leader;
-followers reject writes with `not_leader` and a leader hint.
+`addr`, and each peer also declares its client-facing `client_addr`. There is no
+join, leave, or dynamic membership. Writes go to the leader; followers reject
+writes with `not_leader` and a leader hint.
+
+Each node config also declares `advertise_client_addr` — **its own**
+client-facing address. A node never appears in its own peer list, so this is how a
+leader names its own client address: while a node is the leader it reports
+`advertise_client_addr` as the leader client address in the `not_leader` hint and
+in cluster status/health, so a client querying the leader directly still learns
+where to send writes. It should match the `client_addr` the other nodes list for
+this node. In the loopback configs the value is host-reachable (for example
+`127.0.0.1:7171`), so a client uses the hint directly. In the Docker configs it is
+the **in-network** address (for example `node2:7171`), which is **not** the
+host-published port (for example `127.0.0.1:7181`); an in-network client uses the
+hint directly, while a client on the host re-resolves the leader by its host port
+— the documented, expected fallback, not a failure.
 
 ---
 
@@ -113,17 +127,17 @@ Because containers communicate over a non-loopback Docker network, this path is 
    image (the recommended preview path, no registry pull) or the published one:
 
    ```bash
-   # Local image (build it first: docker build -t auradb:0.7.0 .)
-   AURADB_IMAGE=auradb:0.7.0 bash scripts/smoke_cluster_compose.sh
+   # Local image (build it first: docker build -t auradb:0.9.1 .)
+   AURADB_IMAGE=auradb:0.9.1 bash scripts/smoke_cluster_compose.sh
    # Or the published image (post-release verification)
-   AURADB_IMAGE=ghcr.io/ohswedd/auradb:0.7.0 bash scripts/smoke_cluster_compose.sh
+   AURADB_IMAGE=ghcr.io/ohswedd/auradb:0.9.1 bash scripts/smoke_cluster_compose.sh
    ```
 
    The smoke prints the image used, the node ports, the leader, quorum, per-peer
    states, and the teardown result. The published image is **multi-arch**
    (`linux/amd64` + `linux/arm64`), so `docker pull` selects arm64 automatically
    on Apple Silicon; inspect the manifest with `docker buildx imagetools inspect
-   ghcr.io/ohswedd/auradb:0.7.0`.
+   ghcr.io/ohswedd/auradb:0.9.1`.
 
 4. **Inspect** (client ports are published to the host as `7171`/`7181`/`7191`):
 
@@ -156,7 +170,7 @@ Aura Connector v0.4.x is cluster-aware: a write to a follower raises
 `AuraNotLeaderError`, and the client can reconnect to the leader with
 `Client.connect_to_leader(exc)` or an opt-in bounded `Client.with_leader_redirect()`.
 Aura Connector **v0.4.1** (introduced alongside AuraDB v0.7.1 and still the
-recommended connector for the current AuraDB v0.9.0 release, which leaves the wire
+recommended connector for the current AuraDB v0.9.1 release, which leaves the wire
 protocol unchanged) is recommended: it renders clearer `AuraNotLeaderError`
 messages (the node reached, the leader address, and the redirect call) and refuses
 a redirect that would silently drop TLS. [`python_connector.py`](python_connector.py) demonstrates the host-side path

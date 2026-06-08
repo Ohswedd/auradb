@@ -236,6 +236,46 @@ Run the serial cluster suite the same way as before:
 cargo test -p auradb-replication --test multi_node -- --test-threads=1
 ```
 
+## HA release-candidate stabilization suites (v0.9.1)
+
+> **AuraDB v0.9.1 is an HA release-candidate stabilization of the v0.9.0
+> candidate — an HA release candidate for the controlled static-cluster preview,
+> not a production HA guarantee. Single-node mode remains the recommended
+> production mode.** See [HA_RELEASE_CANDIDATE.md](HA_RELEASE_CANDIDATE.md).
+
+v0.9.1 adds the optional `[cluster] advertise_client_addr` field and exercises the
+v0.9.0 snapshot/compaction edges **after a leader change**. The CI-safe variants
+are part of the default (required) serial suite; heavier snapshot/leader-change
+variants are `#[ignore]`d.
+
+- **Leader-client-address hint** (`crates/auradb-replication/tests/multi_node.rs`,
+  `crates/auradb-server/tests/cluster_preview.rs`):
+  `not_leader_includes_leader_client_addr_after_re_election`,
+  `not_leader_hint_does_not_use_peer_addr_as_client_addr`,
+  `not_leader_hint_omits_unknown_client_addr_safely`,
+  `cluster_status_leader_client_addr_matches_not_leader_hint`,
+  `leader_reports_its_own_client_addr_in_health`, and
+  `docker_compose_cluster_not_leader_hint_has_client_addr_if_configured`. These
+  confirm the hint and the cluster status/health report the leader's own client
+  address when `advertise_client_addr` is set (including after a re-election),
+  never use a peer's transport address as a client address, and omit an unknown
+  client address safely.
+- **Snapshot / compaction across a leader change**
+  (`crates/auradb-replication/tests/multi_node.rs`):
+  `snapshot_install_after_leader_change` (a rejoined old leader is caught up by a
+  snapshot install), `old_leader_rejoins_then_receives_snapshot_if_needed`,
+  `snapshot_metrics_after_leader_change`, `compaction_after_leader_change` (the new
+  leader can compact and keep serving), and
+  `snapshot_failure_after_leader_change_safe_to_retry` (a corrupt install after the
+  change is rejected safely and is idempotent on retry). Heavier variants are
+  `#[ignore]`d.
+
+The multi-node suites still run **serially** (`--test-threads=1`):
+
+```bash
+cargo test -p auradb-replication --test multi_node -- --test-threads=1
+```
+
 ## MVCC stabilization suites (v0.3.1)
 
 - `crates/auradb/tests/transaction_lifecycle.rs` — the active transaction

@@ -2,12 +2,37 @@
 
 This document is the connector-focused companion to the
 [Compatibility Matrix](COMPATIBILITY.md). It records which Aura Connector release
-talks to AuraDB 0.9.0, what it can drive, and what it cannot.
+talks to AuraDB 0.9.1, what it can drive, and what it cannot.
 
 > **AuraDB v0.7.x adds connector cluster ergonomics for the controlled multi-node
 > preview. It is _not_ production HA — there is no automatic failover,
 > linearizable follower reads, or distributed transactions. Single-node mode
 > remains the recommended production mode.**
+
+## HA release-candidate stabilization (v0.9.1)
+
+v0.9.1 stabilizes the v0.9.0 HA release candidate. It touches **no** wire
+behavior, storage format (v2), or connector surface — **Aura Connector v0.4.1
+remains the recommended, tested connector** and no connector release is required.
+
+v0.9.1 polishes the **leader hint** the connector relies on. Previously a node
+could name another peer's client address in a `not_leader` hint but never its
+own (a node is absent from its own peer list), so a hint or cluster status taken
+from the leader itself omitted `leader_client_addr`. The new optional
+`[cluster] advertise_client_addr` lets a node report its own client address as
+the leader hint **while it is the leader**, so the structured `not_leader` object
+and `auradb cluster leader` carry the leader's client address more reliably.
+
+The connector contract is unchanged: prefer the `not_leader` hint
+(`leader_addr` / `leader_client_addr` / `leader_hint`) and, when it is absent —
+which remains expected when an operator did not declare the relevant client
+address, or in Docker Compose where the in-network hint is not the host-published
+port — fall back to re-resolving the leader via `auradb cluster leader` or by
+probing the candidate client addresses. `tests/conformance/python/run_connector_leader_change.py`
+now reports which path resolved the leader (direct hint vs. re-resolve fallback);
+both are valid HA-candidate behavior. See
+[CLUSTER_TROUBLESHOOTING.md](CLUSTER_TROUBLESHOOTING.md) for the operator
+fallback procedure.
 
 ## HA release candidate (v0.9.0)
 

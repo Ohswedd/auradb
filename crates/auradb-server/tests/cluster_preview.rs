@@ -88,6 +88,9 @@ async fn start_cluster() -> Vec<RunningNode> {
             node_id: ids[i].to_string(),
             listen_addr: cluster_addrs[i].clone(),
             advertise_addr: cluster_addrs[i].clone(),
+            // Declare this node's own client address so it can report it as the
+            // leader hint while it leads (the v0.9.1 leader self-report).
+            advertise_client_addr: Some(format!("127.0.0.1:{}", client_ports[i])),
             bootstrap: true,
             peers,
             ..ClusterConfig::default()
@@ -361,6 +364,127 @@ async fn cluster_status_reports_leader_client_addr() {
     assert!(
         cluster.peers.iter().all(|p| p.client_addr.is_some()),
         "every peer reports a declared client address"
+    );
+
+    shutdown_all(&nodes);
+}
+
+#[test]
+fn docker_compose_cluster_not_leader_hint_has_client_addr_if_configured() {
+    // The shipped Compose cluster configs declare each node's own
+    // advertise_client_addr and every peer's client_addr, so an *in-network*
+    // client's not_leader hint carries the leader's client address. (That address
+    // is the in-Docker-network name, e.g. node2:7171, not the host-published port;
+    // a host client therefore falls back to re-resolving, which is documented.)
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("..")
+        .join("..");
+    for (file, me, peers) in [
+        (
+            "examples/cluster/docker/node1.toml",
+            "node1:7171",
+            ["node2:7171", "node3:7171"],
+        ),
+        (
+            "examples/cluster/docker/node2.toml",
+            "node2:7171",
+            ["node1:7171", "node3:7171"],
+        ),
+        (
+            "examples/cluster/docker/node3.toml",
+            "node3:7171",
+            ["node1:7171", "node2:7171"],
+        ),
+    ] {
+        let cfg = Config::load(&root.join(file)).unwrap_or_else(|e| panic!("{file}: {e}"));
+        cfg.validate_structural()
+            .unwrap_or_else(|e| panic!("{file} invalid: {e}"));
+        assert_eq!(
+            cfg.cluster.advertise_client_addr.as_deref(),
+            Some(me),
+            "{file} must declare its own client address"
+        );
+        let declared: Vec<&str> = cfg
+            .cluster
+            .peers
+            .iter()
+            .filter_map(|p| p.client_addr.as_deref())
+            .collect();
+        for peer in peers {
+            assert!(
+                declared.contains(&peer),
+                "{file} must declare peer client_addr {peer}, got {declared:?}"
+            );
+        }
+    }
+
+    // The loopback example configs likewise declare a usable advertise_client_addr
+    // (there the hint is host-reachable, so no fallback is needed).
+    for (file, me) in [
+        ("examples/cluster/node1.toml", "127.0.0.1:7171"),
+        ("examples/cluster/node2.toml", "127.0.0.1:7181"),
+        ("examples/cluster/node3.toml", "127.0.0.1:7191"),
+    ] {
+        let cfg = Config::load(&root.join(file)).unwrap_or_else(|e| panic!("{file}: {e}"));
+        cfg.validate_structural()
+            .unwrap_or_else(|e| panic!("{file} invalid: {e}"));
+        assert_eq!(
+            cfg.cluster.advertise_client_addr.as_deref(),
+            Some(me),
+            "{file}"
+        );
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn leader_reports_its_own_client_addr_in_health() {
+    // The leader names its OWN client address in health (from
+    // advertise_client_addr), closing the gap where a node could not report its
+    // own client address — a peer can only ever name another peer's.
+    let nodes = start_cluster().await;
+    let leader = wait_for_leader(&nodes, Duration::from_secs(15)).await;
+
+    let health = awp_health(&nodes[leader].client_addr).await;
+    let cluster = health.cluster.expect("cluster health present");
+    assert_eq!(cluster.role, "leader");
+    assert_eq!(
+        cluster.leader_client_addr.as_deref(),
+        Some(nodes[leader].client_addr.as_str()),
+        "the leader reports its own client address as the leader client address"
+    );
+
+    shutdown_all(&nodes);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn cluster_status_leader_client_addr_matches_not_leader_hint() {
+    // The leader client address a follower reports in cluster health is exactly
+    // the address it puts in a `not_leader` hint — one consistent source.
+    let nodes = start_cluster().await;
+    let leader = wait_for_leader(&nodes, Duration::from_secs(15)).await;
+    let follower = (0..nodes.len()).find(|&i| i != leader).unwrap();
+
+    let health = awp_health(&nodes[follower].client_addr).await;
+    let from_status = health
+        .cluster
+        .expect("cluster health present")
+        .leader_client_addr;
+    assert_eq!(
+        from_status.as_deref(),
+        Some(nodes[leader].client_addr.as_str())
+    );
+
+    let resp = awp_insert(&nodes[follower].client_addr, 3, 2).await;
+    let payload: auradb_protocol::ErrorPayload = resp.decode_json().unwrap();
+    assert_eq!(payload.code, auradb_core::ErrorCode::NotLeader);
+    let from_hint = payload
+        .not_leader
+        .expect("structured not_leader hints present")
+        .leader_client_addr;
+
+    assert_eq!(
+        from_status, from_hint,
+        "cluster status and the not_leader hint name the same leader client address"
     );
 
     shutdown_all(&nodes);

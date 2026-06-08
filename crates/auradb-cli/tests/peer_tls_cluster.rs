@@ -99,6 +99,7 @@ async fn generated_dev_certs_work_for_peer_mutual_tls() {
             node_id: ids[i].to_string(),
             listen_addr: addrs[i].clone(),
             advertise_addr: addrs[i].clone(),
+            advertise_client_addr: None,
             bootstrap: true,
             peers: vec![PeerConfig {
                 node_id: ids[j].to_string(),

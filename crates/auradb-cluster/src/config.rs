@@ -123,6 +123,17 @@ pub struct ClusterConfig {
     pub listen_addr: String,
     /// Address advertised to peers (may differ from `listen_addr` behind NAT).
     pub advertise_addr: String,
+    /// This node's own client-facing address (`host:port`), as other clients
+    /// reach it. Optional and additive: when set, this node reports it as the
+    /// leader's client address in `not_leader` responses and cluster diagnostics
+    /// *while this node is the leader* — closing the gap where a leader could not
+    /// name its own client address (a peer can only name another peer's
+    /// `client_addr`, never its own). It should match the `client_addr` that the
+    /// other nodes list for this node. When unset, a node reports its own client
+    /// address as unknown rather than guessing, and clients fall back to
+    /// re-resolving the leader. This is never a peer transport address.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub advertise_client_addr: Option<String>,
     /// Whether this node bootstraps a brand-new cluster (initiates the first
     /// election). For the static preview every node may bootstrap.
     pub bootstrap: bool,
@@ -146,6 +157,7 @@ impl Default for ClusterConfig {
             node_id: String::new(),
             listen_addr: DEFAULT_CLUSTER_ADDR.to_string(),
             advertise_addr: DEFAULT_CLUSTER_ADDR.to_string(),
+            advertise_client_addr: None,
             bootstrap: true,
             peers: Vec::new(),
             peer_auth_token: Secret::default(),
@@ -195,6 +207,9 @@ impl ClusterConfig {
         }
         validate_addr("listen_addr", &self.listen_addr)?;
         validate_addr("advertise_addr", &self.advertise_addr)?;
+        if let Some(client_addr) = &self.advertise_client_addr {
+            validate_addr("advertise_client_addr", client_addr)?;
+        }
         let own_node = if self.node_id.is_empty() {
             None
         } else {
@@ -498,6 +513,51 @@ mod tests {
         cfg.peers = vec![peer("00000000000000a1", "127.0.0.1:7272")];
         let err = cfg.validate().unwrap_err();
         assert!(err.to_string().contains("own id"), "{err}");
+    }
+
+    #[test]
+    fn advertise_client_addr_is_optional_and_validated() {
+        // Unset by default: a node reports its own client address as unknown
+        // rather than guessing, and validation accepts that.
+        let mut cfg = ClusterConfig::single_node();
+        assert!(cfg.advertise_client_addr.is_none());
+        assert!(cfg.validate().is_ok());
+
+        // A well-formed host:port is accepted.
+        cfg.advertise_client_addr = Some("127.0.0.1:7171".into());
+        assert!(cfg.validate().is_ok(), "{:?}", cfg.validate());
+
+        // A malformed value fails closed like any other address.
+        cfg.advertise_client_addr = Some("not-an-addr".into());
+        let err = cfg.validate().unwrap_err();
+        assert!(err.to_string().contains("advertise_client_addr"), "{err}");
+    }
+
+    #[test]
+    fn advertise_client_addr_round_trips_and_omits_when_unset() {
+        // Additive field: present when set, omitted when unset (no null churn).
+        let mut cfg = ClusterConfig::single_node();
+        cfg.advertise_client_addr = Some("127.0.0.1:7171".into());
+        let json = serde_json::to_string(&cfg).unwrap();
+        assert!(
+            json.contains("\"advertise_client_addr\":\"127.0.0.1:7171\""),
+            "{json}"
+        );
+        let parsed: ClusterConfig = serde_json::from_str(&json).unwrap();
+        assert_eq!(
+            parsed.advertise_client_addr.as_deref(),
+            Some("127.0.0.1:7171")
+        );
+
+        let unset = ClusterConfig::single_node();
+        let json_unset = serde_json::to_string(&unset).unwrap();
+        assert!(
+            !json_unset.contains("advertise_client_addr"),
+            "unset field must be omitted: {json_unset}"
+        );
+        // An older config without the field still parses (defaults to None).
+        let legacy: ClusterConfig = serde_json::from_str(&json_unset).unwrap();
+        assert!(legacy.advertise_client_addr.is_none());
     }
 
     #[test]

@@ -45,6 +45,11 @@ node_id = "00000000000000a1"
 # Dedicated cluster (Raft) transport, loopback only.
 listen_addr = "127.0.0.1:7172"
 advertise_addr = "127.0.0.1:7172"
+# This node's own client address, as clients reach it. Reported as the leader's
+# client address in `not_leader` hints and diagnostics while this node leads, so
+# a client querying the leader directly gets its address without re-resolving.
+# It matches what the other nodes list for this node (their peer `client_addr`).
+advertise_client_addr = "127.0.0.1:7171"
 bootstrap = true
 # Static membership: every other node, by id and cluster address. The optional
 # client_addr lets a `not_leader` response and cluster diagnostics report the
