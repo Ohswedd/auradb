@@ -44,6 +44,14 @@ and [docs/SEARCH_AND_RANKING.md](docs/SEARCH_AND_RANKING.md).
 - Aura Wire Protocol 1, storage format v2, auth, TLS, backup/restore, upgrade, Docker, and
   the single-node production support scope. Multi-node remains an HA candidate preview.
 
+### Known limitations
+
+- No approximate (ANN/HNSW) vector search; exact vector search is the correctness baseline.
+- Multi-node is an HA candidate preview, **not production HA**: no production automatic
+  failover, dynamic membership, sharding, multi-region, distributed transactions, or
+  production read-consistency guarantee. Followers serve only eventually-consistent,
+  non-linearizable reads — send reads (including search) to the leader for correctness.
+
 ## [1.0.1] - 2026-06-08
 
 **First production patch — single-node production line, multi-node HA candidate

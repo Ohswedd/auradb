@@ -2,7 +2,7 @@
 
 # AuraDB
 
-**A single-node, Rust-native multi-model database server for the Aura ecosystem.**
+**Production-supported single-node database for typed records, documents, exact vectors, BM25-ranked text, and hybrid search.**
 
 [![CI](https://github.com/Ohswedd/auradb/actions/workflows/ci.yml/badge.svg)](https://github.com/Ohswedd/auradb/actions/workflows/ci.yml)
 [![Security](https://github.com/Ohswedd/auradb/actions/workflows/security.yml/badge.svg)](https://github.com/Ohswedd/auradb/actions/workflows/security.yml)
@@ -13,306 +13,173 @@
 
 </div>
 
-**Client library:** [Aura Connector](https://github.com/Ohswedd/aura-connector) (Python).
+AuraDB is a Rust-native, single-node database server. One transactional store holds
+records that are simultaneously typed rows, nested documents, graph nodes, and embedding
+holders — so an AI application can keep relational state, document fields, relationships,
+exact vectors, and ranked text search in one place instead of stitching together four
+systems. It speaks the Aura Wire Protocol over TCP, persists and recovers data locally,
+and ships with auth, TLS, backups, observability, and operator runbooks.
 
-AuraDB is a single-node, Rust-native database server for the Aura ecosystem. It
-speaks the Aura Wire Protocol, persists data locally, and provides typed schema,
-document fields, relationship includes, exact vector search, transactions,
-cursors, observability, and CLI tooling. As of 0.2.0 it also provides enforced
-token authentication, server-terminated TLS, persisted index snapshots,
-document-path indexes, and basic full-text search. As of 0.3.0 it adds MVCC
-storage with single-node snapshot isolation and a cost-based query planner with
-`EXPLAIN ANALYZE`.
+The matching client is [**Aura Connector**](https://github.com/Ohswedd/aura-connector), a
+typed async Python connector. AuraDB v1.1.0 pairs with Aura Connector v0.5.x.
 
-This repository is the database engine side of the Aura ecosystem. It implements
-a real, persistent, recoverable, single-node server, not a mock or an in-memory
-demo.
+```bash
+docker run --rm -p 7171:7171 -v auradb-data:/data ghcr.io/ohswedd/auradb:1.1.0
+```
 
-## Scope and honesty
-
-**AuraDB v1.1.0 is the first larger post-1.0 release: search and ranking.** It adds
-BM25 ranked full-text search, hybrid text+vector ranking, planner awareness for
-ranked retrieval, search CLI improvements, and connector-native support, without
-changing the production support claim. The new query clauses are additive Query IR
-and response fields, so **Aura Wire Protocol 1 and storage format v2 are unchanged**.
-Exact vector search remains the correctness baseline; approximate (ANN/HNSW) vector
-search is not implemented. Single-node mode remains the recommended production mode;
-multi-node remains an HA candidate preview, not production HA. The paired client is
-Aura Connector v0.5.0 (compatible 0.5.x). See
-[`docs/V1_1_RELEASE_NOTES.md`](docs/V1_1_RELEASE_NOTES.md) and
-[`docs/SEARCH_AND_RANKING.md`](docs/SEARCH_AND_RANKING.md).
-
-**AuraDB v1.0.0 is a single-node production release with a multi-node HA candidate
-preview.** It supports production **single-node** deployments configured with
-authentication, TLS, backups, monitoring, and the documented runbooks.
-**Single-node mode is the recommended production mode.** Multi-node static
-clustering remains an **HA candidate preview** — strong release-candidate evidence,
-but **not** a production HA guarantee, no production automatic failover, no
-production cluster readiness. v1.0.0 carries forward all v0.9.2 behavior and adds no
-new architecture.
-
-For the v1.x line, **Aura Wire Protocol 1 and storage format v2 are frozen**: AWP 1
-is the stable v1 wire protocol and storage format v2 is the stable v1 single-node
-storage format, each preserved across v1.x unless a security, correctness, safety,
-or corruption issue requires a documented change or migration. Aura Connector v0.4.1
-(and compatible 0.4.x) is the supported client. The authoritative boundaries are in
-[`docs/SUPPORT_POLICY.md`](docs/SUPPORT_POLICY.md),
-[`docs/V1_0_RELEASE_NOTES.md`](docs/V1_0_RELEASE_NOTES.md), and the support matrix in
-[`docs/COMPATIBILITY.md`](docs/COMPATIBILITY.md).
-
-### v1.0 support at a glance
+## Support status
 
 | Mode / capability | Status | Production use |
 | ----------------- | ------ | -------------- |
 | Single-node with auth + TLS + backups + monitoring | Stable | **Yes (recommended)** |
-| Docker secure Compose | Stable | **Yes** |
 | Backup / restore, upgrade from v0.x | Stable | **Yes** |
-| Aura Connector 0.5.x, AWP 1, storage format v2 | Stable / frozen for v1 | **Yes** |
 | Exact vector search, tokenized full-text | Stable | **Yes** |
-| BM25 ranked full-text, hybrid text+vector search | Stable (new in v1.1.0) | **Yes** |
-| Approximate (ANN/HNSW) vector search | Not implemented | No |
-| Static multi-node cluster, peer networking | HA candidate preview | No (not production HA) |
+| BM25 ranked full-text, hybrid text+vector search | Stable | **Yes** |
+| Aura Connector 0.5.x, AWP 1, storage format v2 | Stable / frozen for v1 | **Yes** |
+| Static multi-node cluster (Raft) | HA candidate preview | **No** (not production HA) |
+| Approximate (ANN/HNSW) vector search | Not implemented | — |
 
-See [`docs/SUPPORT_POLICY.md`](docs/SUPPORT_POLICY.md) for the full matrix and the
-list of what v1.0 does not support.
+**Single-node mode is the recommended production mode.** Multi-node static clustering is an
+HA *candidate preview* with strong release-candidate evidence — it is **not** production HA,
+has no production automatic failover, and is off by default. The authoritative boundaries
+are in [`docs/SUPPORT_POLICY.md`](docs/SUPPORT_POLICY.md),
+[`docs/COMPATIBILITY.md`](docs/COMPATIBILITY.md), and
+[`docs/HA_RELEASE_CANDIDATE.md`](docs/HA_RELEASE_CANDIDATE.md).
 
-AuraDB 0.5.0 introduces a **controlled, experimental multi-node server preview**:
-real AuraDB server processes can form a cross-process cluster, elect a leader, and
-replicate writes through Raft over a dedicated, frame-checked, authenticated peer
-transport. The preview is **off by default** and gated behind two explicit
-`[cluster]` opt-ins. **AuraDB v0.6.0 improves the controlled multi-node preview
-and validates fail-stop recovery. It is _not_ production HA. Single-node mode
-remains the recommended production mode.** v0.6.0 adds a leader kill / automatic
-re-election preview, the first real peer snapshot install over the wire (a
-bounded single-message transfer), larger follower catch-up coverage, sharper
-fail-stop diagnostics, a published-image Docker Compose smoke, and peer
-cert/token rotation and cluster backup/restore runbooks; it makes no
-production-clustering or production-automatic-failover claims. **AuraDB v0.6.2
-hardens repeated chaos and larger-state recovery for the controlled multi-node
-preview**: repeated leader restart / re-election cycles, larger multi-model
-data-set recovery, multi-model snapshot install, a peer reconnect storm,
-deterministic network-interruption (partition/heal) simulations, and
-recovery-focused diagnostics (`leader_changes`, reconnect-storm and
-repeated-leader-change warnings). It is still _not_ production HA and single-node
-mode remains the recommended production mode. See
-[docs/V0_6_2_RELEASE_NOTES.md](docs/V0_6_2_RELEASE_NOTES.md). It builds on the v0.4.x Raft and replication
-groundwork (a durable
-consensus core, a replicated commit path, log compaction boundaries, and snapshot
-restore hardening), and changes no on-disk or wire format.
+## Install and run
 
-**AuraDB v0.7.0 adds connector cluster ergonomics** (coordinated with Aura
-Connector v0.4.0): the `not_leader` response carries an additive, structured
-`not_leader` object — the leader's client address, the leader/current node ids,
-term, role, and a usable `leader_hint` — so a connector can redirect to the
-leader without parsing the message. The wire protocol (AWP 1) is unchanged and
-older connectors ignore the new fields. It remains _not_ production HA;
-single-node mode stays the recommended production mode. See
-[docs/V0_7_RELEASE_NOTES.md](docs/V0_7_RELEASE_NOTES.md).
+```bash
+# Docker (development image; binds all interfaces with --allow-insecure-bind).
+docker run --rm -p 7171:7171 -v auradb-data:/data ghcr.io/ohswedd/auradb:1.1.0
 
-**AuraDB v0.7.1 is a connector-ergonomics polish release** (coordinated with Aura
-Connector v0.4.1): clearer compatibility docs for Python cluster-preview users,
-hardened connector cluster conformance guidance, and additional leader-hint and
-safe-redirect examples. It adds **no** new database architecture and changes
-neither the on-disk nor the wire format — the `not_leader` payload is byte-for-byte
-the same as v0.7.0. It remains _not_ production HA; single-node mode stays the
-recommended production mode. See
-[docs/V0_7_1_RELEASE_NOTES.md](docs/V0_7_1_RELEASE_NOTES.md).
+# From source (stable Rust 1.85+). The server and CLI is one binary: target/release/auradb.
+git clone https://github.com/Ohswedd/auradb.git && cd auradb
+cargo build --release
+./target/release/auradb init   --data-dir .local/auradb --config AuraDB.toml
+./target/release/auradb server --data-dir .local/auradb --bind 127.0.0.1 --port 7171
+./target/release/auradb status --addr 127.0.0.1:7171     # in another shell
+```
 
-**AuraDB v0.9.2 is the final planned stabilization patch for the HA release
-candidate. It is still not production HA; single-node mode remains the recommended
-production mode.** It finalizes the HA candidate evidence and gap list, adds a
-[v1.0 decision checklist](docs/V1_0_DECISION_CHECKLIST.md), strengthens the
-leader-hint / client-address tests and runbooks after `advertise_client_addr`,
-sharpens the HA smoke diagnostics and the published-image post-release checklist,
-and maps the snapshot/compaction/old-leader-rejoin coverage. It adds **no** new
-cluster architecture, keeps the storage format (v2) and Aura Wire Protocol (AWP 1)
-unchanged, and preserves Aura Connector v0.4.1 compatibility. Multi-node remains a
-controlled static-cluster preview, not a production HA guarantee. See
-[docs/V0_9_2_RELEASE_NOTES.md](docs/V0_9_2_RELEASE_NOTES.md),
-[docs/V1_0_DECISION_CHECKLIST.md](docs/V1_0_DECISION_CHECKLIST.md), and
-[docs/HA_RELEASE_CANDIDATE.md](docs/HA_RELEASE_CANDIDATE.md).
+Binding loopback (`127.0.0.1`) is local developer mode and may leave auth disabled. Binding
+a non-loopback address with auth disabled is rejected at startup unless you explicitly opt
+in. For a real deployment use the secure Compose file (auth + TLS, non-root, read-only root
+filesystem, no committed secret): see [`docs/DEPLOYMENT.md`](docs/DEPLOYMENT.md).
 
-**AuraDB v0.9.1 stabilizes the v0.9.0 HA release candidate. It is still not
-production HA; single-node mode remains the recommended production mode.** It
-polishes leader-hint propagation (an optional `[cluster] advertise_client_addr`
-lets a node report its own client address as the leader hint while it leads),
-strengthens leader-hint documentation and tests, improves the HA smoke's
-reliability and diagnostics, adds snapshot/compaction coverage across a leader
-change, and clarifies operator runbooks. It adds **no** new cluster architecture,
-keeps the storage format (v2) and Aura Wire Protocol (AWP 1) unchanged, and
-preserves Aura Connector v0.4.1 compatibility. See
-[docs/V0_9_1_RELEASE_NOTES.md](docs/V0_9_1_RELEASE_NOTES.md) and
-[docs/HA_RELEASE_CANDIDATE.md](docs/HA_RELEASE_CANDIDATE.md).
+```bash
+docker compose -f docker-compose.secure.yml config   # validate the secure stack
+```
 
-**AuraDB v0.9.0 is an HA release candidate for the controlled static-cluster
-preview, not a production HA guarantee. Single-node mode remains the recommended
-production mode.** It strengthens cluster failure testing (a 3-cycle CI fail-stop
-suite plus ignored stress runs), snapshot/compaction coverage (larger installs,
-compaction with an offline follower, indexed-workload preservation, safe-to-retry
-install failures, snapshot metrics), connector behavior under leader change,
-operator recovery runbooks, the cluster backup/restore story (leader logical
-export → single-node restore, validated around a leader change), a published-image
-HA candidate smoke, and GitHub Actions Node 24 maintenance. It adds **no** new
-cluster architecture and changes **no** Raft, storage, query, MVCC, replication,
-or snapshot semantics, keeps the storage format (v2) and Aura Wire Protocol
-(AWP 1) unchanged, and preserves Aura Connector v0.4.1 compatibility. The support
-level, operator assumptions, validated failure matrix, and the strict criteria
-required before any future production HA claim are in
-[docs/HA_RELEASE_CANDIDATE.md](docs/HA_RELEASE_CANDIDATE.md) and
-[docs/V0_9_RELEASE_NOTES.md](docs/V0_9_RELEASE_NOTES.md).
+## Connect
 
-**AuraDB v0.8.1 is a production-readiness stabilization patch for the v0.8.0
-candidate.** It narrows in on the operational edges of v0.8.0 — backup/restore
-corner cases, resource-limit boundaries, soak ergonomics, release-artifact
-verification, and runbook clarity — and adds **no** product features. It changes
-**no** Raft, storage, query, MVCC, replication, or snapshot semantics, keeps the
-storage format (v2) and Aura Wire Protocol (AWP 1) unchanged, and preserves Aura
-Connector v0.4.1 compatibility.
+Aura Connector talks to AuraDB over AWP 1, including auth and TLS. AuraDB v1.1.0 is paired
+with Aura Connector v0.5.x (search and ranking); v0.4.x connects for non-search operations.
 
-The v0.8.0 candidate it builds on is a hardening, validation, and operability
-release: a structured `auradb check --json` consistency report with broad
-corruption drills, a non-importing `auradb backup verify`, backup/restore and
-upgrade drills over genuine fixtures, a new `[limits]` config section with five
-enforced, configurable bounds, large-dataset / soak / performance tooling, a
-security hardening review, cluster-preview recovery coverage, operator runbooks,
-and release-artifact reproducibility. It is **not** production HA; single-node
-mode remains the recommended production mode. See
-[docs/V0_8_1_RELEASE_NOTES.md](docs/V0_8_1_RELEASE_NOTES.md),
-[docs/V0_8_RELEASE_NOTES.md](docs/V0_8_RELEASE_NOTES.md), and
-[docs/PRODUCTION_READINESS.md](docs/PRODUCTION_READINESS.md).
+```bash
+python -m pip install "aura-connector>=0.5,<0.6"
+```
 
-AuraDB 0.4.0 adds the replication and Raft foundation for future clustered
-deployments, on top of the 0.3.x MVCC and query-planner foundations: each record
-keeps a chain of committed versions, transactions read from a snapshot pinned at
-`begin`, and read queries route through a cost-based planner with `EXPLAIN
-ANALYZE`. **Single-node mode remains the recommended production path.** v0.4.0
-introduces stable node and cluster identity, a durable Raft log, a deterministic
-Raft state machine, a leader-only write path with a structured `not_leader`
-error, an idempotent replicated apply path, a snapshot boundary, and cluster
-CLI/metrics/status — all validated by tests. When cluster mode is disabled (the
-default), every v0.3.1 behavior is preserved byte-for-byte. AuraDB implements
-single-node snapshot isolation with optimistic write conflict detection. It is
-not serializable isolation. It is honest about its boundaries. The multi-node
-server preview is **experimental**: real cross-process leader election and Raft
-replication work, but the preview is off by default, gated behind two opt-ins
-(`enabled = true` and `experimental_multi_node = true`), uses static membership,
-and a single-node cluster provides no fault tolerance. The following are not
-implemented and not claimed: production multi-node clustering, automatic
-failover, dynamic membership, linearizable reads, follower reads, distributed
-transactions, sharding, multi-region; approximate (ANN/HNSW) vector indexes; and
-serializable isolation. (BM25 ranked full-text and hybrid text+vector fusion ranking
-are implemented in v1.1.0 — see [`docs/SEARCH_AND_RANKING.md`](docs/SEARCH_AND_RANKING.md).)
-Authentication and TLS are now implemented and enforced
-when enabled, but RBAC, field-level encryption, encryption at rest, and audit
-logging are not. Unsupported operations return a structured error. See
-[Limitations](#security-model-and-current-limits) and the
-[roadmap](docs/ROADMAP.md). Do not use this release for mission-critical
-deployments.
+```python
+from aura import connect
+from aura.config import TokenAuth, TLSConfig
 
-## Why AuraDB
+async with connect(
+    "auradbs://db.example.com:7171/app",
+    models=[Doc],
+    auth=TokenAuth("your-secret"),
+    tls=TLSConfig(enabled=True, ca_cert_path="/etc/aura/ca.pem"),
+) as client:
+    await client.insert(Doc(id=1, title="Refunds", body="...", embedding=[0.1, 0.2, 0.3]))
+```
 
-Modern AI applications often split state across a relational database, a document
-store, a graph database, and a vector database, then duplicate permissions and
-struggle to keep them consistent. AuraDB explores the intersection: records that
-are simultaneously rows, documents, graph nodes, and embedding holders, in one
-transactional store. The forward direction is captured in the
-[roadmap](docs/ROADMAP.md).
+The Rust conformance client in [`crates/auradb-conformance`](crates/auradb-conformance) and a
+Python harness in [`tests/conformance/python`](tests/conformance/python) exercise every
+capability over the wire. Compatibility is documented in
+[`docs/AURA_CONNECTOR_COMPATIBILITY.md`](docs/AURA_CONNECTOR_COMPATIBILITY.md) and
+[`docs/COMPATIBILITY.md`](docs/COMPATIBILITY.md).
 
-## How it relates to Aura Connector
+## Data model
 
-[Aura Connector](https://github.com/Ohswedd/aura-connector) is the client; AuraDB
-is the server. AuraDB implements the Aura Wire Protocol (AWP) and an
-Aura-Connector-compatible Query IR. The conformance
-suite ([`crates/auradb-conformance`](crates/auradb-conformance)) exercises every
-capability over the wire, and a Python harness lives in
-[`tests/conformance/python`](tests/conformance/python). The published Aura
-Connector 0.4.x ships a native AuraDB-over-TCP backend that speaks AWP 1
-(including auth and TLS) and adds cluster-preview ergonomics; see
-[`docs/AURA_CONNECTOR_COMPATIBILITY.md`](docs/AURA_CONNECTOR_COMPATIBILITY.md)
-and [`docs/COMPATIBILITY.md`](docs/COMPATIBILITY.md).
+A record belongs to a typed collection defined by a schema and can carry, at the same time:
 
-## What works in 0.3.0
+- **Typed scalar fields** — `uuid`, `string`, `int`, `float`, `bool`, `timestamp`, `bytes`,
+  with primary keys, unique and secondary indexes, and validation.
+- **Document fields** — JSON-like nested objects/arrays, filterable and orderable by dotted
+  path, with optional document-path equality indexes
+  ([`docs/DOCUMENTS.md`](docs/DOCUMENTS.md)).
+- **Relationships** — forward links hydrated through query `include`, with referential
+  consistency on delete ([`docs/RELATIONSHIPS.md`](docs/RELATIONSHIPS.md)).
+- **Vectors** — fixed-dimension embeddings stored inline, validated by dimension
+  ([`docs/VECTORS.md`](docs/VECTORS.md)).
 
-- **Persistent storage.** Append-only checksummed segment log (storage format v2
-  with commit-timestamped version chains), manifest, crash recovery, corruption
-  detection, and compaction.
-- **MVCC and snapshot isolation.** Each record keeps an ordered chain of committed
-  versions (a delete is a tombstone version). Transactions pin a read timestamp at
-  `begin` and read from that snapshot; non-transactional reads see the latest
-  committed state. Commit uses optimistic, first-committer-wins write-conflict
-  detection. Version garbage collection (`auradb gc` and optional background GC)
-  reclaims versions no active transaction can observe. See
-  [`docs/TRANSACTIONS.md`](docs/TRANSACTIONS.md) and
-  [`docs/STORAGE_ENGINE.md`](docs/STORAGE_ENGINE.md).
-- **Query planner and `EXPLAIN ANALYZE`.** Read queries route through a cost-based
-  planner that uses persisted statistics (`planner_stats.json`) to choose the most
-  selective applicable index or a full scan. `EXPLAIN ANALYZE` reports measured
-  execution metrics. See [`docs/QUERY_ENGINE.md`](docs/QUERY_ENGINE.md).
-- **Persisted indexes.** Indexes are snapshotted to disk at checkpoints and
-  loaded on open when a content fingerprint and schema shape match; otherwise the
-  engine safely rebuilds from storage. See [`docs/INDEXING.md`](docs/INDEXING.md).
-- **Transactions.** Atomic commit, rollback, optimistic conflict detection,
-  read-your-writes, and crash recovery.
-- **Schema catalog.** Typed fields, primary keys, unique and secondary indexes,
-  document and vector fields, document-path and full-text indexes, relationships,
-  and validation.
-- **Query engine.** Find, filter (`=, !=, <, <=, >, >=, in`, `contains`,
-  `contains_text`, `AND/OR/NOT`, document paths), order/limit/offset, projection,
-  count, exists, insert/bulk/update/delete/upsert, relationship includes, exact
-  vector nearest-neighbour search, and `EXPLAIN`.
-- **Document-path indexes.** Equality acceleration on nested document values
-  addressed by a dotted path. See [`docs/DOCUMENTS.md`](docs/DOCUMENTS.md).
-- **Full-text search.** A tokenized inverted index with boolean-AND
-  `contains_text` matching and term-frequency ranking (not BM25). See
-  [`docs/FULL_TEXT.md`](docs/FULL_TEXT.md).
-- **Security.** Enforced static-token authentication (Argon2id-hashed) and
-  server-terminated TLS with optional mutual TLS (rustls), both fail-closed. In
-  place token rotation with `auradb auth rotate-token`. See
-  [`docs/SECURITY.md`](docs/SECURITY.md).
-- **Deployment.** A secure Docker Compose example (auth and TLS enabled, non-root,
-  no committed secret) and production configuration templates. See
-  [`docs/DEPLOYMENT.md`](docs/DEPLOYMENT.md).
-- **Operations.** Migration impact estimation, server-side cursors,
-  observability (metrics and tracing, plus `--json` health output for `status`
-  and `doctor`), backup and restore, verified upgrade from a v0.1.0 data
-  directory, a full CLI, a published Docker image, prebuilt binary release
-  artifacts, a benchmark baseline ([`docs/BENCHMARKS.md`](docs/BENCHMARKS.md)),
-  and CI. For single-node production guidance and operator runbooks, see
+Records are addressed by a stable logical id; physical storage offsets are never exposed as
+durable identity.
+
+## Query and search
+
+Reads route through a cost-based planner that uses persisted statistics to pick the most
+selective index or a full scan, with `EXPLAIN` and `EXPLAIN ANALYZE`. The Query IR supports
+point reads, filters (`=, !=, <, <=, >, >=, in`, `contains`, `contains_text`, `AND/OR/NOT`,
+document paths), ordering, limit/offset, projection, count, exists,
+insert/bulk/update/delete/upsert, relationship includes, and a migration impact estimate.
+
+Search and ranking ([`docs/SEARCH_AND_RANKING.md`](docs/SEARCH_AND_RANKING.md)) adds:
+
+- **BM25 ranked full-text** (`text_search`) — Okapi BM25 over a full-text indexed field, with
+  tunable `k1`/`b`.
+- **Exact vector search** (`vector`) — exact nearest-neighbour by `cosine`, `euclidean`, or
+  `dot_product`. This is the correctness baseline; ANN/HNSW is not implemented.
+- **Hybrid text + vector** (`hybrid`) — BM25 and vector signals fused by weighted sum or
+  reciprocal-rank fusion.
+
+```bash
+# Inspect a ranked query's plan (and measured metrics with --analyze).
+auradb search explain --input examples/search_bm25.json
+auradb search explain --input examples/search_hybrid.json --analyze
+```
+
+The legacy `contains_text` boolean predicate and term-frequency ranking are unchanged
+([`docs/FULL_TEXT.md`](docs/FULL_TEXT.md)). Unsupported operations return a structured
+capability error.
+
+## Storage and transactions
+
+Storage is an append-only, CRC32C-checksummed segment log with a manifest, using MVCC
+version chains (storage format v2): each record id maps to an ordered chain of
+commit-timestamped versions, and a delete is a tombstone version. On open the engine replays
+segments to rebuild version chains and indexes; a torn tail is detected by checksum and
+truncated. Transactions pin a read timestamp at `begin`, overlay their own staged writes,
+and commit with optimistic first-committer-wins conflict detection. AuraDB implements
+single-node **snapshot isolation** — not serializable isolation. See
+[`docs/STORAGE_ENGINE.md`](docs/STORAGE_ENGINE.md) and
+[`docs/TRANSACTIONS.md`](docs/TRANSACTIONS.md).
+
+## Operations
+
+- **Security.** Enforced static-token authentication (Argon2id-hashed, constant-time) and
+  server-terminated TLS with optional mutual TLS (rustls), both fail-closed. In-place token
+  rotation with `auradb auth rotate-token`. `#![forbid(unsafe_code)]` across every crate.
+  Not implemented: RBAC, field-level encryption, encryption at rest, audit logging. See
+  [`docs/SECURITY.md`](docs/SECURITY.md) and [`SECURITY.md`](SECURITY.md).
+- **Backup / restore / upgrade.** `auradb dump` → `auradb backup verify` → `auradb restore`
+  → `auradb check`; older data directories migrate to storage format v2 transparently on
+  first open. See [`docs/OPERATIONS.md`](docs/OPERATIONS.md) and
+  [`docs/UPGRADING.md`](docs/UPGRADING.md).
+- **Health.** `auradb doctor` and `auradb status` print redacted health (`--json`);
+  `auradb check` verifies on-disk index consistency.
+- **Observability.** A metrics registry exports counters, gauges, and latency histograms as
+  JSON and Prometheus text; structured tracing and health/readiness surfaces are built in,
+  with no external collector required ([`docs/OBSERVABILITY.md`](docs/OBSERVABILITY.md)).
+- **Runbooks.** Single-node production guidance and operator procedures are in
   [`docs/PRODUCTION_READINESS.md`](docs/PRODUCTION_READINESS.md) and
   [`docs/RUNBOOKS.md`](docs/RUNBOOKS.md).
 
-## New in 0.4.0: replication and Raft groundwork
+A full command reference is in [`docs/CLI.md`](docs/CLI.md).
 
-AuraDB 0.4.0 lays the foundation for future clustered deployments. **Single-node
-mode remains the recommended production path.**
+## Multi-node preview
 
-- **Stable identity.** `auradb init` creates a persistent node id and cluster id
-  under `<data_dir>/cluster/`.
-- **Durable Raft log + state machine.** A checksummed, crash-safe Raft log and a
-  deterministic follower/candidate/leader state machine (elections, log
-  replication, log repair, commit advancement), validated by deterministic
-  in-process tests — including multi-node consensus.
-- **Single-node cluster mode.** Opt in with `[cluster] enabled = true`. Every
-  write is ordered through a durable local Raft log and replayed on restart; the
-  MVCC commit timestamp is the Raft log index. A single-node cluster has no fault
-  tolerance — it is for exercising the replication path, not for high availability.
-- **Leader-only writes.** Followers reject writes with a structured `not_leader`
-  error and a leader hint.
-- **Snapshot boundary, metrics, and CLI.** A versioned snapshot manifest for
-  future state transfer; Raft/replication metrics; and
-  `auradb cluster init|status|peers|doctor|bootstrap`.
-
-See [`docs/CLUSTERING.md`](docs/CLUSTERING.md),
-[`docs/RAFT.md`](docs/RAFT.md), and [`docs/REPLICATION.md`](docs/REPLICATION.md).
-
-## New in 0.5.0: experimental multi-node preview
-
-> **AuraDB v0.5.0 introduces a controlled, experimental multi-node server
-> preview. Single-node mode remains the recommended production mode.**
-
-Real AuraDB server processes can now form a cross-process cluster, elect a leader,
-and replicate writes through Raft. The preview is **off by default** and requires
-two explicit `[cluster]` opt-ins:
+AuraDB can form a static, cross-process cluster that elects a leader and replicates writes
+through Raft over an authenticated, frame-checked peer transport. The preview is **off by
+default** and gated behind two explicit `[cluster]` opt-ins:
 
 ```toml
 [cluster]
@@ -320,298 +187,62 @@ enabled = true
 experimental_multi_node = true
 ```
 
-- **Cross-process peer transport.** A dedicated, frame-checked (magic `APR1`,
-  protocol v1, length-delimited, CRC32, 16 MiB cap) socket carries Raft messages;
-  connections open with a `PeerHello` handshake that verifies the protocol
-  version, cluster id, node id (against static membership), and a shared token.
-- **Static membership.** Every node declares every other by `{ node_id, addr }`;
-  there is no join/leave/dynamic membership.
-- **Fail-closed guardrails.** A non-empty `peers` list requires
-  `experimental_multi_node = true`; any non-loopback cluster address requires
-  `allow_experimental_public_cluster = true`, which additionally requires peer TLS
-  and a `peer_auth_token`.
-- **Leader/follower behavior.** Writes go to the leader and commit on a majority
-  (a minority cannot commit); followers reject writes with a structured
-  `not_leader` error and reject reads. A restarted follower catches up from the
-  leader.
-- **Live tooling.** `auradb cluster leader|wait-leader|wait-ready` query a running
-  node, and `auradb status --json` reports per-peer state (`preview_multi_node`,
-  `quorum_available`, `peers`).
+**What works:** leader election, majority-commit replication, leader-only writes (followers
+return a structured `not_leader` error with a leader hint), follower catch-up, snapshot
+install, and live tooling (`auradb cluster leader|wait-leader|wait-ready`, `auradb status
+--json`). The validated path is the three-node loopback example in
+[`examples/cluster`](examples/cluster).
 
-The validated path is the three-node loopback example. Try it from
-[`examples/cluster`](examples/cluster) and read
-[`docs/CLUSTERING.md`](docs/CLUSTERING.md):
+**What remains preview:** this is for local testing and early validation only. It is **not
+production HA**. Not provided: production automatic failover, dynamic membership,
+linearizable follower reads, distributed transactions, sharding, and multi-region. The
+evidence required before any production HA claim is tracked in
+[`docs/HA_RELEASE_CANDIDATE.md`](docs/HA_RELEASE_CANDIDATE.md); see also
+[`docs/CLUSTERING.md`](docs/CLUSTERING.md) and
+[`docs/CLUSTER_TROUBLESHOOTING.md`](docs/CLUSTER_TROUBLESHOOTING.md).
 
-```bash
-auradb server --config examples/cluster/node1.toml
-auradb server --config examples/cluster/node2.toml
-auradb server --config examples/cluster/node3.toml
-auradb cluster wait-leader --addr 127.0.0.1:7171 --timeout-secs 30
-auradb cluster status      --addr 127.0.0.1:7171 --json
-```
+## Not supported
 
-This is an experimental preview for local testing and early validation only; it
-is not production multi-node clustering and has no automatic failover.
+AuraDB is deliberately honest about its boundaries. The following are **not** implemented and
+**not** claimed: production HA, production automatic failover, production cluster readiness,
+dynamic membership, distributed transactions, linearizable follower reads, sharding,
+multi-region; approximate (ANN/HNSW) vector search; serializable isolation; RBAC, field-level
+encryption, encryption at rest, and audit logging. Planned directions are in
+[`docs/ROADMAP.md`](docs/ROADMAP.md).
 
-## What is intentionally not claimed yet
+## Documentation
 
-Production multi-node clustering, automatic failover, dynamic membership,
-linearizable reads, follower reads, distributed transactions, sharding, and
-multi-region (the 0.5.0 multi-node path is an experimental, opt-in preview);
-ANN/HNSW vector indexes; BM25 full-text and hybrid fusion ranking; serializable
-isolation; RBAC, field-level encryption, encryption at rest, and audit logging;
-time-travel queries; and change streams. These are tracked in the
-[roadmap](docs/ROADMAP.md).
+**Getting started** — [Deployment](docs/DEPLOYMENT.md) · [CLI](docs/CLI.md) ·
+[Configuration](docs/CONFIGURATION.md) · [Architecture](docs/ARCHITECTURE.md) ·
+[Design decisions](docs/DECISIONS.md)
 
-## Quick start
+**Query & search** — [Query engine](docs/QUERY_ENGINE.md) ·
+[Search & ranking](docs/SEARCH_AND_RANKING.md) · [Full-text](docs/FULL_TEXT.md) ·
+[Vectors](docs/VECTORS.md) · [Documents](docs/DOCUMENTS.md) ·
+[Relationships](docs/RELATIONSHIPS.md) · [Cursors](docs/CURSORS.md) ·
+[Indexing](docs/INDEXING.md) · [Storage engine](docs/STORAGE_ENGINE.md) ·
+[Transactions](docs/TRANSACTIONS.md)
 
-```bash
-# Build everything.
-cargo build --release
+**Operations** — [Production readiness](docs/PRODUCTION_READINESS.md) ·
+[Operations](docs/OPERATIONS.md) · [Runbooks](docs/RUNBOOKS.md) ·
+[Observability](docs/OBSERVABILITY.md) · [Upgrading](docs/UPGRADING.md) ·
+[Benchmarks](docs/BENCHMARKS.md)
 
-# Initialize a data directory and config.
-./target/release/auradb init --data-dir .local/auradb --config AuraDB.toml
+**Security** — [Security policy](SECURITY.md) · [Security model](docs/SECURITY.md)
 
-# Start the server.
-./target/release/auradb server --data-dir .local/auradb --bind 127.0.0.1 --port 7171
+**Compatibility** — [Compatibility matrix](docs/COMPATIBILITY.md) ·
+[Support policy](docs/SUPPORT_POLICY.md) ·
+[Connector compatibility](docs/AURA_CONNECTOR_COMPATIBILITY.md) ·
+[Protocol](docs/PROTOCOL.md)
 
-# In another shell: check it is healthy.
-./target/release/auradb status --addr 127.0.0.1:7171
-```
+**Multi-node preview** — [HA candidate](docs/HA_RELEASE_CANDIDATE.md) ·
+[Clustering](docs/CLUSTERING.md) · [Raft](docs/RAFT.md) ·
+[Replication](docs/REPLICATION.md) · [Cluster troubleshooting](docs/CLUSTER_TROUBLESHOOTING.md)
 
-## Install and build from source
-
-AuraDB builds with a stable Rust toolchain (1.85 or newer).
-
-```bash
-git clone https://github.com/Ohswedd/auradb.git
-cd auradb
-cargo build --release
-# The server and CLI binary is target/release/auradb
-```
-
-## Run the server
-
-```bash
-./target/release/auradb server --data-dir .local/auradb --bind 127.0.0.1 --port 7171
-```
-
-The server listens for Aura Wire Protocol frames over TCP. Configuration can come
-from `AuraDB.toml`, the data directory, and CLI flags.
-
-Binding loopback (`127.0.0.1`) is local developer mode and may leave auth
-disabled. Binding a non-loopback address (for example `0.0.0.0`) with auth
-disabled is rejected at startup unless you set `allow_insecure_bind = true` in
-config or pass `--allow-insecure-bind`.
-
-## Authentication and TLS quickstart
-
-Enforced static-token authentication and server-terminated TLS are both opt-in
-and fail closed. Full details are in [`docs/SECURITY.md`](docs/SECURITY.md).
-
-```bash
-# Generate an Argon2id token hash to paste into the [auth] config block.
-auradb auth hash-token --token "your-secret"
-# Output: $argon2id$v=19$m=19456,t=2,p=1$...$...
-```
-
-```toml
-[auth]
-enabled = true
-mode = "static-token"
-token_hash = "$argon2id$v=19$m=19456,t=2,p=1$...$..."
-token_hash_algorithm = "argon2id"
-```
-
-```bash
-# Generate development-only certificates (CA, server cert/key) for local TLS.
-auradb cert generate-dev --out-dir .local/certs
-```
-
-```toml
-[tls]
-enabled = true
-cert_path = ".local/certs/server.crt"
-key_path  = ".local/certs/server.key"
-```
-
-```bash
-# Connect over TLS, trusting the dev CA, and present the token.
-auradb status --addr 127.0.0.1:7171 --tls-ca .local/certs/ca.crt --token "your-secret"
-```
-
-Tokens are never stored or compared in plaintext, secrets are never logged or
-echoed in error frames, and `auradb doctor` prints a redacted security summary.
-
-## Connect with Aura Connector
-
-Aura Connector talks to AuraDB over AWP. The published Aura Connector 0.4.x
-ships a native AuraDB-over-TCP backend that speaks AWP 1, including auth and TLS.
-Point it at the server address:
-
-```bash
-python -m pip install "aura-connector>=0.4,<0.5"
-python tests/conformance/python/run_connector_smoke.py --addr 127.0.0.1:7171 \
-  --auth-token "your-secret" --tls-ca .local/certs/ca.crt
-```
-
-For the multi-node preview, Aura Connector 0.4.x maps a `not_leader` response to a
-dedicated `AuraNotLeaderError` and offers safe `connect_to_leader` / bounded
-`with_leader_redirect` helpers; the cluster conformance runner is
-`tests/conformance/python/run_connector_cluster.py`. Aura Connector 0.3.x stays
-compatible (it routes the leader manually). Aura Connector 0.2.x uses a different
-internal framing and is not wire compatible. See
-[`docs/AURA_CONNECTOR_COMPATIBILITY.md`](docs/AURA_CONNECTOR_COMPATIBILITY.md).
-
-The Rust conformance client in `crates/auradb-conformance` stands in for the
-client in automated tests and exercises the same scenarios over the wire.
-
-## CLI examples
-
-```bash
-auradb version
-auradb init --data-dir .local/auradb
-auradb doctor --data-dir .local/auradb --json
-auradb check --data-dir .local/auradb
-auradb gc --data-dir .local/auradb
-auradb stats analyze --data-dir .local/auradb
-auradb stats show --data-dir .local/auradb --json
-auradb bench --json --output benches/baseline/v1.0.1.json
-auradb status --addr 127.0.0.1:7171 --json
-auradb cluster leader --addr 127.0.0.1:7171 --json
-auradb cluster wait-leader --addr 127.0.0.1:7171 --timeout-secs 30
-auradb cluster wait-ready --addr 127.0.0.1:7171 --timeout-secs 30
-auradb auth hash-token --token "your-secret"
-auradb auth rotate-token --config AuraDB.toml --token "new-secret" --backup
-auradb cert generate-dev --out-dir .local/certs
-auradb config validate --config examples/auradb.secure.toml --no-file-checks
-auradb dump --data-dir .local/auradb --output backup.jsonl
-auradb restore --data-dir .local/restored --input backup.jsonl
-auradb index check --data-dir .local/auradb
-```
-
-| Command | Description |
-|---|---|
-| `auradb version` | Print the version |
-| `auradb init` | Create a data directory and config file |
-| `auradb server` | Start the server (`--allow-insecure-bind` to permit a public bind without auth) |
-| `auradb doctor` | Validate config and data directory; print a redacted security summary (`--json`) |
-| `auradb status` | Ping a running server and report health (`--token`, `--tls-ca`, `--tls-server-name`, `--json`) |
-| `auradb check` | Verify on-disk index consistency |
-| `auradb gc` | Reclaim record versions no active transaction can observe |
-| `auradb stats analyze` | Recompute and persist planner statistics |
-| `auradb stats show` | Print persisted planner statistics (`--json`) |
-| `auradb compact` | Compact the storage log and write fresh index snapshots |
-| `auradb dump` | Export schemas and records to JSONL (`--output`) |
-| `auradb restore` | Restore from a JSONL dump (`--input`) |
-| `auradb bench` | Run the local benchmark suite (`--json`, `--output`) |
-| `auradb auth hash-token` | Generate an Argon2id token hash for the config |
-| `auradb auth rotate-token` | Rotate the static token in a config file (`--backup`) |
-| `auradb cert generate-dev` | Generate development-only TLS certificates |
-| `auradb config validate` | Validate a config file (`--no-file-checks` for templates) |
-| `auradb compatibility` | Print version, AWP version, capabilities, and tested connector version |
-| `auradb index check` | Report how indexes loaded and verify consistency |
-| `auradb index rebuild` | Rebuild indexes from storage and persist fresh snapshots |
-| `auradb cluster leader` | Report the leader a running server recognizes (`--addr`, `--json`) |
-| `auradb cluster wait-leader` | Block until a running server reports a leader (`--addr`, `--timeout-secs`) |
-| `auradb cluster wait-ready` | Block until a running server reports ready (`--addr`, `--timeout-secs`) |
-
-See [`docs/CLI.md`](docs/CLI.md) and [`docs/COMPATIBILITY.md`](docs/COMPATIBILITY.md).
-
-## Data model overview
-
-A record belongs to a typed collection defined by a schema. A record can carry
-scalar fields, nested document fields, relationship fields, and fixed-dimension
-vector fields at the same time. Records are addressed by a stable logical id;
-physical storage offsets are never exposed as durable identity. See
-[`docs/DOCUMENTS.md`](docs/DOCUMENTS.md) and
-[`docs/RELATIONSHIPS.md`](docs/RELATIONSHIPS.md).
-
-## Query capabilities
-
-The Query IR supports point reads, filters (comparisons, `in`, `contains`,
-`AND`/`OR`/`NOT`, document path access), ordering, limit and offset, projection,
-count, exists, insert, bulk insert, update, delete, upsert, relationship
-includes, exact vector nearest-neighbour search, `EXPLAIN` (and `EXPLAIN
-ANALYZE`), and a migration impact estimate. Reads route through a cost-based
-planner. Unsupported operations return a structured capability error. See
-[`docs/QUERY_ENGINE.md`](docs/QUERY_ENGINE.md).
-
-## Storage and transaction model
-
-Storage is an append-only, CRC32C-checksummed segment log with a manifest, using
-MVCC version chains (storage format v2): each record id maps to an ordered chain
-of committed versions stamped with a commit timestamp, and a delete is a
-tombstone version. On open, the engine replays segments to rebuild the version
-chains and indexes; a torn tail record is detected by checksum and truncated.
-Transactions pin a read timestamp at `begin` and read from that snapshot
-(committed state as of the snapshot, overlaid with the transaction's own staged
-writes and deletes), uniformly across find, filter, count, exists, explain,
-vector, document-path, full-text, relationship include, and cursor paging.
-Non-transactional reads see the latest committed state. Commit acquires the
-engine write lock, performs optimistic first-committer-wins write-conflict
-detection, and appends a commit batch atomically. Rollback discards the staged
-set. AuraDB v0.3.0 implements single-node snapshot isolation with optimistic
-write conflict detection. It is not serializable isolation. See
-[`docs/STORAGE_ENGINE.md`](docs/STORAGE_ENGINE.md) and
-[`docs/TRANSACTIONS.md`](docs/TRANSACTIONS.md).
-
-## Vector, document, and relationship support
-
-- **Vectors.** Fixed-dimension vectors are validated and stored inline. Nearest
-  search is exact, ranked by cosine, euclidean, or dot product, behind a
-  `VectorIndex` trait. ANN is not claimed. See [`docs/VECTORS.md`](docs/VECTORS.md).
-- **Documents.** JSON-like nested objects and arrays are stored, validated where
-  declared, and filterable by path. See [`docs/DOCUMENTS.md`](docs/DOCUMENTS.md).
-- **Relationships.** Forward links with hydration through query includes and
-  referential consistency checks. See
-  [`docs/RELATIONSHIPS.md`](docs/RELATIONSHIPS.md).
-
-## Observability
-
-A metrics registry exports counters, gauges, and latency histograms as JSON and
-Prometheus text, covering request and query latency, storage and WAL latency,
-bytes read and written, active connections and transactions, cursor counts, and
-error counts. Structured tracing is built in, and health and readiness surfaces
-are exposed. No external collector is required to run the server. See
-[`docs/OBSERVABILITY.md`](docs/OBSERVABILITY.md).
-
-## Docker usage
-
-A published image is available on the GitHub Container Registry:
-
-```bash
-docker run --rm -p 7171:7171 -v auradb-data:/data ghcr.io/ohswedd/auradb:1.0.1
-```
-
-The image runs as a non-root user, exposes `7171`, stores data in the `/data`
-volume, and ships a `HEALTHCHECK` that calls `auradb status`. This base image is
-for development; it binds all interfaces with `--allow-insecure-bind`.
-
-For a deployment, use `docker-compose.secure.yml`, which enables authentication
-and TLS, runs as a non-root user with a read-only root filesystem, mounts a
-config and a certificate directory, and injects the token hash from the
-environment so no secret is committed. See [`docs/DEPLOYMENT.md`](docs/DEPLOYMENT.md).
-
-```bash
-# Development image (build locally or pull from GHCR).
-docker compose up --build
-docker build -t auradb:local .
-docker run --rm auradb:local auradb version
-
-# Validate the secure deployment compose file.
-docker compose -f docker-compose.secure.yml config
-```
-
-## Upgrading
-
-The on-disk storage format moves to v2 (commit-timestamped version chains) in
-0.3.0. A v0.1.0, v0.2.0, or v0.2.1 data directory (storage format v1) is migrated
-to v2 transparently the first time v0.3.0 opens it: existing records become the
-first committed version on each chain, and planner statistics are initialized. An
-unknown future format is still rejected rather than opened. This is covered by
-tests against committed v0.2.0 and v0.2.1 fixtures. Take a backup with `auradb
-dump` first. See [`docs/UPGRADING.md`](docs/UPGRADING.md).
+**Release & contributing** — [Changelog](CHANGELOG.md) · [Roadmap](docs/ROADMAP.md) ·
+[Release process](docs/RELEASE.md) · [Testing](docs/TESTING.md) ·
+[Conformance](docs/CONFORMANCE.md) · [Contributing](CONTRIBUTING.md) ·
+[Code of Conduct](CODE_OF_CONDUCT.md)
 
 ## Testing
 
@@ -619,54 +250,10 @@ dump` first. See [`docs/UPGRADING.md`](docs/UPGRADING.md).
 cargo test --workspace --all-features
 ```
 
-Tests span unit, integration (a real server over TCP), backup/restore, upgrade
-from v0.2.0 and v0.2.1 data directories (the v1-to-v2 MVCC migration), snapshot
-isolation and version GC, query planner and `EXPLAIN ANALYZE`, deterministic
-chaos restart under write load, deterministic seeded recovery and corruption
-tests (restart, torn-tail truncation, byte-flip detection, catalog and index
-repair), and conformance. See [`docs/TESTING.md`](docs/TESTING.md).
-
-## Benchmarks
-
-Benchmarks measure real code with no fabricated numbers. Criterion
-microbenchmarks run with `cargo bench --workspace` and cover frame encode and
-decode, storage writes and reads, indexed versus full-scan queries, exact vector
-search, cursor paging, MVCC version reads and GC, planner access-path selection,
-and `EXPLAIN ANALYZE`.
-
-The CLI also runs a baseline suite and writes a JSON snapshot:
-
-```bash
-auradb bench --json --output benches/baseline/v1.0.1.json
-```
-
-Benchmarks are hardware-dependent and exist to catch regressions on the same
-machine, not as universal claims. See [`docs/BENCHMARKS.md`](docs/BENCHMARKS.md)
-and the committed baseline under `benches/baseline/`.
-
-## Security model and current limits
-
-Payload limits, frame validation, fail-closed storage, and
-`#![forbid(unsafe_code)]` are in place across every crate. Static-token
-authentication (Argon2id-hashed, constant-time verification) and
-server-terminated TLS with optional mutual TLS (rustls) are implemented and
-enforced when enabled; both fail closed, so plaintext is never served under a TLS
-configuration and a public bind without auth is rejected at startup. Tokens and
-other secrets are never logged or echoed. Not implemented: RBAC, field-level
-encryption, encryption at rest, and audit logging. AuraDB is single node. See
-[`SECURITY.md`](SECURITY.md) and [`docs/SECURITY.md`](docs/SECURITY.md).
-
-## Roadmap
-
-Planned directions, including ANN vector indexes, BM25 full-text and hybrid
-ranking, serializable isolation, RBAC, field-level encryption, audit logging,
-change streams, time travel, and distribution (replication, clustering, sharding,
-Raft), are described in [`docs/ROADMAP.md`](docs/ROADMAP.md).
-
-## Contributing
-
-Contributions are welcome. Please read [`CONTRIBUTING.md`](CONTRIBUTING.md) and
-the [Code of Conduct](CODE_OF_CONDUCT.md) before opening a pull request.
+Tests span unit, integration over real TCP, backup/restore, the v1-to-v2 MVCC upgrade,
+snapshot isolation and version GC, planner and `EXPLAIN ANALYZE`, ranked and hybrid search,
+deterministic chaos/recovery and corruption drills, multi-node replication, and conformance.
+See [`docs/TESTING.md`](docs/TESTING.md).
 
 ## License
 
