@@ -236,6 +236,32 @@ Run the serial cluster suite the same way as before:
 cargo test -p auradb-replication --test multi_node -- --test-threads=1
 ```
 
+## Final HA candidate stabilization suites (v0.9.2)
+
+> **AuraDB v0.9.2 is the final planned HA candidate stabilization. It is not
+> production HA; single-node mode remains the recommended production mode.** See
+> [HA_RELEASE_CANDIDATE.md](HA_RELEASE_CANDIDATE.md) §10 and the
+> [v1.0 decision checklist](V1_0_DECISION_CHECKLIST.md).
+
+v0.9.2 adds tests that pin the leader-hint contract across **multiple** leader
+changes and an old-leader rejoin, and a docs-consistency test — it adds no new
+config or semantics. The snapshot/compaction/old-leader-rejoin scenarios are
+already covered by the v0.9.x suite and are **mapped** (not duplicated) in
+[HA_RELEASE_CANDIDATE.md](HA_RELEASE_CANDIDATE.md) §10.
+
+- **Leader-hint across multiple changes / rejoin**
+  (`crates/auradb-replication/tests/multi_node.rs`):
+  `not_leader_uses_advertised_client_addr_after_multiple_re_elections` (after two
+  kill/elect/rejoin cycles the current leader names its own client address and all
+  nodes converge on it) and `not_leader_hint_survives_old_leader_rejoin` (the hint
+  stays present and consistent when a stopped old leader rejoins as a follower).
+- **Docs consistency** (`crates/auradb-server/tests/cluster_preview.rs`):
+  `docker_compose_docs_explain_in_network_vs_host_client_addr` asserts the operator
+  docs explain the in-network vs. host-published client address and the re-resolve
+  fallback.
+
+These run as part of the serial multi-node suite below.
+
 ## HA release-candidate stabilization suites (v0.9.1)
 
 > **AuraDB v0.9.1 is an HA release-candidate stabilization of the v0.9.0

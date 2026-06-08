@@ -436,6 +436,38 @@ fn docker_compose_cluster_not_leader_hint_has_client_addr_if_configured() {
     }
 }
 
+#[test]
+fn docker_compose_docs_explain_in_network_vs_host_client_addr() {
+    // The operator docs must explain that the Docker Compose leader-client-address
+    // hint is the in-Docker-network address (e.g. node2:7171), which is NOT the
+    // host-published port (e.g. 127.0.0.1:7181), so a host client re-resolves the
+    // leader — the documented fallback, not a failure. This keeps the docs honest
+    // and prevents the documented fallback from being read as a bug.
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("..")
+        .join("..");
+    for (file, needles) in [
+        (
+            "docs/CLUSTER_TROUBLESHOOTING.md",
+            ["in-network", "published port", "re-resolve"],
+        ),
+        (
+            "examples/cluster/README.md",
+            ["in-network", "host-published", "re-resolve"],
+        ),
+    ] {
+        let text =
+            std::fs::read_to_string(root.join(file)).unwrap_or_else(|e| panic!("read {file}: {e}"));
+        for needle in needles {
+            assert!(
+                text.contains(needle),
+                "{file} must explain the in-network vs. host-published client address \
+                 (missing {needle:?})"
+            );
+        }
+    }
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn leader_reports_its_own_client_addr_in_health() {
     // The leader names its OWN client address in health (from

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# AuraDB v0.9.1 HA release-candidate smoke test.
+# AuraDB v0.9.2 HA release-candidate smoke test.
 #
 # Drives the controlled static-cluster preview through a leader change end to
 # end: generate development peer certificates, start the three-node Compose
@@ -18,10 +18,13 @@
 #
 # Image selection (AURADB_IMAGE):
 #   - Locally built image:
-#       docker build -t auradb:0.9.1 .
-#       AURADB_IMAGE=auradb:0.9.1 bash scripts/smoke_ha_candidate.sh
+#       docker build -t auradb:0.9.2 .
+#       AURADB_IMAGE=auradb:0.9.2 bash scripts/smoke_ha_candidate.sh
 #   - Published image (post-release verification):
-#       AURADB_IMAGE=ghcr.io/ohswedd/auradb:0.9.1 bash scripts/smoke_ha_candidate.sh
+#       AURADB_IMAGE=ghcr.io/ohswedd/auradb:0.9.2 bash scripts/smoke_ha_candidate.sh
+#
+# Keep artifacts (certs, compose project, logs) for inspection instead of tearing
+# down on success: KEEP_ARTIFACTS=1 bash scripts/smoke_ha_candidate.sh
 #
 # Usage:
 #   bash scripts/smoke_ha_candidate.sh
@@ -30,7 +33,8 @@ set -euo pipefail
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "${REPO_ROOT}"
 COMPOSE_FILE="docker-compose.cluster.yml"
-export AURADB_IMAGE="${AURADB_IMAGE:-ghcr.io/ohswedd/auradb:0.9.1}"
+export AURADB_IMAGE="${AURADB_IMAGE:-ghcr.io/ohswedd/auradb:0.9.2}"
+KEEP_ARTIFACTS="${KEEP_ARTIFACTS:-0}"
 
 # Host client ports published by docker-compose.cluster.yml and the container
 # each maps to. A function (not an associative array) keeps this portable to the
@@ -69,6 +73,12 @@ cleanup() {
     echo "HA candidate smoke failed (exit ${status}); dumping cluster logs..." >&2
     dump_logs
   fi
+  if [ "${KEEP_ARTIFACTS}" = "1" ]; then
+    echo "KEEP_ARTIFACTS=1: leaving the Compose cluster and certs in place for inspection." >&2
+    echo "  Inspect: docker compose -f ${COMPOSE_FILE} ps / logs" >&2
+    echo "  Tear down manually: docker compose -f ${COMPOSE_FILE} down -v" >&2
+    return
+  fi
   echo "tearing down the Compose cluster..."
   if docker compose -f "${COMPOSE_FILE}" down -v >/dev/null 2>&1; then
     echo "teardown: ok"
@@ -79,6 +89,12 @@ cleanup() {
 trap cleanup EXIT
 
 echo "using image: ${AURADB_IMAGE}"
+
+# Image digest (best-effort): the published RepoDigest if present, else the local
+# image id. Recording the digest pins exactly which artifact this smoke validated.
+IMAGE_DIGEST="$(docker image inspect "${AURADB_IMAGE}" \
+  --format '{{- if .RepoDigests}}{{index .RepoDigests 0}}{{else}}{{.Id}}{{end}}' 2>/dev/null || true)"
+echo "image digest: ${IMAGE_DIGEST:-<unknown — pull/build the image to record a digest>}"
 
 # Fail loudly on a tag/version mismatch (a stale :latest is a common footgun).
 IMAGE_TAG_VERSION="${AURADB_IMAGE##*:}"
@@ -124,6 +140,14 @@ leader_client_addr_of() {
     | grep -o '"[^"]*"$' | tr -d '"' | head -1 || true
 }
 
+# Report the server version a running node advertises via `auradb status --json`.
+node_version() {
+  local port="$1"
+  "${AURADB}" status --addr "127.0.0.1:${port}" --json 2>/dev/null \
+    | grep -o '"version"[[:space:]]*:[[:space:]]*"[^"]*"' \
+    | grep -o '"[^"]*"$' | tr -d '"' | head -1 || true
+}
+
 # Find the host port whose node reports it is the leader, among the given ports,
 # within a bounded deadline. Echoes the port, or nothing if none found.
 find_leader_port() {
@@ -154,6 +178,13 @@ LEADER_CONTAINER="$(port_to_container "${LEADER_PORT}")"
 echo "initial leader: ${LEADER_CONTAINER} (host 127.0.0.1:${LEADER_PORT})"
 echo "candidate host addresses: 127.0.0.1:${HOST_PORTS[0]}, 127.0.0.1:${HOST_PORTS[1]}, 127.0.0.1:${HOST_PORTS[2]}"
 
+# Report the server version each node advertises, so a mixed-version cluster (a
+# common upgrade footgun) is visible up front.
+echo "server versions (per node):"
+for port in "${HOST_PORTS[@]}"; do
+  echo "  $(port_to_container "${port}") (127.0.0.1:${port}): $(node_version "${port}" || true)"
+done
+
 # Leader hint diagnostics: with the Compose configs declaring advertise_client_addr,
 # the leader names its own client address — but that is the IN-NETWORK address
 # (e.g. node1:7171), not the host-published port. So a host client cannot use the
@@ -168,9 +199,12 @@ echo "cluster status:"
 # Optional connector write through the leader (best-effort; the core HA checks
 # below do not depend on it).
 CONNECTOR_OK=0
+CONNECTOR_VERSION=""
 if command -v python3 >/dev/null 2>&1 \
    && python3 -m pip install --quiet "aura-connector>=0.4.1,<0.5" 2>/dev/null; then
   CONNECTOR_OK=1
+  CONNECTOR_VERSION="$(python3 -c 'import importlib.metadata as m; print(m.version("aura-connector"))' 2>/dev/null || true)"
+  echo "Aura Connector version: ${CONNECTOR_VERSION:-unknown}"
   echo "writing through the leader with the Aura Connector..."
   python3 tests/conformance/python/run_connector_smoke.py \
     --addr "127.0.0.1:${LEADER_PORT}" --tls-ca .local/certs/ca.crt || \
@@ -252,20 +286,35 @@ STATUS_JSON="$("${AURADB}" cluster status --addr "127.0.0.1:${NEW_LEADER_PORT}" 
 CONNECTED="$(printf '%s' "${STATUS_JSON}" | grep -o '"connected":[[:space:]]*true' | wc -l | tr -d ' ')"
 QUORUM="$(printf '%s' "${STATUS_JSON}" | grep -o '"quorum_available"[^,}]*' | grep -o 'true\|false' | head -1 || true)"
 
+# Leader client-address SOURCE: where a client would obtain the leader's client
+# address. With Compose, an advertised hint is the in-network address, so a host
+# client still re-resolves (fallback) — record both honestly.
+if [ -n "${NEW_HINT}" ]; then
+  HINT_SOURCE="advertised (in-network: ${NEW_HINT}); host clients re-resolve by host port (fallback)"
+else
+  HINT_SOURCE="fallback (re-resolve/probe by host port; no client address advertised)"
+fi
+
 echo
 echo "=== HA candidate smoke summary ==="
-echo "image:           ${AURADB_IMAGE}"
-echo "initial leader:   ${LEADER_CONTAINER} (host 127.0.0.1:${LEADER_PORT})"
-echo "new leader:       $(port_to_container "${NEW_LEADER_PORT}") (host 127.0.0.1:${NEW_LEADER_PORT})"
-echo "initial hint:     ${INITIAL_HINT:-<none>} (in-network; host clients re-resolve)"
-echo "new leader hint:  ${NEW_HINT:-<none>} (in-network; host clients re-resolve)"
-echo "quorum:           ${QUORUM:-unknown}"
-echo "peers connected:  ${CONNECTED:-unknown} (expect the rejoined old leader back)"
-echo "connector:        $([ "${CONNECTOR_OK}" -eq 1 ] && echo exercised || echo skipped)"
+echo "image:                 ${AURADB_IMAGE}"
+echo "image digest:          ${IMAGE_DIGEST:-<unknown>}"
+echo "initial leader:        ${LEADER_CONTAINER} (host 127.0.0.1:${LEADER_PORT})"
+echo "new leader:            $(port_to_container "${NEW_LEADER_PORT}") (host 127.0.0.1:${NEW_LEADER_PORT})"
+echo "initial hint:          ${INITIAL_HINT:-<none>} (in-network; host clients re-resolve)"
+echo "new leader hint:       ${NEW_HINT:-<none>} (in-network; host clients re-resolve)"
+echo "leader addr source:    ${HINT_SOURCE}"
+echo "quorum:                ${QUORUM:-unknown}"
+echo "peers connected:       ${CONNECTED:-unknown} (expect the rejoined old leader back)"
+echo "connector:             $([ "${CONNECTOR_OK}" -eq 1 ] && echo "exercised (v${CONNECTOR_VERSION:-unknown})" || echo skipped)"
 echo
-echo "leader-hint note: the Compose hint is the in-Docker-network client address;"
-echo "                  a HOST client re-resolves the leader by host port (documented"
-echo "                  fallback), so an empty/in-network hint here is expected, not a"
-echo "                  failure. See docs/CLUSTER_TROUBLESHOOTING.md."
+echo "pass criteria (all must hold):"
+echo "  - an initial leader was resolved;"
+echo "  - a DIFFERENT new leader was elected after the leader was stopped;"
+echo "  - the old leader rejoined and a stable leader holds;"
+echo "  - quorum is available and all peers reconnected."
+echo "expected, NOT a failure:"
+echo "  - an empty/in-network leader hint on the HOST (host clients re-resolve by"
+echo "    host port — the documented fallback). See docs/CLUSTER_TROUBLESHOOTING.md."
 echo
 echo "HA candidate smoke OK (controlled static-cluster preview; not production HA proof)"

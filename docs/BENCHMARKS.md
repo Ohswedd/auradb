@@ -219,6 +219,23 @@ auradb bench compare --baseline benches/baseline/v0.6.2.json --current benches/b
 > and v0.7.1 were connector-ergonomics releases that did **not** refresh the engine
 > baseline, so v0.6.2 is the prior baseline to compare against.
 
+### v0.9.2 baseline (final HA candidate stabilization)
+
+v0.9.2 commits `benches/baseline/v0.9.2.json` for continuity. It is the final HA
+candidate stabilization patch and adds **no** new config, cluster architecture, or
+semantics over v0.9.1 — only tests, smoke and runbook polish, the v1.0 decision
+checklist, and documentation — so it changes no query, storage, or MVCC hot path
+and its numbers track v0.9.1 within run-to-run noise on the same machine (captured
+with the **release** profile):
+
+```bash
+cargo run --release -p auradb-cli -- bench --json --output benches/baseline/v0.9.2.json
+auradb bench compare --baseline benches/baseline/v0.9.1.json --current benches/baseline/v0.9.2.json
+```
+
+As with every benchmark here, the numbers are **machine-specific and warn-only**,
+never a release gate. Compare only same-machine, same-profile reports.
+
 ### v0.9.1 baseline (HA release-candidate stabilization)
 
 v0.9.1 commits `benches/baseline/v0.9.1.json` for continuity. It is an HA

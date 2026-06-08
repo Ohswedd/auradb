@@ -4,7 +4,26 @@ This roadmap describes where AuraDB is headed beyond the first single-node
 release. It is a statement of direction, not a delivery commitment. Items are
 grouped by theme and listed roughly in the order we expect to approach them.
 
-## Current release: 0.9.1
+## Current release: 0.9.2
+
+AuraDB 0.9.2 is the **final planned HA candidate stabilization** before the v1.0
+decision — still an **HA release candidate for the controlled static-cluster
+preview, not a production HA guarantee**. It adds **no** new configuration, cluster
+architecture, or semantics. It finalizes the HA candidate evidence and gap list,
+adds a [v1.0 decision checklist](V1_0_DECISION_CHECKLIST.md) (what v1.0 can and
+cannot claim, the requirements and evidence for single-node production and for
+production HA, the evidence still missing, and the recommended scope), strengthens
+the leader-hint / client-address tests and operator runbooks after
+`advertise_client_addr`, sharpens the HA smoke and the published-image post-release
+checklist, and maps the snapshot/compaction/old-leader-rejoin coverage to existing
+tests rather than duplicating them. The storage format (v2) and AWP 1 are
+unchanged and Aura Connector v0.4.1 stays compatible. **Single-node mode remains
+the recommended production mode**; multi-node remains a controlled static-cluster
+preview. See [V0_9_2_RELEASE_NOTES.md](V0_9_2_RELEASE_NOTES.md),
+[V1_0_DECISION_CHECKLIST.md](V1_0_DECISION_CHECKLIST.md), and
+[HA_RELEASE_CANDIDATE.md](HA_RELEASE_CANDIDATE.md).
+
+### Delivered in 0.9.1
 
 AuraDB 0.9.1 is an **HA release-candidate stabilization** of the v0.9.0
 candidate — still an **HA release candidate for the controlled static-cluster
@@ -48,7 +67,7 @@ mode**; multi-node remains a controlled static-cluster preview. See
 ### Future production HA criteria
 
 AuraDB will **not** claim production HA until all of the following are met and
-documented with evidence (none are met in 0.9.1): repeated long soak; snapshot
+documented with evidence (none are met in 0.9.2): repeated long soak; snapshot
 install under large state (with chunked/streaming transfer if needed);
 backup/restore cluster drills with documented RPO/RTO; network partitions across
 real environments (not just loopback); disk-full and I/O-error behavior;
