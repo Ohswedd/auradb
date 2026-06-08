@@ -1,16 +1,17 @@
 # AuraDB Compatibility Matrix
 
-This document records what AuraDB v0.9.1 implements and how it interoperates with
-the Aura Connector client library and the Aura Wire Protocol (AWP). v0.9.1 is an
-**HA release candidate for the controlled static-cluster preview, not a
-production HA guarantee** — it stabilizes the v0.9.0 candidate: it adds an
-optional, additive `[cluster] advertise_client_addr` field so a leader can name
-its own client address in the `not_leader` hint and cluster status/health,
-extends snapshot/compaction and connector-leader-change test coverage across a
-leader change, and sharpens the HA candidate smoke and connector conformance
-diagnostics — it adds no new cluster architecture and changes no semantics,
-storage format, or wire protocol, and keeps the v0.8.x cluster-preview ergonomics
-(off by default). See
+This document records what AuraDB v0.9.2 implements and how it interoperates with
+the Aura Connector client library and the Aura Wire Protocol (AWP). v0.9.2 is the
+**final planned HA candidate stabilization** for the controlled static-cluster
+preview, **not a production HA guarantee** — it adds no new configuration, cluster
+architecture, or semantics over v0.9.1. It finalizes the HA candidate evidence and
+gap list, adds the [v1.0 decision checklist](V1_0_DECISION_CHECKLIST.md),
+strengthens the leader-hint tests and operator runbooks, sharpens the HA smoke and
+published-image post-release checklist, and maps the
+snapshot/compaction/old-leader-rejoin coverage. It carries forward the v0.9.1
+optional, additive `[cluster] advertise_client_addr` field unchanged, keeps the
+v0.8.x cluster-preview ergonomics (off by default), and changes no storage format
+or wire protocol. See
 [HA_RELEASE_CANDIDATE.md](HA_RELEASE_CANDIDATE.md). The v0.8.x candidate it builds
 on is a hardening, validation, and operability release — a production-readiness
 candidate for single-node and a stronger cluster preview — coordinated with the
@@ -26,7 +27,8 @@ from v0.4.x.
 
 | AuraDB | Aura Connector | Protocol | Status |
 | ------ | -------------- | -------- | ------ |
-| 0.9.1  | 0.4.1          | AWP 1    | Supported, recommended (HA release-candidate stabilization of the 0.9.0 candidate; adds the optional, backward-compatible `[cluster] advertise_client_addr` field; connector unchanged; wire payload, storage format (v2), and semantics identical to 0.9.0) |
+| 0.9.2  | 0.4.1          | AWP 1    | Supported, recommended (final HA candidate stabilization; no new config, architecture, or semantics over 0.9.1; connector unchanged; wire payload, storage format (v2), and semantics identical to 0.9.1) |
+| 0.9.1  | 0.4.1          | AWP 1    | Supported (HA release-candidate stabilization of the 0.9.0 candidate; adds the optional, backward-compatible `[cluster] advertise_client_addr` field; connector unchanged; wire payload, storage format (v2), and semantics identical to 0.9.0) |
 | 0.9.0  | 0.4.1          | AWP 1    | Supported (HA release candidate for the controlled static-cluster preview, not production HA; connector unchanged; wire payload, storage format (v2), and semantics identical to 0.8.x) |
 | 0.8.1  | 0.4.1          | AWP 1    | Supported (stabilization patch over 0.8.0; connector unchanged; wire payload, storage format, and semantics identical to 0.8.0) |
 | 0.8.0  | 0.4.1          | AWP 1    | Supported (AuraDB-focused hardening release; connector unchanged; wire payload identical to 0.7.x; storage format unchanged) |
@@ -57,7 +59,7 @@ and TLS). Use Aura Connector 0.3.x to connect to an AuraDB 0.2.x server. See
 
 ## Versions
 
-- **AuraDB:** 0.9.1
+- **AuraDB:** 0.9.2
 - **Storage format:** v2 (commit-timestamped MVCC version chains), unchanged from
   v0.4.x. A v1 (≤ 0.2.x) data directory is migrated to v2 transparently on first
   open; an unknown future format is rejected. See [UPGRADING.md](UPGRADING.md).

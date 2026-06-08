@@ -1,10 +1,11 @@
 # Release guide
 
 This guide describes how a maintainer cuts an AuraDB release. The current release
-is `0.9.1` — an **HA release-candidate stabilization** of the v0.9.0 candidate,
-still an **HA release candidate for the controlled static-cluster preview, not a
-production HA guarantee**. Single-node mode remains the recommended production
-mode. See [HA_RELEASE_CANDIDATE.md](HA_RELEASE_CANDIDATE.md).
+is `0.9.2` — the **final planned HA candidate stabilization** before the v1.0
+decision, still an **HA release candidate for the controlled static-cluster
+preview, not a production HA guarantee**. Single-node mode remains the recommended
+production mode. See [HA_RELEASE_CANDIDATE.md](HA_RELEASE_CANDIDATE.md) and the
+[v1.0 decision checklist](V1_0_DECISION_CHECKLIST.md).
 
 ### GitHub Actions maintenance (Node 24)
 
@@ -46,6 +47,28 @@ known maintenance item rather than pinning a deprecated major.
   These are HA *candidate* smokes, not production HA proof, and are wired as
   manual `workflow_dispatch` jobs in `.github/workflows/cluster.yml` so they
   never block a PR.
+
+### Published-image post-release checklist (v0.9.2)
+
+After the tag publishes the multi-arch image, run **both** published-image smokes
+as post-release gates (not PR blockers). Each prints the diagnostics needed to
+confirm a clean release and to attach as evidence to a v1.0 readiness report
+(see [V1_0_DECISION_CHECKLIST.md](V1_0_DECISION_CHECKLIST.md) §5):
+
+- [ ] **Cluster Compose smoke.** `AURADB_IMAGE=ghcr.io/ohswedd/auradb:0.9.2 bash
+      scripts/smoke_cluster_compose.sh` — image used and its digest, the node
+      ports, the leader, quorum, per-peer states, and teardown.
+- [ ] **HA candidate smoke.** `AURADB_IMAGE=ghcr.io/ohswedd/auradb:0.9.2 bash
+      scripts/smoke_ha_candidate.sh` — image digest (when available), the server
+      version reported by each node, the leader **before** and **after** the kill,
+      the leader **client-address source** (advertised / status / fallback /
+      probe), the connector version, and explicit pass/fail criteria.
+- [ ] Both smokes preserve logs on failure, tear down cleanly on success, and
+      honor `KEEP_ARTIFACTS=1` to retain certs, compose project, and logs for
+      inspection.
+- [ ] Record the results (leader before/after, client-address source, connector
+      version, image digest) as evidence; a passing smoke is HA *candidate*
+      evidence, **not** production HA proof.
 
 ## Connector-first coordinated releases
 
@@ -90,8 +113,8 @@ first** so AuraDB conformance can run against the published client:
       off by default, and gated by two opt-ins.
 - [ ] The benchmark baseline under `benches/baseline/` is refreshed on the
       release machine with
-      `auradb bench --json --output benches/baseline/<version>.json` (v0.9.1
-      commits `benches/baseline/v0.9.1.json`). Benchmark numbers are
+      `auradb bench --json --output benches/baseline/<version>.json` (v0.9.2
+      commits `benches/baseline/v0.9.2.json`). Benchmark numbers are
       machine-specific and **warn-only** — never a release gate.
 
 ### Multi-node preview validation (v0.5.x, fail-stop recovery in v0.6.0)

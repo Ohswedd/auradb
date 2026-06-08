@@ -2,12 +2,25 @@
 
 This document is the connector-focused companion to the
 [Compatibility Matrix](COMPATIBILITY.md). It records which Aura Connector release
-talks to AuraDB 0.9.1, what it can drive, and what it cannot.
+talks to AuraDB 0.9.2, what it can drive, and what it cannot.
 
 > **AuraDB v0.7.x adds connector cluster ergonomics for the controlled multi-node
 > preview. It is _not_ production HA — there is no automatic failover,
 > linearizable follower reads, or distributed transactions. Single-node mode
 > remains the recommended production mode.**
+
+## Final HA candidate stabilization (v0.9.2)
+
+v0.9.2 is the final planned HA candidate stabilization. It touches **no** wire
+behavior, storage format (v2), config, or connector surface — **Aura Connector
+v0.4.1 remains the recommended, tested connector** and no connector release is
+required. The leader-hint contract below is unchanged; v0.9.2 only adds tests that
+pin it across multiple leader changes and an old-leader rejoin
+(`not_leader_uses_advertised_client_addr_after_multiple_re_elections`,
+`not_leader_hint_survives_old_leader_rejoin`) and a docs-consistency test for the
+in-network vs. host-published client-address explanation. Connector behavior under
+leader change across every supported client remains a v1.0 production-HA criterion;
+see [V1_0_DECISION_CHECKLIST.md](V1_0_DECISION_CHECKLIST.md).
 
 ## HA release-candidate stabilization (v0.9.1)
 

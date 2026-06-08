@@ -14,9 +14,9 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: "Published image tag to smoke against (e.g. 0.9.1)"
+        description: "Published image tag to smoke against (e.g. 0.9.2)"
         required: false
-        default: "0.9.1"
+        default: "0.9.2"
       require_published_connector:
         description: "Fail (don't skip) if the published Aura Connector >=0.4.1,<0.5 is unavailable. Set for release/tag conformance."
         type: boolean
@@ -209,11 +209,11 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
 
       - name: Build the auradb image for the Compose cluster
-        run: docker build -t auradb:0.9.1 .
+        run: docker build -t auradb:0.9.2 .
 
       - name: Generate dev certs, run the cluster, and tear it down
         env:
-          AURADB_IMAGE: auradb:0.9.1
+          AURADB_IMAGE: auradb:0.9.2
         run: bash scripts/smoke_cluster_compose.sh
 
   published-image-smoke:
@@ -242,7 +242,7 @@ jobs:
 
   ha-candidate-smoke:
     name: HA candidate smoke (manual, local image)
-    # v0.9.1 HA release-candidate smoke: build the image locally, stand up a
+    # v0.9.2 HA release-candidate smoke: build the image locally, stand up a
     # three-node Compose cluster, kill the leader, confirm a new leader accepts a
     # write, rejoin the old leader, and confirm catch-up. This is an HA *candidate*
     # smoke, not production HA proof. Manual only (workflow_dispatch) so it never
@@ -256,11 +256,11 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
 
       - name: Build the auradb image for the HA candidate smoke
-        run: docker build -t auradb:0.9.1 .
+        run: docker build -t auradb:0.9.2 .
 
       - name: Run the HA candidate smoke and tear it down
         env:
-          AURADB_IMAGE: auradb:0.9.1
+          AURADB_IMAGE: auradb:0.9.2
         run: bash scripts/smoke_ha_candidate.sh
 
   published-image-ha-smoke:

@@ -420,6 +420,53 @@ the minimal reproduction. AuraDB redacts secrets in those reports.
 - **Restore from backup**: not needed — this is a routing/redirect concern, not
   data loss.
 
+#### 18o. Final operator clarity & v1.0 evidence collection (v0.9.2)
+
+A consolidated checklist for the leader-hint / client-address questions and for
+collecting HA-candidate evidence toward a v1.0 readiness report. v0.9.2 adds no new
+config or behavior; this gathers the existing guidance in one place.
+
+- **Leader hint missing** → re-resolve the leader (runbook 18n). Not a bug; not
+  data loss.
+- **Leader hint unreachable** (a declared `leader_client_addr` that does not
+  accept connections) → the client must fall back to re-resolve/probe (18n). This
+  is the documented behavior in Docker Compose, where the in-network hint (e.g.
+  `node2:7171`) is **not** the host-published port (e.g. `127.0.0.1:7181`).
+- **Docker in-network vs. host-published addresses** → a client *inside* the
+  Docker network uses the in-network hint directly; a client on the **host**
+  reaches nodes on the published ports and re-resolves. See
+  [CLUSTER_TROUBLESHOOTING.md](CLUSTER_TROUBLESHOOTING.md).
+- **When to use `advertise_client_addr`** → set it on every node to its own client
+  address (matching the `client_addr` peers list for it) so a leader self-reports
+  its hint after a leader change.
+- **Rotating `advertise_client_addr` safely** → it is operator-declared and
+  additive: update one node's config and restart that node (the supervisor brings
+  it back as a follower; it self-reports the new address only while it leads).
+  Update peers' `client_addr` for that node to match. No storage or wire change is
+  involved; do it node-by-node to avoid a window where the value disagrees.
+- **Routing issue vs. no-leader issue** → a `not_leader` naming a leader id but no
+  client address is a **routing** issue (re-resolve, 18n). "No leader currently
+  known" / `quorum_available: false` is a **no-leader** issue (wait for an
+  election or restore quorum — runbooks 14, 18b, 18c).
+- **Run both published-image smokes** → after a release,
+  `AURADB_IMAGE=ghcr.io/ohswedd/auradb:0.9.2 bash scripts/smoke_cluster_compose.sh`
+  and `… bash scripts/smoke_ha_candidate.sh` (see [RELEASE.md](RELEASE.md)). Use
+  `KEEP_ARTIFACTS=1` to retain logs/certs.
+- **Collect evidence for a v1.0 readiness report** → record image digest, per-node
+  server versions, leader before/after a kill, the leader client-address source
+  (advertised / status / fallback / probe), connector version, and the serial
+  multi-node suite result. Map each against
+  [V1_0_DECISION_CHECKLIST.md](V1_0_DECISION_CHECKLIST.md) §5 (evidence that
+  exists) and §6 (evidence still missing).
+- **Restore is for data recovery, not routing** → a leader-hint / redirect problem
+  is never fixed by restoring a backup; restore only for storage/catalog/metadata
+  corruption (runbook 19).
+- **When to stay on single-node production mode** → unless every production-HA
+  criterion in [HA_RELEASE_CANDIDATE.md](HA_RELEASE_CANDIDATE.md) §8 /
+  [V1_0_DECISION_CHECKLIST.md](V1_0_DECISION_CHECKLIST.md) §4 is met and
+  documented, run **single-node** in production and treat multi-node as a
+  controlled static-cluster preview.
+
 ---
 
 ## 19. Restoring from backup

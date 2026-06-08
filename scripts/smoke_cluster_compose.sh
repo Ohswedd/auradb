@@ -12,11 +12,14 @@
 #
 # Image selection (AURADB_IMAGE):
 #   - Locally built image (the required PR/CI path; avoids registry flakiness):
-#       docker build -t auradb:0.9.1 .
-#       AURADB_IMAGE=auradb:0.9.1 bash scripts/smoke_cluster_compose.sh
+#       docker build -t auradb:0.9.2 .
+#       AURADB_IMAGE=auradb:0.9.2 bash scripts/smoke_cluster_compose.sh
 #   - Published image (post-release verification):
-#       AURADB_IMAGE=ghcr.io/ohswedd/auradb:0.9.1 bash scripts/smoke_cluster_compose.sh
+#       AURADB_IMAGE=ghcr.io/ohswedd/auradb:0.9.2 bash scripts/smoke_cluster_compose.sh
 #   - Default (no AURADB_IMAGE): the published image in docker-compose.cluster.yml.
+#
+# Keep artifacts (certs, compose project, logs) on success for inspection:
+#   KEEP_ARTIFACTS=1 bash scripts/smoke_cluster_compose.sh
 #
 # Usage:
 #   bash scripts/smoke_cluster_compose.sh
@@ -25,7 +28,8 @@ set -euo pipefail
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "${REPO_ROOT}"
 COMPOSE_FILE="docker-compose.cluster.yml"
-export AURADB_IMAGE="${AURADB_IMAGE:-ghcr.io/ohswedd/auradb:0.9.1}"
+export AURADB_IMAGE="${AURADB_IMAGE:-ghcr.io/ohswedd/auradb:0.9.2}"
+KEEP_ARTIFACTS="${KEEP_ARTIFACTS:-0}"
 
 if ! command -v docker >/dev/null 2>&1; then
   echo "docker is not installed; skipping the live Compose smoke." >&2
@@ -52,6 +56,12 @@ cleanup() {
     echo "smoke failed (exit ${status}); dumping cluster logs..." >&2
     dump_logs
   fi
+  if [ "${KEEP_ARTIFACTS}" = "1" ]; then
+    echo "KEEP_ARTIFACTS=1: leaving the Compose cluster and certs in place for inspection." >&2
+    echo "  Inspect: docker compose -f ${COMPOSE_FILE} ps / logs" >&2
+    echo "  Tear down manually: docker compose -f ${COMPOSE_FILE} down -v" >&2
+    return
+  fi
   echo "tearing down the Compose cluster..."
   if docker compose -f "${COMPOSE_FILE}" down -v >/dev/null 2>&1; then
     echo "teardown: ok"
@@ -65,6 +75,12 @@ trap cleanup EXIT
 NODE_PORTS="7171 7172 7173"
 
 echo "using image: ${AURADB_IMAGE}"
+
+# Image digest (best-effort): the published RepoDigest if present, else the local
+# image id — pins exactly which artifact this smoke validated.
+IMAGE_DIGEST="$(docker image inspect "${AURADB_IMAGE}" \
+  --format '{{- if .RepoDigests}}{{index .RepoDigests 0}}{{else}}{{.Id}}{{end}}' 2>/dev/null || true)"
+echo "image digest: ${IMAGE_DIGEST:-<unknown — pull/build the image to record a digest>}"
 
 # For a registry (multi-arch) image, print the published manifest for the record.
 case "${AURADB_IMAGE}" in
@@ -138,9 +154,14 @@ PEER_STATES="$(printf '%s' "${STATUS_JSON}" | grep -o '"catch_up_state"[^,}]*' |
 echo
 echo "=== smoke summary ==="
 echo "image:        ${AURADB_IMAGE}"
+echo "image digest: ${IMAGE_DIGEST:-<unknown>}"
 echo "node ports:   ${NODE_PORTS}"
 echo "leader:       ${LEADER_ID:-unknown} (client ${LEADER_ADDR})"
 echo "quorum:       ${QUORUM:-unknown}"
 echo "peer states:  ${PEER_STATES:-none reported}"
 echo
-echo "Docker Compose preview cluster smoke OK"
+echo "pass criteria: a leader was resolved, quorum is available, and the peers"
+echo "               report a healthy catch-up state."
+echo
+echo "Docker Compose preview cluster smoke OK (controlled static-cluster preview;"
+echo "not production HA proof)"

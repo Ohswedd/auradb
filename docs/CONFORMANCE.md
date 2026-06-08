@@ -245,6 +245,16 @@ client it is used directly; when it is not (for example a Docker in-network
 address that is not the host-published port), the documented re-resolve fallback
 applies. The script's exit codes are unchanged.
 
+### v0.9.2 final stabilization
+
+v0.9.2 keeps the v0.9.0/v0.9.1 connector conformance scenarios unchanged (no wire,
+config, or connector change) and remains validated against **Aura Connector
+v0.4.1**. It adds Rust-side tests that pin the leader-hint contract across multiple
+leader changes and an old-leader rejoin, and a docs-consistency test for the
+in-network vs. host-published client-address explanation. Connector leader-change
+behavior across **every** supported client remains an open v1.0 production-HA
+criterion — see [V1_0_DECISION_CHECKLIST.md](V1_0_DECISION_CHECKLIST.md) §4.
+
 ## Running
 
 Rust (no server needed - the test spawns one):

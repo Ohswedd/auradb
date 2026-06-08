@@ -7,7 +7,7 @@
 [![CI](https://github.com/Ohswedd/auradb/actions/workflows/ci.yml/badge.svg)](https://github.com/Ohswedd/auradb/actions/workflows/ci.yml)
 [![Security](https://github.com/Ohswedd/auradb/actions/workflows/security.yml/badge.svg)](https://github.com/Ohswedd/auradb/actions/workflows/security.yml)
 [![Docker](https://github.com/Ohswedd/auradb/actions/workflows/docker.yml/badge.svg)](https://github.com/Ohswedd/auradb/actions/workflows/docker.yml)
-[![Release](https://img.shields.io/badge/release-v0.9.1-green.svg)](CHANGELOG.md)
+[![Release](https://img.shields.io/badge/release-v0.9.2-green.svg)](CHANGELOG.md)
 [![Rust](https://img.shields.io/badge/rust-1.85%2B-orange.svg)](https://www.rust-lang.org)
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
 
@@ -71,6 +71,20 @@ neither the on-disk nor the wire format — the `not_leader` payload is byte-for
 the same as v0.7.0. It remains _not_ production HA; single-node mode stays the
 recommended production mode. See
 [docs/V0_7_1_RELEASE_NOTES.md](docs/V0_7_1_RELEASE_NOTES.md).
+
+**AuraDB v0.9.2 is the final planned stabilization patch for the HA release
+candidate. It is still not production HA; single-node mode remains the recommended
+production mode.** It finalizes the HA candidate evidence and gap list, adds a
+[v1.0 decision checklist](docs/V1_0_DECISION_CHECKLIST.md), strengthens the
+leader-hint / client-address tests and runbooks after `advertise_client_addr`,
+sharpens the HA smoke diagnostics and the published-image post-release checklist,
+and maps the snapshot/compaction/old-leader-rejoin coverage. It adds **no** new
+cluster architecture, keeps the storage format (v2) and Aura Wire Protocol (AWP 1)
+unchanged, and preserves Aura Connector v0.4.1 compatibility. Multi-node remains a
+controlled static-cluster preview, not a production HA guarantee. See
+[docs/V0_9_2_RELEASE_NOTES.md](docs/V0_9_2_RELEASE_NOTES.md),
+[docs/V1_0_DECISION_CHECKLIST.md](docs/V1_0_DECISION_CHECKLIST.md), and
+[docs/HA_RELEASE_CANDIDATE.md](docs/HA_RELEASE_CANDIDATE.md).
 
 **AuraDB v0.9.1 stabilizes the v0.9.0 HA release candidate. It is still not
 production HA; single-node mode remains the recommended production mode.** It

@@ -4,6 +4,61 @@ All notable changes to AuraDB are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and the project uses
 [Semantic Versioning](https://semver.org/).
 
+## [0.9.2] - 2026-06-08
+
+**Final HA candidate stabilization.** v0.9.2 is the last planned stabilization
+patch for the HA release candidate before deciding what AuraDB v1.0.0 can honestly
+claim. It finalizes the HA candidate evidence and gap list, adds a v1.0 decision
+checklist, strengthens the leader-hint / client-address tests and runbooks after
+`advertise_client_addr`, sharpens the HA smoke diagnostics and the published-image
+post-release checklist, and maps the snapshot/compaction/old-leader-rejoin
+coverage. It introduces **no** new cluster architecture and changes **no** Raft,
+storage, query, MVCC, replication, or snapshot semantics except where a documented
+bug is fixed. The storage format (v2) and the Aura Wire Protocol (AWP 1) are
+unchanged, and Aura Connector v0.4.1 compatibility is preserved. Multi-node mode
+remains a controlled static-cluster preview — **not** production HA — and
+**single-node mode remains the recommended production mode.** See
+[docs/HA_RELEASE_CANDIDATE.md](docs/HA_RELEASE_CANDIDATE.md),
+[docs/V1_0_DECISION_CHECKLIST.md](docs/V1_0_DECISION_CHECKLIST.md), and
+[docs/V0_9_2_RELEASE_NOTES.md](docs/V0_9_2_RELEASE_NOTES.md).
+
+### Added
+- Final HA candidate evidence and gap checklist
+  ([docs/V1_0_DECISION_CHECKLIST.md](docs/V1_0_DECISION_CHECKLIST.md)): what v1.0
+  can and cannot claim today, the requirements for single-node production and for
+  production HA, the evidence that exists, the evidence still missing, and the
+  recommended v1.0 scope.
+- Additional leader-hint / client-address tests:
+  `not_leader_uses_advertised_client_addr_after_multiple_re_elections` and
+  `not_leader_hint_survives_old_leader_rejoin` (in `multi_node.rs`), and
+  `docker_compose_docs_explain_in_network_vs_host_client_addr` (a docs-consistency
+  test).
+- A mapping of the snapshot/compaction/old-leader-rejoin scenarios to the existing
+  v0.9.x tests that cover them (in
+  [docs/HA_RELEASE_CANDIDATE.md](docs/HA_RELEASE_CANDIDATE.md) and
+  [docs/TESTING.md](docs/TESTING.md)), so the coverage is auditable without
+  duplicate tests.
+
+### Changed
+- Improved HA candidate release criteria documentation and the strict
+  production-HA criteria, cross-linked to the v1.0 decision checklist.
+- Improved the published-image post-release smoke checklist
+  (`scripts/smoke_ha_candidate.sh`, `scripts/smoke_cluster_compose.sh`): image
+  digest, per-node server versions, leader before/after kill, leader
+  client-address source (advertised / status / fallback / probe), connector
+  version, explicit pass/fail criteria, log preservation on failure, and
+  `KEEP_ARTIFACTS=1`.
+- Improved cluster troubleshooting and operator runbook guidance after a leader
+  change (missing/unreachable leader hint, Docker in-network vs. host-published
+  addresses, rotating `advertise_client_addr`, routing vs. no-leader, and
+  collecting evidence for a v1.0 readiness report).
+
+### Fixed
+- Any v0.9.1 release, CI, HA-smoke, leader-hint, snapshot, compaction, or
+  documentation issues found during validation. No code-behavior regression was
+  found in v0.9.1; v0.9.2 is a proactive final stabilization patch (see
+  [docs/V0_9_2_RELEASE_NOTES.md](docs/V0_9_2_RELEASE_NOTES.md)).
+
 ## [0.9.1] - 2026-06-08
 
 **HA release-candidate stabilization** of the v0.9.0 candidate. v0.9.1 polishes

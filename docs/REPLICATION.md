@@ -1,5 +1,14 @@
 # Replication
 
+> **AuraDB v0.9.2 is the final planned HA candidate stabilization — still an HA
+> release candidate for the controlled static-cluster preview, not a production HA
+> guarantee. Single-node mode remains the recommended production mode.** v0.9.2
+> changes no replication semantics or storage format (v2); it maps the
+> snapshot/compaction/old-leader-rejoin coverage to existing tests
+> ([HA_RELEASE_CANDIDATE.md](HA_RELEASE_CANDIDATE.md) §10) and adds the
+> [v1.0 decision checklist](V1_0_DECISION_CHECKLIST.md). The snapshot install
+> remains a single bounded message (no chunked streaming).
+
 > **AuraDB v0.9.1 is an HA release-candidate stabilization of the v0.9.0
 > candidate — an HA release candidate for the controlled static-cluster preview,
 > not a production HA guarantee. Single-node mode remains the recommended

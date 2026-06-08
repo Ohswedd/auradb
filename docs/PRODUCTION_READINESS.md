@@ -15,12 +15,18 @@ no distributed transactions, no dynamic membership, no sharding, no multi-region
 v0.9.0 changes none of this scope; it strengthens cluster failure testing,
 diagnostics, snapshot/compaction coverage, connector behavior under leader
 change, recovery runbooks, the backup/restore story, and the release criteria.
+v0.9.1 and **v0.9.2** (the final planned HA candidate stabilization) change none
+of this scope either: they polish leader-hint propagation, tests, the HA smoke,
+runbooks, and — in v0.9.2 — add the
+[v1.0 decision checklist](V1_0_DECISION_CHECKLIST.md) that records exactly what a
+future v1.0 can and cannot claim and the evidence required.
 
 The exact support level for each mode, the operator assumptions the static
 cluster requires, the validated failure matrix, and the **strict criteria that
 must be met and documented before AuraDB ever claims production HA** are in
-[HA_RELEASE_CANDIDATE.md](HA_RELEASE_CANDIDATE.md). None of those production-HA
-criteria are met in v0.9.0; multi-node remains a controlled preview.
+[HA_RELEASE_CANDIDATE.md](HA_RELEASE_CANDIDATE.md) and the
+[v1.0 decision checklist](V1_0_DECISION_CHECKLIST.md). None of those production-HA
+criteria are met in v0.9.2; multi-node remains a controlled preview.
 
 This document states, honestly, what is supported at what level, and gives the
 checklists to run before and during a production single-node deployment. For

@@ -565,6 +565,108 @@ async fn not_leader_includes_leader_client_addr_after_re_election() {
     cluster.shutdown().await;
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 8)]
+async fn not_leader_uses_advertised_client_addr_after_multiple_re_elections() {
+    // The v0.9.1 self-report holds across MORE than one leader change: after two
+    // kill/elect/rejoin cycles, whichever node currently leads names its OWN
+    // declared client address (advertise_client_addr) as the hint, and every node
+    // converges on that same address — never a stale or transport address.
+    let (cluster, _total) = run_repeated_leader_restart(2).await;
+
+    // The whole cluster has reconverged; find the settled leader and assert every
+    // node reports its client address consistently. Leadership can still drift on a
+    // contended runner, so resolve the leader and check inside a bounded loop.
+    let deadline = Instant::now() + Duration::from_secs(15);
+    loop {
+        if let Some(leader) = cluster.leader_index() {
+            let expected = client_addr_of(leader);
+            let all_agree = (0..3).all(|i| {
+                cluster.nodes[i].peer.leader_client_addr().as_deref() == Some(expected.as_str())
+            });
+            // The hint is the declared client address, never a peer transport addr.
+            let transports = cluster.addrs();
+            if all_agree {
+                assert!(
+                    !transports.contains(&expected),
+                    "hint {expected} must not be a transport address: {transports:?}"
+                );
+                cluster.shutdown().await;
+                return;
+            }
+        }
+        if Instant::now() >= deadline {
+            let hints: Vec<Option<String>> = (0..3)
+                .map(|i| cluster.nodes[i].peer.leader_client_addr())
+                .collect();
+            panic!("nodes did not converge on one leader client address after 2 re-elections: {hints:?}");
+        }
+        tokio::time::sleep(Duration::from_millis(25)).await;
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 8)]
+async fn not_leader_hint_survives_old_leader_rejoin() {
+    // When a stopped old leader rejoins as a follower, the leader hint stays
+    // present and consistent: it names the CURRENT leader's declared client
+    // address from every node, including the rejoined one — never the rejoined
+    // node's stale own address (unless it legitimately leads again) and never None.
+    let mut cluster = TestCluster::start(3).await;
+    let ids = cluster.ids();
+    let addrs = cluster.addrs();
+    let old_leader = cluster.wait_for_leader(Duration::from_secs(15)).await;
+
+    cluster.write_via_leader(&[0, 1, 2], 1, 1).await;
+    cluster.wait_all_have(1, Duration::from_secs(10)).await;
+
+    // Leader change while the old leader is down; commit so it falls behind.
+    cluster.stop(old_leader).await;
+    let live: Vec<usize> = (0..3).filter(|&i| i != old_leader).collect();
+    cluster
+        .wait_for_live_leader(&live, Duration::from_secs(15))
+        .await;
+    cluster.write_via_leader(&live, 2, 2).await;
+    cluster.write_via_leader(&live, 3, 3).await;
+    cluster
+        .wait_indices_have(&live, 3, Duration::from_secs(15))
+        .await;
+
+    // Rejoin the old leader; the cluster reconverges on a single leader.
+    cluster.restart(old_leader, &ids, &addrs).await;
+    cluster.wait_all_have(3, Duration::from_secs(20)).await;
+
+    // Every node — including the rejoined old leader — reports the current
+    // leader's declared client address as the hint, consistently and non-None.
+    let deadline = Instant::now() + Duration::from_secs(15);
+    loop {
+        if let Some(leader) = cluster.leader_index() {
+            let expected = client_addr_of(leader);
+            let all_agree = (0..3).all(|i| {
+                cluster.nodes[i].peer.leader_client_addr().as_deref() == Some(expected.as_str())
+            });
+            if all_agree {
+                // The rejoined node specifically reports a present, correct hint.
+                assert_eq!(
+                    cluster.nodes[old_leader]
+                        .peer
+                        .leader_client_addr()
+                        .as_deref(),
+                    Some(expected.as_str()),
+                    "the rejoined old leader reports the current leader's client address"
+                );
+                cluster.shutdown().await;
+                return;
+            }
+        }
+        if Instant::now() >= deadline {
+            let hints: Vec<Option<String>> = (0..3)
+                .map(|i| cluster.nodes[i].peer.leader_client_addr())
+                .collect();
+            panic!("leader hint did not stay consistent after old-leader rejoin: {hints:?}");
+        }
+        tokio::time::sleep(Duration::from_millis(25)).await;
+    }
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 6)]
 async fn follower_catches_up_after_restart() {
     let mut cluster = TestCluster::start(3).await;
