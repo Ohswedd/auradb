@@ -71,7 +71,7 @@ and TLS). Use Aura Connector 0.3.x to connect to an AuraDB 0.2.x server. See
 
 ## Versions
 
-- **AuraDB:** 1.0.1
+- **AuraDB:** 1.1.0
 - **Storage format:** v2 (commit-timestamped MVCC version chains), **frozen for
   v1** and unchanged from v0.4.x. AuraDB v1.x preserves storage format v2 unless a
   safety, corruption, or security issue requires a documented migration. A v1
@@ -84,7 +84,7 @@ and TLS). Use Aura Connector 0.3.x to connect to an AuraDB 0.2.x server. See
   additive `retryable` error hint, the `not_leader` error code, and the
   additive structured `not_leader` object on the error frame are all additive and
   ignored by older clients. See [PROTOCOL.md](PROTOCOL.md).
-- **Aura Connector (tested):** 0.4.1 (also compatible with 0.4.0 and 0.3.x single-node)
+- **Aura Connector (tested):** 0.5.0 (supported 0.5.x; 0.4.x connects for non-search operations)
 - **Cluster mode:** optional, off by default. Single-node cluster, plus a
   controlled multi-node server **HA candidate preview** gated by two opt-ins;
   single-node mode remains the recommended production path. Multi-node static
@@ -95,7 +95,7 @@ and TLS). Use Aura Connector 0.3.x to connect to an AuraDB 0.2.x server. See
   compatible** — a config that omits it behaves exactly as before. See
   [CLUSTERING.md](CLUSTERING.md) and [CONFIGURATION.md](CONFIGURATION.md).
 
-## v1.0 support matrix
+## v1.1 support matrix
 
 This summarizes the support level of each deployment mode and capability. The
 authoritative policy is [SUPPORT_POLICY.md](SUPPORT_POLICY.md).
@@ -110,11 +110,13 @@ authoritative policy is [SUPPORT_POLICY.md](SUPPORT_POLICY.md).
 | Public peer networking | Preview | Preview only | No | Requires peer TLS + token; off by default |
 | Backup / restore | Stable | Yes | **Yes** | `dump` → `backup verify` → `restore` → `check` |
 | Upgrade from v0.x | Stable | Yes | **Yes** | Backup first; `check` before and after; see [UPGRADING.md](UPGRADING.md) |
-| Aura Connector 0.4.x | Stable | Yes | **Yes** | v0.4.1 recommended |
+| Aura Connector 0.5.x | Stable | Yes | **Yes** | v0.5.0 recommended; 0.4.x connects for non-search operations |
 | AWP 1 | Frozen for v1 | Yes | **Yes** | Preserved across v1.x unless security/correctness break |
 | Storage format v2 | Frozen for v1 | Yes | **Yes** | Preserved across v1.x unless safety/corruption/security migration |
 | Exact vector search | Stable | Yes | **Yes** | `cosine` / `euclidean` / `dot_product`; not ANN/HNSW |
-| Tokenized full-text search | Stable | Yes | **Yes** | Term-frequency ranking; not BM25 |
+| Tokenized full-text search | Stable | Yes | **Yes** | Boolean `contains_text`; term-frequency ranking |
+| BM25 ranked full-text search | Stable | Yes (new in v1.1.0) | **Yes** | `text_search` clause; Okapi BM25 |
+| Hybrid text + vector search | Stable | Yes (new in v1.1.0) | **Yes** | `hybrid` clause; weighted-sum / RRF fusion |
 
 ## Required connector features
 
@@ -187,12 +189,14 @@ authoritative policy is [SUPPORT_POLICY.md](SUPPORT_POLICY.md).
   opt-ins); it is **not** production multi-node clustering. It has no production
   automatic failover, no linearizable follower reads, no distributed transactions,
   no dynamic membership, and no sharding or multi-region.
-- AuraDB v0.3.0 implements single-node snapshot isolation with optimistic write
+- AuraDB implements single-node snapshot isolation with optimistic write
   conflict detection. It is not serializable isolation (it does not prevent
   write-skew).
 - Vector search is exact; there is no ANN/HNSW index.
-- Full-text search is tokenized boolean-AND matching with term-frequency
-  ranking; it is not BM25.
+- The legacy `contains_text` predicate is tokenized boolean-AND matching with
+  term-frequency ranking. BM25 ranked full-text (`text_search`) and hybrid
+  text+vector (`hybrid`) search are implemented as of v1.1.0; see
+  [SEARCH_AND_RANKING.md](SEARCH_AND_RANKING.md).
 - Aura Connector 0.2.x cannot connect; use 0.3.x.
 
 ## Verification
