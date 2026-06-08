@@ -1,7 +1,43 @@
 # Release guide
 
 This guide describes how a maintainer cuts an AuraDB release. The current release
-is `0.7.1`.
+is `0.9.0` — an **HA release candidate for the controlled static-cluster
+preview, not a production HA guarantee**. Single-node mode remains the
+recommended production mode. See
+[HA_RELEASE_CANDIDATE.md](HA_RELEASE_CANDIDATE.md).
+
+### GitHub Actions maintenance (Node 24)
+
+v0.9.0 updated workflow actions to majors that run on Node 24, ahead of the Node
+20 deprecation: `actions/setup-python` (→ v6) and `actions/upload-artifact` /
+`actions/download-artifact` (→ v5). `actions/checkout` (v6), `actions/cache`
+(v5), and the `docker/*` actions were already on Node-24 majors. The release
+workflow's security posture (permissions, checksum/artifact verification) is
+unchanged. If an action later lacks a Node-24 replacement, record it here as a
+known maintenance item rather than pinning a deprecated major.
+
+### HA candidate smoke (v0.9.0, manual / post-release)
+
+- [ ] **HA candidate smoke (manual).** Build the image locally and run the
+      leader-change smoke end to end (leader kill → new leader → old-leader
+      rejoin → catch-up → status), optionally exercising the connector
+      leader-change scenario:
+
+      ```bash
+      docker build -t auradb:0.9.0 .
+      AURADB_IMAGE=auradb:0.9.0 bash scripts/smoke_ha_candidate.sh
+      ```
+
+- [ ] **Published-image HA smoke (post-release).** After the tag publishes the
+      image, run the same smoke against it:
+
+      ```bash
+      AURADB_IMAGE=ghcr.io/ohswedd/auradb:0.9.0 bash scripts/smoke_ha_candidate.sh
+      ```
+
+  These are HA *candidate* smokes, not production HA proof, and are wired as
+  manual `workflow_dispatch` jobs in `.github/workflows/cluster.yml` so they
+  never block a PR.
 
 ## Connector-first coordinated releases
 

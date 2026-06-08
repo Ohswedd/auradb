@@ -1,5 +1,14 @@
 # Raft Consensus Core
 
+> **AuraDB v0.9.0 is an HA release candidate for the controlled static-cluster
+> preview, not a production HA guarantee. Single-node mode remains the
+> recommended production mode.** v0.9.0 strengthens repeated leader-change and
+> snapshot-install testing (3-cycle CI restart, old-leader rejoin, no duplicate
+> apply, index convergence, compaction with an offline follower) without changing
+> the consensus core, the storage format (v2), or the wire protocol (AWP 1). See
+> [HA_RELEASE_CANDIDATE.md](HA_RELEASE_CANDIDATE.md) and
+> [V0_9_RELEASE_NOTES.md](V0_9_RELEASE_NOTES.md).
+
 > **AuraDB v0.6.0 improves the controlled multi-node preview and validates
 > fail-stop recovery. It is _not_ production HA. Single-node mode remains the
 > recommended production mode.** Stopping the leader lets the surviving majority

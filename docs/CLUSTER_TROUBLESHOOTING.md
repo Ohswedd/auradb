@@ -1,8 +1,15 @@
 # Cluster troubleshooting
 
 This guide covers diagnosing and recovering AuraDB's optional cluster mode. It
-applies to **single-node cluster mode** and to the **v0.5.0 experimental
-multi-node preview**.
+applies to **single-node cluster mode** and to the **multi-node preview**.
+
+> **AuraDB v0.9.0 is an HA release candidate for the controlled static-cluster
+> preview, not a production HA guarantee. Single-node mode remains the
+> recommended production mode.** For the support level, the operator assumptions,
+> the validated failure matrix, and the strict criteria required before any
+> future production HA claim, see
+> [HA_RELEASE_CANDIDATE.md](HA_RELEASE_CANDIDATE.md). The HA recovery runbooks are
+> in [RUNBOOKS.md](RUNBOOKS.md) (section 18a–18m).
 
 > **AuraDB v0.5.0 introduces a controlled, experimental multi-node server
 > preview. Single-node mode remains the recommended production mode.** The
@@ -13,13 +20,48 @@ multi-node preview**.
 > **no distributed transactions**. It is for local testing and early validation
 > only.
 
-## Operator runbooks (v0.8.0)
+## Operator runbooks
 
 For step-by-step recovery procedures, see [RUNBOOKS.md](RUNBOOKS.md): runbooks
-**14–18** cover the cluster-preview recovery scenarios — leader loss, follower lag,
-a follower that needs a snapshot, peer TLS failure, and a peer token mismatch. The
-cluster preview remains an experimental, opt-in preview and is **not production
-HA**; single-node mode remains the recommended production mode.
+**14–18** cover leader loss, follower lag, a follower that needs a snapshot, peer
+TLS failure, and a peer token mismatch, and the v0.9.0 HA recovery runbooks
+**18a–18m** add leader graceful shutdown, no leader, quorum lost, old-leader
+rejoin, a follower stuck behind, snapshot install failing, reconnect storm,
+minority/majority partition, a failed published-image smoke, rolling back a bad
+release, and restoring a single-node backup after a cluster incident. The cluster
+preview is an HA release candidate, **not production HA**; single-node mode
+remains the recommended production mode.
+
+## Cluster failure matrix
+
+The controlled static-cluster preview is validated against the failure matrix
+below. Each row links a failure (or operation) to its expected behavior, the
+test that covers it, the operator command to observe it, the known limitation,
+and its production-HA status. The authoritative, fuller matrix (with the exact
+test names) lives in [HA_RELEASE_CANDIDATE.md](HA_RELEASE_CANDIDATE.md); this is
+the operator-facing quick reference.
+
+| Scenario | Expected behavior | Observe with | Production-HA status |
+| -------- | ----------------- | ------------ | -------------------- |
+| Leader process killed | Majority re-elects; writes resume on the new leader. | `cluster wait-leader`, `cluster leader` | Candidate |
+| Leader graceful shutdown | Same as a kill (no `step-down`; stop the process). | `cluster status --json` | Candidate |
+| Follower process killed | Majority keeps committing; follower catches up on restart. | `cluster status --json` (per-peer `match_index`) | Candidate |
+| Old leader rejoins | Rejoins as a follower at the current term and catches up. | `cluster status --json` | Candidate |
+| Follower offline during writes | Lags, then catches up by log replay or snapshot install. | `cluster doctor --json` | Candidate |
+| Follower needs snapshot after compaction | Leader serves a bounded snapshot install. | `cluster status --json` (snapshot counters) | Candidate |
+| Minority partition | Minority cannot commit (no quorum). | `cluster status --json` (`quorum_available`) | Candidate (safety property) |
+| Majority partition | Majority keeps committing; minority rejoins on heal. | `cluster doctor --json` | Candidate |
+| Temporary heartbeat drop | May trigger a re-election; cluster reconverges. | `cluster status --json` (`leader_changes`) | Candidate |
+| Temporary AppendEntries drop | Replication resumes via log repair. | `cluster doctor --json` | Candidate |
+| Peer reconnect storm | Bounded-backoff reconnects recover; no duplicate apply. | `cluster doctor --json` (reconnect warning) | Candidate |
+| TLS peer failure | Wrong-CA/SAN peer rejected; no plaintext fallback. | node logs; `config validate` | Candidate |
+| Peer token mismatch | Wrong-token peer rejected with a structured error. | node logs | Candidate |
+| Disk-pressure warning | Operator-visible warning; no auto-remediation. | `doctor --data-dir`, `cluster doctor --addr` | Candidate |
+| Snapshot install failure | Rejected safely; existing state preserved; retried. | `cluster status --json` (snapshot counters) | Candidate |
+| Backup/restore after failure | Leader logical export restores to a single node. | `dump` / `backup verify` / `restore` | Candidate |
+
+"Candidate" means validated for the controlled static-cluster preview — **not** a
+production HA guarantee. See [HA_RELEASE_CANDIDATE.md](HA_RELEASE_CANDIDATE.md).
 
 ## Inspecting node and cluster identity
 

@@ -1,6 +1,6 @@
 # Security
 
-This document describes the implemented security posture of AuraDB `0.8.1`. See
+This document describes the implemented security posture of AuraDB `0.9.0`. See
 `SECURITY.md` at the repository root for the vulnerability reporting policy.
 
 AuraDB is a single-node server. It does not claim production-grade guarantees
@@ -278,7 +278,7 @@ described above; single-node mode is the recommended production mode.
 
 ## Not implemented (do not rely on)
 
-AuraDB is single node. The following are not implemented in `0.8.1`:
+AuraDB is single node. The following are not implemented in `0.9.0`:
 role-based access control (RBAC/ABAC), tenant isolation, field-level read/write
 policies, field-level encryption, encryption at rest, and audit logging. The
 recommended production deployment remains single-node. v0.5.0 adds a controlled,

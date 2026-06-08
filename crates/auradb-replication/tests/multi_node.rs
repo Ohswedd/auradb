@@ -2285,3 +2285,706 @@ async fn leader_partition_triggers_reelection_and_heals() {
     );
     cluster.shutdown().await;
 }
+
+// =====================================================================
+// v0.9.0: HA release-candidate hardening.
+//
+// These build on the same `TestCluster` harness and the existing scenario
+// helpers (`run_repeated_leader_restart`, `run_snapshot_install_scenario`,
+// `snapshot_install_scenario_sized`, `run_rich_snapshot_install_scenario`,
+// `node_with_dead_peer`). They strengthen the repeated fail-stop and
+// snapshot/compaction coverage the v0.9.0 HA release candidate is validated
+// against (see docs/HA_RELEASE_CANDIDATE.md). The heaviest variants are
+// `#[ignore]`d so the default (required) suite stays CI-stable; run them on
+// demand with `cargo test -- --ignored`.
+// =====================================================================
+
+// ----- repeated fail-stop (longer cycles) -----
+
+/// CI-safe: three kill/elect/rejoin cycles converge with no duplicate apply and
+/// at least one observed leadership change.
+#[tokio::test(flavor = "multi_thread", worker_threads = 8)]
+async fn ha_repeated_leader_restart_3_cycles() {
+    let (cluster, total) = run_repeated_leader_restart(3).await;
+    let expected: std::collections::BTreeSet<i64> = (1..=total as i64).collect();
+    for i in 0..3 {
+        assert_eq!(
+            cluster.query_ids(i, &FindQuery::new("C")),
+            expected,
+            "node {i} did not converge after 3 leader restarts"
+        );
+        assert_eq!(
+            cluster.record_count(i),
+            total,
+            "node {i} record count diverged"
+        );
+    }
+    assert_eq!(
+        cluster.total_apply_errors(),
+        0,
+        "repeated restarts must not produce duplicate/conflicting applies"
+    );
+    assert!(
+        cluster.max_leader_changes() >= 1,
+        "expected the leader-change metric to increment across re-elections"
+    );
+    cluster.shutdown().await;
+}
+
+/// Stress: ten kill/elect/rejoin cycles. Heavy under contended CI parallelism
+/// (each cycle is several synchronous majority commits plus a restart), so
+/// ignored by default; run with `cargo test -- --ignored`.
+#[tokio::test(flavor = "multi_thread", worker_threads = 8)]
+#[ignore = "stress: 10 kill/elect/restart cycles; run with `cargo test -- --ignored`"]
+async fn ha_repeated_leader_restart_10_cycles_ignored() {
+    let (cluster, total) = run_repeated_leader_restart(10).await;
+    let expected: std::collections::BTreeSet<i64> = (1..=total as i64).collect();
+    for i in 0..3 {
+        assert_eq!(cluster.query_ids(i, &FindQuery::new("C")), expected);
+    }
+    assert_eq!(cluster.total_apply_errors(), 0);
+    cluster.shutdown().await;
+}
+
+/// The old leader rejoins as a follower and is brought current every cycle: the
+/// scenario waits for the *whole* cluster (including the just-restarted old
+/// leader) to hold every committed record before each next cycle, so a
+/// successful run proves per-cycle rejoin and catch-up.
+#[tokio::test(flavor = "multi_thread", worker_threads = 8)]
+async fn ha_old_leader_rejoins_each_cycle() {
+    let (cluster, total) = run_repeated_leader_restart(3).await;
+    for i in 0..3 {
+        assert_eq!(
+            cluster.record_count(i),
+            total,
+            "node {i} (incl. each rejoined old leader) must hold every committed record"
+        );
+    }
+    assert_eq!(cluster.total_apply_errors(), 0);
+    cluster.shutdown().await;
+}
+
+/// Repeated restarts never double-apply: every node holds each record exactly
+/// once and the apply-error counter stays zero.
+#[tokio::test(flavor = "multi_thread", worker_threads = 8)]
+async fn ha_repeated_restart_no_duplicate_apply() {
+    let (cluster, total) = run_repeated_leader_restart(3).await;
+    for i in 0..3 {
+        assert_eq!(
+            cluster.record_count(i),
+            total,
+            "node {i} holds a duplicated or missing record"
+        );
+    }
+    assert_eq!(
+        cluster.total_apply_errors(),
+        0,
+        "an Insert re-applied after a restart would conflict and increment apply_errors"
+    );
+    cluster.shutdown().await;
+}
+
+/// After repeated restarts the cluster's applied indices converge: every node
+/// reaches the maximum applied index (no node is left permanently behind).
+#[tokio::test(flavor = "multi_thread", worker_threads = 8)]
+async fn ha_repeated_restart_indices_converge() {
+    let (cluster, _total) = run_repeated_leader_restart(3).await;
+    let max_applied = (0..3)
+        .map(|i| cluster.nodes[i].peer.status().applied_index)
+        .max()
+        .unwrap();
+    let deadline = Instant::now() + Duration::from_secs(15);
+    loop {
+        if (0..3).all(|i| cluster.nodes[i].peer.status().applied_index >= max_applied) {
+            break;
+        }
+        if Instant::now() >= deadline {
+            let applied: Vec<u64> = (0..3)
+                .map(|i| cluster.nodes[i].peer.status().applied_index)
+                .collect();
+            panic!("applied indices did not converge to {max_applied}: {applied:?}");
+        }
+        tokio::time::sleep(Duration::from_millis(25)).await;
+    }
+    cluster.shutdown().await;
+}
+
+// ----- snapshot install and compaction (larger / offline follower) -----
+
+/// An offline follower behind the leader's *compacted* prefix is brought current
+/// by a snapshot install and converges on the full committed record set.
+#[tokio::test(flavor = "multi_thread", worker_threads = 6)]
+async fn ha_snapshot_install_after_compaction_with_offline_follower() {
+    let (cluster, follower, target) = run_snapshot_install_scenario().await;
+    cluster
+        .wait_indices_have(&[follower], target, Duration::from_secs(30))
+        .await;
+    // The only possible catch-up path was a snapshot install (both live nodes
+    // compacted the entries the follower needed). Poll the counters: the engine
+    // reaches `target` a hair before the install counter increments.
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        let installed = cluster.nodes[follower].peer.snapshot_counters().1;
+        let sent: u64 = (0..3)
+            .map(|i| cluster.nodes[i].peer.snapshot_counters().0)
+            .sum();
+        if installed >= 1 && sent >= 1 {
+            break;
+        }
+        if Instant::now() >= deadline {
+            panic!("expected a snapshot install: installed={installed}, sent={sent}");
+        }
+        tokio::time::sleep(Duration::from_millis(25)).await;
+    }
+    assert_eq!(
+        cluster.record_count(follower),
+        target,
+        "the recovered follower holds the full committed set"
+    );
+    cluster.shutdown().await;
+}
+
+/// After a snapshot install, further writes committed by the whole cluster reach
+/// the recovered follower (AppendEntries resumes and it converges).
+#[tokio::test(flavor = "multi_thread", worker_threads = 6)]
+async fn ha_snapshot_install_then_more_writes_converges() {
+    let (cluster, follower, target) =
+        snapshot_install_scenario_sized(20, 150, Duration::from_secs(30)).await;
+    cluster
+        .wait_indices_have(&[follower], target, Duration::from_secs(30))
+        .await;
+    let all: Vec<usize> = (0..3).collect();
+    for id in (target as i64 + 1)..=(target as i64 + 25) {
+        cluster.write_via_leader(&all, id, id).await;
+    }
+    cluster
+        .wait_indices_have(&[follower], target + 25, Duration::from_secs(30))
+        .await;
+    assert_eq!(cluster.record_count(follower), target + 25);
+    cluster.shutdown().await;
+}
+
+/// A snapshot install rebuilds the follower's full indexed workload: secondary
+/// index, full-text, document-path, and vector queries all match the live nodes.
+#[tokio::test(flavor = "multi_thread", worker_threads = 6)]
+async fn ha_snapshot_install_preserves_indexed_workload() {
+    let (cluster, follower, target) = run_rich_snapshot_install_scenario(20, 150).await;
+    let live = (0..3).find(|&i| i != follower).unwrap();
+
+    // Full-text: every record body carries the shared token "item".
+    let ft = FindQuery {
+        filter: Some(Filter::ContainsText {
+            field: "body".into(),
+            query: "item".into(),
+        }),
+        ..FindQuery::new("C")
+    };
+    assert_eq!(cluster.query_ids(follower, &ft).len(), target);
+    assert_eq!(
+        cluster.query_ids(follower, &ft),
+        cluster.query_ids(live, &ft)
+    );
+
+    // Document-path index on profile.tag.
+    let dp = FindQuery {
+        filter: Some(Filter::Compare {
+            field: "profile.tag".into(),
+            op: CompareOp::Eq,
+            value: Value::Text("tag3".into()),
+        }),
+        ..FindQuery::new("C")
+    };
+    assert_eq!(
+        cluster.query_ids(follower, &dp),
+        cluster.query_ids(live, &dp)
+    );
+
+    // Secondary index on `v` (rich records set v == id).
+    let sec = FindQuery {
+        filter: Some(Filter::Compare {
+            field: "v".into(),
+            op: CompareOp::Eq,
+            value: Value::Int(75),
+        }),
+        ..FindQuery::new("C")
+    };
+    assert_eq!(
+        cluster.query_ids(follower, &sec),
+        cluster.query_ids(live, &sec)
+    );
+
+    // Vector search.
+    let vq = FindQuery {
+        vector: Some(VectorSearch {
+            field: "embedding".into(),
+            query: vec![12.0, 2.0, 0.0, 1.0],
+            k: 5,
+            metric: "euclidean".into(),
+        }),
+        ..FindQuery::new("C")
+    };
+    assert_eq!(
+        cluster.query_ids(follower, &vq),
+        cluster.query_ids(live, &vq)
+    );
+    cluster.shutdown().await;
+}
+
+/// Compaction while every follower is caught up is safe: it forces no snapshot
+/// install, and replication keeps flowing via AppendEntries afterward.
+#[tokio::test(flavor = "multi_thread", worker_threads = 6)]
+async fn ha_compaction_with_all_followers_caught_up() {
+    let cluster = TestCluster::start(3).await;
+    cluster.wait_for_leader(Duration::from_secs(10)).await;
+    let all: Vec<usize> = (0..3).collect();
+
+    for id in 1..=40 {
+        cluster.write_via_leader(&all, id, id).await;
+    }
+    cluster.wait_all_have(40, Duration::from_secs(20)).await;
+
+    // Everyone is caught up; compacting now drops only already-applied entries.
+    for i in 0..3 {
+        let _ = cluster.nodes[i].peer.compact_log();
+    }
+
+    // Replication still flows via AppendEntries (no snapshot needed).
+    for id in 41..=60 {
+        cluster.write_via_leader(&all, id, id).await;
+    }
+    cluster.wait_all_have(60, Duration::from_secs(20)).await;
+
+    let installed: u64 = (0..3)
+        .map(|i| cluster.nodes[i].peer.snapshot_counters().1)
+        .sum();
+    assert_eq!(
+        installed, 0,
+        "compaction with all followers caught up must not force a snapshot install"
+    );
+    assert_eq!(cluster.total_apply_errors(), 0);
+    cluster.shutdown().await;
+}
+
+/// Compaction while one follower is offline forces that follower onto the
+/// snapshot-install path on restart (the needs-snapshot detection fires and an
+/// install is recorded).
+#[tokio::test(flavor = "multi_thread", worker_threads = 6)]
+async fn ha_compaction_with_offline_follower_requires_snapshot() {
+    let (cluster, follower, target) = run_snapshot_install_scenario().await;
+    cluster
+        .wait_indices_have(&[follower], target, Duration::from_secs(30))
+        .await;
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        let needed: u64 = (0..3)
+            .map(|i| cluster.nodes[i].peer.peer_metrics().snapshot_needed)
+            .sum();
+        let installed = cluster.nodes[follower].peer.snapshot_counters().1;
+        if needed >= 1 && installed >= 1 {
+            break;
+        }
+        if Instant::now() >= deadline {
+            panic!("expected needs-snapshot detection and an install after compaction");
+        }
+        tokio::time::sleep(Duration::from_millis(25)).await;
+    }
+    cluster.shutdown().await;
+}
+
+/// A failed snapshot install is safe to retry: a corrupt install is rejected
+/// without touching existing follower state, no install is recorded, and
+/// re-sending is rejected the same way.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn ha_snapshot_failure_safe_to_retry() {
+    use auradb_replication::transport::PeerMessage;
+    let (peer, _dead, addr, cluster_id, _dir, engine) = node_with_dead_peer().await;
+    for id in 1..=5 {
+        engine.apply_mutation(insert_mutation(id, id)).unwrap();
+    }
+    assert_eq!(engine.find(&FindQuery::new("C")).unwrap().len(), 5);
+
+    let corrupt = || {
+        let mut manifest = sample_manifest(cluster_id);
+        manifest.payload.push(0xFF);
+        PeerMessage::InstallSnapshotRequest {
+            from: NodeId::from_raw(2),
+            term: u64::MAX,
+            last_included_index: 50,
+            last_included_term: 1,
+            snapshot: manifest.encode().unwrap(),
+        }
+    };
+
+    // First attempt is rejected; existing state is preserved and nothing is
+    // recorded as installed.
+    assert_snapshot_rejected(&peer, &addr, cluster_id, corrupt()).await;
+    assert_eq!(engine.find(&FindQuery::new("C")).unwrap().len(), 5);
+    assert_eq!(
+        peer.snapshot_counters().1,
+        0,
+        "a rejected install must not be recorded as installed"
+    );
+
+    // Retrying is safe: rejected again the same way, state still intact.
+    assert_snapshot_rejected(&peer, &addr, cluster_id, corrupt()).await;
+    assert_eq!(engine.find(&FindQuery::new("C")).unwrap().len(), 5);
+    assert_eq!(peer.snapshot_counters().1, 0);
+    peer.shutdown().await;
+}
+
+/// Snapshot install metrics reflect the transfer: bytes installed on the
+/// follower, bytes sent by a live node, the needs-snapshot detection, and a
+/// recorded install boundary — with no apply errors.
+#[tokio::test(flavor = "multi_thread", worker_threads = 6)]
+async fn ha_snapshot_metrics_after_install() {
+    let (cluster, follower, target) =
+        snapshot_install_scenario_sized(20, 200, Duration::from_secs(30)).await;
+    cluster
+        .wait_indices_have(&[follower], target, Duration::from_secs(30))
+        .await;
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        let diag = cluster.nodes[follower].peer.snapshot_diagnostics();
+        let sent_bytes: u64 = (0..3)
+            .map(|i| cluster.nodes[i].peer.snapshot_diagnostics().bytes_sent)
+            .sum();
+        let needed: u64 = (0..3)
+            .map(|i| cluster.nodes[i].peer.peer_metrics().snapshot_needed)
+            .sum();
+        if diag.bytes_installed > 0 && sent_bytes > 0 && needed >= 1 {
+            assert!(
+                diag.last_included_index > 0,
+                "diagnostics should record the installed boundary"
+            );
+            break;
+        }
+        if Instant::now() >= deadline {
+            panic!("snapshot metrics did not advance: {diag:?}");
+        }
+        tokio::time::sleep(Duration::from_millis(25)).await;
+    }
+    assert_eq!(
+        cluster.nodes[follower].peer.metrics().apply_errors,
+        0,
+        "snapshot install + resume must not produce apply errors"
+    );
+    cluster.shutdown().await;
+}
+
+/// Stress: a larger snapshot install (more committed entries before the
+/// follower catches up via a single snapshot). Heavy, so ignored by default;
+/// run with `cargo test -- --ignored`.
+#[tokio::test(flavor = "multi_thread", worker_threads = 8)]
+#[ignore = "stress: larger snapshot install; run with `cargo test -- --ignored`"]
+async fn ha_snapshot_large_ignored_stress() {
+    let (cluster, follower, target) =
+        snapshot_install_scenario_sized(50, 3000, Duration::from_secs(300)).await;
+    cluster
+        .wait_indices_have(&[follower], target, Duration::from_secs(120))
+        .await;
+    assert!(
+        cluster.nodes[follower].peer.snapshot_counters().1 >= 1,
+        "follower should have installed a snapshot"
+    );
+    cluster.shutdown().await;
+}
+
+// ----- cluster backup / restore around leader change (v0.9.0) -----
+//
+// The supported cluster backup story is a *leader logical export -> single-node
+// restore* path (see docs/HA_RELEASE_CANDIDATE.md and docs/OPERATIONS.md). These
+// tests validate it around a leader change: a backup is taken from the leader,
+// the leader is killed, the new leader takes more writes, a fresh backup from
+// the new leader captures the latest committed state, and that backup restores
+// into a fresh single node — which can then bootstrap its own one-node cluster.
+//
+// The export/restore here is the same logical operation as `auradb dump` /
+// `auradb restore` (schemas + records as JSONL, restored as upserts), exercised
+// directly against the engine to avoid a crate dependency cycle.
+
+/// One line of a logical backup, mirroring `auradb dump`'s JSONL format.
+#[derive(serde::Serialize, serde::Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+enum BackupLine {
+    Schema {
+        schema: CollectionSchema,
+    },
+    Record {
+        collection: String,
+        fields: Document,
+    },
+}
+
+impl TestCluster {
+    /// Take a logical backup of node `idx`'s engine to `out` (every schema, then
+    /// every record, as JSONL) — the "back up from the leader" operation.
+    /// Returns the record count. Mirrors `auradb dump`.
+    fn backup_node(&self, idx: usize, out: &std::path::Path) -> usize {
+        let engine = &self.nodes[idx].engine;
+        let mut buf = String::new();
+        let schemas = engine.list_schemas();
+        for schema in &schemas {
+            let line = BackupLine::Schema {
+                schema: schema.clone(),
+            };
+            buf.push_str(&serde_json::to_string(&line).unwrap());
+            buf.push('\n');
+        }
+        let mut count = 0;
+        for schema in &schemas {
+            for row in engine.find(&FindQuery::new(&schema.name)).unwrap() {
+                let line = BackupLine::Record {
+                    collection: schema.name.clone(),
+                    fields: row.fields,
+                };
+                buf.push_str(&serde_json::to_string(&line).unwrap());
+                buf.push('\n');
+                count += 1;
+            }
+        }
+        std::fs::write(out, buf).unwrap();
+        count
+    }
+}
+
+/// Restore a logical backup into a fresh single-node engine at `data_dir`
+/// (create each schema, upsert each record). Returns the engine and the record
+/// count. Mirrors `auradb restore`.
+fn restore_to_single_node(backup: &std::path::Path, data_dir: &std::path::Path) -> (Engine, usize) {
+    let engine = Engine::open(data_dir).unwrap();
+    let content = std::fs::read_to_string(backup).unwrap();
+    let mut records = 0;
+    for line in content.lines() {
+        if line.trim().is_empty() {
+            continue;
+        }
+        match serde_json::from_str::<BackupLine>(line).unwrap() {
+            BackupLine::Schema { schema } => {
+                engine.create_schema(schema).unwrap();
+            }
+            BackupLine::Record { collection, fields } => {
+                engine
+                    .apply_mutation(Mutation::Upsert { collection, fields })
+                    .unwrap();
+                records += 1;
+            }
+        }
+    }
+    (engine, records)
+}
+
+/// The set of `id` values in collection "C" on an engine.
+fn engine_ids(engine: &Engine) -> std::collections::BTreeSet<i64> {
+    engine
+        .find(&FindQuery::new("C"))
+        .unwrap()
+        .into_iter()
+        .filter_map(|r| match r.fields.get("id") {
+            Some(Value::Int(v)) => Some(*v),
+            _ => None,
+        })
+        .collect()
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 8)]
+async fn cluster_backup_before_and_after_leader_change() {
+    let cluster = TestCluster::start(3).await;
+    cluster.wait_for_leader(Duration::from_secs(10)).await;
+
+    for id in 1..=10 {
+        cluster.write_via_leader(&[0, 1, 2], id, id).await;
+    }
+    cluster.wait_all_have(10, Duration::from_secs(15)).await;
+
+    // Back up from the current leader before the failure.
+    let leader = cluster.wait_for_leader(Duration::from_secs(10)).await;
+    let dir = tempfile::tempdir().unwrap();
+    let backup_before = dir.path().join("before.jsonl");
+    assert_eq!(
+        cluster.backup_node(leader, &backup_before),
+        10,
+        "pre-failure backup captures the committed baseline"
+    );
+
+    // Kill the leader; the majority elects a new one and accepts more writes.
+    cluster.stop(leader).await;
+    let live: Vec<usize> = (0..3).filter(|&i| i != leader).collect();
+    let new_leader = cluster
+        .wait_for_live_leader(&live, Duration::from_secs(10))
+        .await;
+    for id in 11..=20 {
+        cluster.write_via_leader(&live, id, id).await;
+    }
+    cluster
+        .wait_indices_have(&live, 20, Duration::from_secs(15))
+        .await;
+
+    // Back up from the NEW leader: it carries every committed record.
+    let backup_after = dir.path().join("after.jsonl");
+    assert_eq!(
+        cluster.backup_node(new_leader, &backup_after),
+        20,
+        "post-change backup from the new leader captures the latest committed state"
+    );
+    cluster.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 8)]
+async fn cluster_backup_restore_latest_leader_state() {
+    let cluster = TestCluster::start(3).await;
+    cluster.wait_for_leader(Duration::from_secs(10)).await;
+    for id in 1..=10 {
+        cluster.write_via_leader(&[0, 1, 2], id, id).await;
+    }
+    cluster.wait_all_have(10, Duration::from_secs(15)).await;
+
+    let leader = cluster.wait_for_leader(Duration::from_secs(10)).await;
+    cluster.stop(leader).await;
+    let live: Vec<usize> = (0..3).filter(|&i| i != leader).collect();
+    let new_leader = cluster
+        .wait_for_live_leader(&live, Duration::from_secs(10))
+        .await;
+    for id in 11..=20 {
+        cluster.write_via_leader(&live, id, id).await;
+    }
+    cluster
+        .wait_indices_have(&live, 20, Duration::from_secs(15))
+        .await;
+
+    // Back up the new leader and restore into a fresh single node.
+    let dir = tempfile::tempdir().unwrap();
+    let backup = dir.path().join("latest.jsonl");
+    assert_eq!(cluster.backup_node(new_leader, &backup), 20);
+
+    let restored_dir = tempfile::tempdir().unwrap();
+    let (engine, restored) = restore_to_single_node(&backup, &restored_dir.path().join("data"));
+    assert_eq!(restored, 20, "restore loads every committed record");
+    assert_eq!(
+        engine_ids(&engine),
+        (1..=20).collect(),
+        "the restored single node carries the latest committed state"
+    );
+    drop(engine);
+    cluster.shutdown().await;
+}
+
+/// Restore targets a fresh, offline single-node data directory — there is no
+/// operation to restore into a live multi-node cluster. `restore` opens a local
+/// data dir and upserts; it never contacts a peer or a running node, so a
+/// restored node is independent of (and cannot disturb) the live cluster.
+#[tokio::test(flavor = "multi_thread", worker_threads = 8)]
+async fn cluster_restore_live_cluster_rejected_or_documented() {
+    let cluster = TestCluster::start(3).await;
+    cluster.wait_for_leader(Duration::from_secs(10)).await;
+    for id in 1..=8 {
+        cluster.write_via_leader(&[0, 1, 2], id, id).await;
+    }
+    cluster.wait_all_have(8, Duration::from_secs(15)).await;
+    let leader = cluster.wait_for_leader(Duration::from_secs(10)).await;
+
+    let dir = tempfile::tempdir().unwrap();
+    let backup = dir.path().join("b.jsonl");
+    assert_eq!(cluster.backup_node(leader, &backup), 8);
+
+    // The only restore path is into a fresh, offline single-node data directory.
+    let restored_dir = tempfile::tempdir().unwrap();
+    let (engine, restored) = restore_to_single_node(&backup, &restored_dir.path().join("data"));
+    assert_eq!(restored, 8);
+    assert_eq!(engine_ids(&engine), (1..=8).collect());
+    drop(engine);
+
+    // The live cluster is untouched by the restore: every node still holds
+    // exactly the 8 committed records.
+    for i in 0..3 {
+        assert_eq!(
+            cluster.record_count(i),
+            8,
+            "restoring to a separate single node must not affect the live cluster"
+        );
+    }
+    cluster.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 8)]
+async fn cluster_restore_to_single_node_then_bootstrap_preview_cluster() {
+    // Take a backup from a live cluster leader, then tear the cluster down.
+    let cluster = TestCluster::start(3).await;
+    cluster.wait_for_leader(Duration::from_secs(10)).await;
+    for id in 1..=12 {
+        cluster.write_via_leader(&[0, 1, 2], id, id).await;
+    }
+    cluster.wait_all_have(12, Duration::from_secs(15)).await;
+    let leader = cluster.wait_for_leader(Duration::from_secs(10)).await;
+    let dir = tempfile::tempdir().unwrap();
+    let backup = dir.path().join("b.jsonl");
+    assert_eq!(cluster.backup_node(leader, &backup), 12);
+    cluster.shutdown().await;
+
+    // Restore into a fresh single-node data dir.
+    let restored_dir = tempfile::tempdir().unwrap();
+    let data_path = restored_dir.path().join("data");
+    let (engine, restored) = restore_to_single_node(&backup, &data_path);
+    assert_eq!(restored, 12);
+    drop(engine);
+
+    // Bootstrap a single-node cluster around the restored data dir: it is its own
+    // majority, elects itself leader, and serves the restored state.
+    let cluster_id = ClusterId::new(0xC0FFEE).unwrap();
+    let port = reserve_ports(1)[0];
+    let addr = format!("127.0.0.1:{port}");
+    let node_id = NodeId::from_raw(1);
+    let engine = Engine::open(&data_path).unwrap();
+    let cfg = node_config(&[node_id], &[addr], 0, cluster_id);
+    let id = identity(cluster_id, node_id);
+    let peer =
+        PeerCluster::spawn(engine.clone(), id, cfg, restored_dir.path().join("cluster")).unwrap();
+    engine.attach_replicated_log(peer.write_log());
+
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        if peer.is_leader() {
+            break;
+        }
+        if Instant::now() >= deadline {
+            panic!("bootstrapped single-node cluster did not elect itself leader");
+        }
+        tokio::time::sleep(Duration::from_millis(25)).await;
+    }
+    assert_eq!(
+        engine_ids(&engine),
+        (1..=12).collect(),
+        "the rebuilt single-node cluster serves the restored state"
+    );
+
+    // A new write through the rebuilt node commits through its own Raft log.
+    // Retry transient NotLeader / commit-timeout conditions while leadership
+    // settles on a freshly bootstrapped node.
+    let write_deadline = Instant::now() + Duration::from_secs(15);
+    let mut may_have_committed = false;
+    loop {
+        let e2 = engine.clone();
+        let result =
+            tokio::task::spawn_blocking(move || e2.apply_mutation(insert_mutation(13, 13)))
+                .await
+                .unwrap();
+        match result {
+            Ok(_) => break,
+            // A prior attempt may have committed but lost its ack (transient
+            // churn on a freshly bootstrapped node); re-observing it as a
+            // primary-key conflict means the write did land.
+            Err(auradb::core::Error::UniqueViolation(_)) if may_have_committed => break,
+            Err(err) => {
+                let transient = matches!(&err, auradb::core::Error::NotLeader(_))
+                    || matches!(&err, auradb::core::Error::Internal(m)
+                        if m.contains("replication timed out"));
+                if !transient || Instant::now() >= write_deadline {
+                    panic!("write through rebuilt single-node cluster failed: {err}");
+                }
+                may_have_committed = true;
+                tokio::time::sleep(Duration::from_millis(50)).await;
+            }
+        }
+    }
+    assert_eq!(engine_ids(&engine), (1..=13).collect());
+    peer.shutdown().await;
+}

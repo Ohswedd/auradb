@@ -7,7 +7,7 @@
 [![CI](https://github.com/Ohswedd/auradb/actions/workflows/ci.yml/badge.svg)](https://github.com/Ohswedd/auradb/actions/workflows/ci.yml)
 [![Security](https://github.com/Ohswedd/auradb/actions/workflows/security.yml/badge.svg)](https://github.com/Ohswedd/auradb/actions/workflows/security.yml)
 [![Docker](https://github.com/Ohswedd/auradb/actions/workflows/docker.yml/badge.svg)](https://github.com/Ohswedd/auradb/actions/workflows/docker.yml)
-[![Release](https://img.shields.io/badge/release-v0.8.1-green.svg)](CHANGELOG.md)
+[![Release](https://img.shields.io/badge/release-v0.9.0-green.svg)](CHANGELOG.md)
 [![Rust](https://img.shields.io/badge/rust-1.85%2B-orange.svg)](https://www.rust-lang.org)
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
 
@@ -71,6 +71,23 @@ neither the on-disk nor the wire format — the `not_leader` payload is byte-for
 the same as v0.7.0. It remains _not_ production HA; single-node mode stays the
 recommended production mode. See
 [docs/V0_7_1_RELEASE_NOTES.md](docs/V0_7_1_RELEASE_NOTES.md).
+
+**AuraDB v0.9.0 is an HA release candidate for the controlled static-cluster
+preview, not a production HA guarantee. Single-node mode remains the recommended
+production mode.** It strengthens cluster failure testing (a 3-cycle CI fail-stop
+suite plus ignored stress runs), snapshot/compaction coverage (larger installs,
+compaction with an offline follower, indexed-workload preservation, safe-to-retry
+install failures, snapshot metrics), connector behavior under leader change,
+operator recovery runbooks, the cluster backup/restore story (leader logical
+export → single-node restore, validated around a leader change), a published-image
+HA candidate smoke, and GitHub Actions Node 24 maintenance. It adds **no** new
+cluster architecture and changes **no** Raft, storage, query, MVCC, replication,
+or snapshot semantics, keeps the storage format (v2) and Aura Wire Protocol
+(AWP 1) unchanged, and preserves Aura Connector v0.4.1 compatibility. The support
+level, operator assumptions, validated failure matrix, and the strict criteria
+required before any future production HA claim are in
+[docs/HA_RELEASE_CANDIDATE.md](docs/HA_RELEASE_CANDIDATE.md) and
+[docs/V0_9_RELEASE_NOTES.md](docs/V0_9_RELEASE_NOTES.md).
 
 **AuraDB v0.8.1 is a production-readiness stabilization patch for the v0.8.0
 candidate.** It narrows in on the operational edges of v0.8.0 — backup/restore

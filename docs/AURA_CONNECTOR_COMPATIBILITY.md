@@ -2,12 +2,28 @@
 
 This document is the connector-focused companion to the
 [Compatibility Matrix](COMPATIBILITY.md). It records which Aura Connector release
-talks to AuraDB 0.8.1, what it can drive, and what it cannot.
+talks to AuraDB 0.9.0, what it can drive, and what it cannot.
 
 > **AuraDB v0.7.x adds connector cluster ergonomics for the controlled multi-node
 > preview. It is _not_ production HA — there is no automatic failover,
 > linearizable follower reads, or distributed transactions. Single-node mode
 > remains the recommended production mode.**
+
+## HA release candidate (v0.9.0)
+
+v0.9.0 is an **HA release candidate for the controlled static-cluster preview,
+not a production HA guarantee.** It touches **no** wire behavior, storage format
+(v2), or connector surface — **Aura Connector v0.4.1 remains the recommended,
+tested connector** and no connector release is required. v0.9.0 adds explicit
+validation of connector behavior **under a leader change**: the write to the old
+leader fails, the client discovers the new leader (from the `not_leader` hint or
+by re-resolving via `auradb cluster leader`), `connect_to_leader` and the bounded
+`with_leader_redirect` reach the new leader without infinite retry, auth/TLS are
+preserved across the redirect, and transactions are not auto-redirected. This is
+covered by `tests/conformance/python/run_connector_leader_change.py` and folded
+into `scripts/smoke_ha_candidate.sh`. See
+[HA_RELEASE_CANDIDATE.md](HA_RELEASE_CANDIDATE.md) and
+[CONFORMANCE.md](CONFORMANCE.md).
 
 ## Stabilization patch (v0.8.1)
 
