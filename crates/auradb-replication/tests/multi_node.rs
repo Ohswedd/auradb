@@ -109,6 +109,17 @@ impl TestCluster {
     /// Start an `n`-node cluster whose collection uses `collection_schema` (the
     /// scalar [`schema`] or the multi-model [`rich_schema`]).
     async fn start_with(n: usize, collection_schema: CollectionSchema) -> TestCluster {
+        Self::start_cfg(n, collection_schema, true).await
+    }
+
+    /// Start an `n`-node cluster, optionally declaring each node's client address
+    /// (its own `advertise_client_addr` and the peers' `client_addr`). Passing
+    /// `false` exercises the honest "leader client address unknown" path.
+    async fn start_cfg(
+        n: usize,
+        collection_schema: CollectionSchema,
+        declare_client_addrs: bool,
+    ) -> TestCluster {
         let cluster_id = ClusterId::new(0xC0FFEE).unwrap();
         let ports = reserve_ports(n);
         let ids: Vec<NodeId> = (1..=n as u64).map(NodeId::from_raw).collect();
@@ -119,7 +130,7 @@ impl TestCluster {
             let dir = tempfile::tempdir().unwrap();
             let engine = Engine::open(dir.path().join("data")).unwrap();
             engine.create_schema(collection_schema.clone()).unwrap();
-            let cfg = node_config(&ids, &addrs, i, cluster_id);
+            let cfg = node_config_with(&ids, &addrs, i, cluster_id, declare_client_addrs);
             let id = identity(cluster_id, ids[i]);
             let peer =
                 PeerCluster::spawn(engine.clone(), id, cfg, dir.path().join("cluster")).unwrap();
@@ -358,13 +369,35 @@ impl TestCluster {
     }
 }
 
+/// Synthetic, deterministic client address for node `i`. The multi-node harness
+/// drives the engine directly and never binds a client listener, so this string
+/// only has to be a valid, distinct `host:port` for the leader-hint lookup to
+/// resolve — it is deliberately disjoint from the (random) cluster transport
+/// ports so a test can assert the hint is the client address, never the peer
+/// transport address.
+fn client_addr_of(i: usize) -> String {
+    format!("127.0.0.1:{}", 7900 + i)
+}
+
 fn node_config(ids: &[NodeId], addrs: &[String], i: usize, cluster_id: ClusterId) -> ClusterConfig {
+    node_config_with(ids, addrs, i, cluster_id, true)
+}
+
+/// Like [`node_config`] but lets a test omit declared client addresses, so the
+/// honest "leader client address unknown" fallback path can be exercised.
+fn node_config_with(
+    ids: &[NodeId],
+    addrs: &[String],
+    i: usize,
+    cluster_id: ClusterId,
+    declare_client_addrs: bool,
+) -> ClusterConfig {
     let peers: Vec<PeerConfig> = (0..ids.len())
         .filter(|&j| j != i)
         .map(|j| PeerConfig {
             node_id: ids[j].to_string(),
             addr: addrs[j].clone(),
-            client_addr: None,
+            client_addr: declare_client_addrs.then(|| client_addr_of(j)),
         })
         .collect();
     ClusterConfig {
@@ -375,6 +408,7 @@ fn node_config(ids: &[NodeId], addrs: &[String], i: usize, cluster_id: ClusterId
         node_id: ids[i].to_string(),
         listen_addr: addrs[i].clone(),
         advertise_addr: addrs[i].clone(),
+        advertise_client_addr: declare_client_addrs.then(|| client_addr_of(i)),
         bootstrap: true,
         peers,
         peer_auth_token: auradb_cluster::Secret::default(),
@@ -425,6 +459,109 @@ async fn client_write_to_follower_returns_not_leader() {
     let follower = (0..cluster.nodes.len()).find(|&i| i != leader).unwrap();
     let err = cluster.write(follower, 7, 7).await.unwrap_err();
     assert_eq!(err.code(), auradb::core::ErrorCode::NotLeader);
+    cluster.shutdown().await;
+}
+
+// ----- leader-hint (client_addr) propagation (v0.9.1) -----
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn not_leader_hint_does_not_use_peer_addr_as_client_addr() {
+    // The leader hint is the operator-declared client address, never a node's
+    // cluster *transport* address.
+    let cluster = TestCluster::start(3).await;
+    let leader = cluster.wait_for_leader(Duration::from_secs(15)).await;
+    let follower = (0..3).find(|&i| i != leader).unwrap();
+
+    let hint = cluster.nodes[follower]
+        .peer
+        .leader_client_addr()
+        .expect("follower reports the leader's declared client address");
+    assert_eq!(
+        hint,
+        client_addr_of(leader),
+        "hint is the leader's client_addr"
+    );
+
+    // It must not be any node's transport address.
+    let transports = cluster.addrs();
+    assert!(
+        !transports.contains(&hint),
+        "leader hint {hint} must not be a peer transport address: {transports:?}"
+    );
+    cluster.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn not_leader_hint_omits_unknown_client_addr_safely() {
+    // With no client addresses declared anywhere, the hint is honestly absent on
+    // both the leader (its own advertise_client_addr unset) and a follower (the
+    // leader peer's client_addr unset) — never guessed, never a transport addr.
+    let cluster = TestCluster::start_cfg(3, schema(), false).await;
+    let leader = cluster.wait_for_leader(Duration::from_secs(15)).await;
+    let follower = (0..3).find(|&i| i != leader).unwrap();
+
+    assert!(
+        cluster.nodes[leader].peer.leader_client_addr().is_none(),
+        "leader has no declared own client address -> unknown"
+    );
+    assert!(
+        cluster.nodes[follower].peer.leader_client_addr().is_none(),
+        "follower's leader peer has no declared client address -> unknown"
+    );
+    cluster.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 6)]
+async fn not_leader_includes_leader_client_addr_after_re_election() {
+    // After a leader change, the leader hint follows the NEW leader: the new
+    // leader names its own client address (the v0.9.1 self-report), and a
+    // surviving follower converges on that same address, not the stopped leader's.
+    let cluster = TestCluster::start(3).await;
+    let old_leader = cluster.wait_for_leader(Duration::from_secs(15)).await;
+    cluster
+        .write_via_leader(&(0..3).collect::<Vec<_>>(), 1, 1)
+        .await;
+
+    cluster.stop(old_leader).await;
+    let live: Vec<usize> = (0..3).filter(|&i| i != old_leader).collect();
+    let new_leader = cluster
+        .wait_for_live_leader(&live, Duration::from_secs(15))
+        .await;
+    let expected = client_addr_of(new_leader);
+
+    // The new leader reports its OWN client address (a peer never could).
+    assert_eq!(
+        cluster.nodes[new_leader]
+            .peer
+            .leader_client_addr()
+            .as_deref(),
+        Some(expected.as_str()),
+        "the new leader reports its own client address as the hint"
+    );
+    assert_ne!(
+        expected,
+        client_addr_of(old_leader),
+        "the hint moved off the stopped old leader"
+    );
+
+    // A surviving follower converges on the same new-leader client address.
+    let follower = live.iter().copied().find(|&i| i != new_leader).unwrap();
+    let new_leader_id = cluster.nodes[new_leader].id;
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        if cluster.nodes[follower].peer.status().leader_id == Some(new_leader_id) {
+            break;
+        }
+        if Instant::now() >= deadline {
+            panic!("follower did not recognize the new leader in time");
+        }
+        tokio::time::sleep(Duration::from_millis(25)).await;
+    }
+    assert_eq!(
+        cluster.nodes[follower].peer.leader_client_addr().as_deref(),
+        Some(expected.as_str()),
+        "follower's hint matches the new leader's client address"
+    );
     cluster.shutdown().await;
 }
 
@@ -483,6 +620,7 @@ async fn node_with_dead_peer() -> (Arc<PeerCluster>, NodeId, String, ClusterId, 
         node_id: me.to_string(),
         listen_addr: format!("127.0.0.1:{}", ports[0]),
         advertise_addr: format!("127.0.0.1:{}", ports[0]),
+        advertise_client_addr: None,
         bootstrap: true,
         peers: vec![PeerConfig {
             node_id: dead.to_string(),
@@ -960,6 +1098,252 @@ async fn append_entries_resume_after_snapshot_install() {
     cluster
         .wait_indices_have(&[follower], target + 10, Duration::from_secs(30))
         .await;
+    cluster.shutdown().await;
+}
+
+// ----- snapshot / compaction across a leader change (v0.9.1) -----
+
+/// Baseline on all three; stop the leader (a real leader change); commit a run
+/// the old leader misses on the surviving majority; compact the survivors past
+/// those entries; restart the old leader so it can only be brought current by a
+/// snapshot install. Returns the cluster, the (rejoined) old-leader index, the
+/// new-leader index, and the committed record count to reach.
+async fn snapshot_after_leader_change_scenario() -> (TestCluster, usize, usize, usize) {
+    let mut cluster = TestCluster::start(3).await;
+    let ids = cluster.ids();
+    let addrs = cluster.addrs();
+    let old_leader = cluster.wait_for_leader(Duration::from_secs(15)).await;
+    let all: Vec<usize> = (0..3).collect();
+
+    for id in 1..=20 {
+        cluster.write_via_leader(&all, id, id).await;
+    }
+    cluster.wait_all_have(20, Duration::from_secs(15)).await;
+
+    // Leader change: stop the leader; the surviving two elect a new one.
+    cluster.stop(old_leader).await;
+    let live: Vec<usize> = (0..3).filter(|&i| i != old_leader).collect();
+    let new_leader = cluster
+        .wait_for_live_leader(&live, Duration::from_secs(15))
+        .await;
+
+    // Commit a run the old leader misses, then compact the survivors so only a
+    // snapshot install (not AppendEntries) can bring it current on rejoin.
+    let target = 120usize;
+    for id in 21..=target as i64 {
+        cluster.write_via_leader(&live, id, id).await;
+    }
+    cluster
+        .wait_indices_have(&live, target, Duration::from_secs(25))
+        .await;
+    for &i in &live {
+        let _ = cluster.nodes[i].peer.compact_log();
+    }
+
+    // Rejoin the old leader; it returns as a follower and catches up by snapshot.
+    cluster.restart(old_leader, &ids, &addrs).await;
+    (cluster, old_leader, new_leader, target)
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 6)]
+async fn snapshot_install_after_leader_change() {
+    let (cluster, old_leader, _new_leader, target) = snapshot_after_leader_change_scenario().await;
+    // The rejoined old leader catches up to the full committed state.
+    cluster
+        .wait_indices_have(&[old_leader], target, Duration::from_secs(30))
+        .await;
+    // Catch-up was a real snapshot install (the survivors compacted the entries
+    // it needed). Poll the counters with a bounded deadline to avoid racing the
+    // install-counter increment with the engine reaching `target`.
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        let installed = cluster.nodes[old_leader].peer.snapshot_counters().1;
+        let sent: u64 = (0..3)
+            .map(|i| cluster.nodes[i].peer.snapshot_counters().0)
+            .sum();
+        if installed >= 1 && sent >= 1 {
+            break;
+        }
+        if Instant::now() >= deadline {
+            panic!("expected a snapshot install after leader change: installed={installed} sent={sent}");
+        }
+        tokio::time::sleep(Duration::from_millis(25)).await;
+    }
+    cluster.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 6)]
+async fn old_leader_rejoins_then_receives_snapshot_if_needed() {
+    let (cluster, old_leader, _new_leader, target) = snapshot_after_leader_change_scenario().await;
+    // The old leader rejoins as a follower recognizing some current leader other
+    // than itself. (Which survivor leads can shift again during the rejoin, so we
+    // do not pin it to the first-elected node — only that the old leader stepped
+    // down and follows the cluster.)
+    let old_leader_id = cluster.nodes[old_leader].id;
+    let deadline = Instant::now() + Duration::from_secs(20);
+    loop {
+        let st = cluster.nodes[old_leader].peer.status();
+        if st.role == NodeRole::Follower && matches!(st.leader_id, Some(id) if id != old_leader_id)
+        {
+            break;
+        }
+        if Instant::now() >= deadline {
+            panic!(
+                "old leader did not rejoin as a follower of another node (role {:?}, leader {:?})",
+                st.role, st.leader_id
+            );
+        }
+        tokio::time::sleep(Duration::from_millis(25)).await;
+    }
+    // And it is brought fully current (here, by the snapshot it needed).
+    cluster
+        .wait_indices_have(&[old_leader], target, Duration::from_secs(30))
+        .await;
+    assert_eq!(cluster.record_count(old_leader), target);
+    cluster.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 6)]
+async fn snapshot_metrics_after_leader_change() {
+    let (cluster, old_leader, _new_leader, target) = snapshot_after_leader_change_scenario().await;
+    cluster
+        .wait_indices_have(&[old_leader], target, Duration::from_secs(30))
+        .await;
+    // Diagnostics are consistent across the leader change: the rejoined node
+    // records installed bytes and an install boundary, some live node shipped
+    // bytes, and a leader change was observed — with no apply errors.
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        let diag = cluster.nodes[old_leader].peer.snapshot_diagnostics();
+        let sent_bytes: u64 = (0..3)
+            .map(|i| cluster.nodes[i].peer.snapshot_diagnostics().bytes_sent)
+            .sum();
+        if diag.bytes_installed > 0 && sent_bytes > 0 {
+            assert!(
+                diag.last_included_index > 0,
+                "diagnostics record the installed boundary"
+            );
+            break;
+        }
+        if Instant::now() >= deadline {
+            panic!("snapshot metrics did not advance after leader change: {diag:?}");
+        }
+        tokio::time::sleep(Duration::from_millis(25)).await;
+    }
+    assert!(
+        cluster.max_leader_changes() >= 1,
+        "a leader change should be recorded"
+    );
+    assert_eq!(
+        cluster.nodes[old_leader].peer.metrics().apply_errors,
+        0,
+        "snapshot install + resume after a leader change must not produce apply errors"
+    );
+    cluster.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 6)]
+async fn compaction_after_leader_change() {
+    // After a leader change, the NEW leader can compact its log and keep serving
+    // writes — compaction state survives the role change.
+    let cluster = TestCluster::start(3).await;
+    let old_leader = cluster.wait_for_leader(Duration::from_secs(15)).await;
+    let all: Vec<usize> = (0..3).collect();
+    for id in 1..=20 {
+        cluster.write_via_leader(&all, id, id).await;
+    }
+    cluster.wait_all_have(20, Duration::from_secs(15)).await;
+
+    cluster.stop(old_leader).await;
+    let live: Vec<usize> = (0..3).filter(|&i| i != old_leader).collect();
+    let new_leader = cluster
+        .wait_for_live_leader(&live, Duration::from_secs(15))
+        .await;
+    // Commit more so the new leader has a log to compact.
+    for id in 21..=60 {
+        cluster.write_via_leader(&live, id, id).await;
+    }
+    cluster
+        .wait_indices_have(&live, 60, Duration::from_secs(25))
+        .await;
+
+    // The new leader compacts successfully...
+    cluster.nodes[new_leader]
+        .peer
+        .compact_log()
+        .expect("new leader compacts its log after the leader change");
+    // ...and still commits new writes afterwards.
+    cluster.write_via_leader(&live, 61, 61).await;
+    cluster
+        .wait_indices_have(&live, 61, Duration::from_secs(25))
+        .await;
+    cluster.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 6)]
+async fn snapshot_failure_after_leader_change_safe_to_retry() {
+    // A corrupt snapshot install delivered to the NEW leader after a leader change
+    // is rejected safely: existing committed state is preserved and nothing is
+    // recorded as installed, and a retry is rejected the same way (idempotent).
+    use auradb_replication::transport::{self, PeerMessage};
+
+    let cluster = TestCluster::start(3).await;
+    let old_leader = cluster.wait_for_leader(Duration::from_secs(15)).await;
+    let all: Vec<usize> = (0..3).collect();
+    for id in 1..=5 {
+        cluster.write_via_leader(&all, id, id).await;
+    }
+    cluster.wait_all_have(5, Duration::from_secs(15)).await;
+
+    cluster.stop(old_leader).await;
+    let live: Vec<usize> = (0..3).filter(|&i| i != old_leader).collect();
+    let new_leader = cluster
+        .wait_for_live_leader(&live, Duration::from_secs(15))
+        .await;
+    let cluster_id = cluster.nodes[new_leader].cluster_id;
+    let target_addr = cluster.nodes[new_leader].addr.clone();
+    // Impersonate the stopped old leader: it is a configured peer of the new
+    // leader and is offline, so there is no live duplicate-connection conflict.
+    let impersonate = cluster.nodes[old_leader].id;
+    let before = cluster.record_count(new_leader);
+    assert!(before >= 5);
+
+    // Deliver a corrupt install twice; each time it must be rejected (the rejected
+    // counter advances), committed state stays intact, and nothing is installed.
+    for attempt in 0..2 {
+        let mut manifest = sample_manifest(cluster_id);
+        manifest.payload.push(0xFF); // corrupt the payload so decode/verify fails
+        let req = PeerMessage::InstallSnapshotRequest {
+            from: impersonate,
+            term: u64::MAX, // never stale, so the corruption is what rejects it
+            last_included_index: 5,
+            last_included_term: 1,
+            snapshot: manifest.encode().unwrap(),
+        };
+        let mut stream = handshake_as_peer(&target_addr, cluster_id, impersonate).await;
+        let rejected_before = cluster.nodes[new_leader].peer.snapshot_counters().2;
+        transport::write_message(&mut stream, &req).await.unwrap();
+        let deadline = Instant::now() + Duration::from_secs(5);
+        loop {
+            if cluster.nodes[new_leader].peer.snapshot_counters().2 > rejected_before {
+                break;
+            }
+            if Instant::now() >= deadline {
+                panic!("attempt {attempt}: new leader did not reject the corrupt install");
+            }
+            tokio::time::sleep(Duration::from_millis(25)).await;
+        }
+        assert_eq!(
+            cluster.record_count(new_leader),
+            before,
+            "attempt {attempt}: committed state must be preserved"
+        );
+        assert_eq!(
+            cluster.nodes[new_leader].peer.snapshot_counters().1,
+            0,
+            "attempt {attempt}: a rejected install must not count as installed"
+        );
+    }
     cluster.shutdown().await;
 }
 

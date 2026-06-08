@@ -4,6 +4,57 @@ All notable changes to AuraDB are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and the project uses
 [Semantic Versioning](https://semver.org/).
 
+## [0.9.1] - 2026-06-08
+
+**HA release-candidate stabilization** of the v0.9.0 candidate. v0.9.1 polishes
+leader-hint propagation, strengthens leader-hint documentation and tests,
+improves HA smoke reliability and diagnostics, adds snapshot/compaction coverage
+across a leader change, and clarifies operator runbooks. It introduces **no** new
+cluster architecture and changes **no** Raft, storage, query, MVCC, replication,
+or snapshot semantics except where a documented bug is fixed. The storage format
+(v2) and the Aura Wire Protocol (AWP 1) are unchanged, and Aura Connector v0.4.1
+compatibility is preserved. Multi-node mode remains a controlled static-cluster
+preview — **not** production HA — and **single-node mode remains the recommended
+production mode.** See [docs/HA_RELEASE_CANDIDATE.md](docs/HA_RELEASE_CANDIDATE.md)
+and [docs/V0_9_1_RELEASE_NOTES.md](docs/V0_9_1_RELEASE_NOTES.md).
+
+### Added
+- Optional `[cluster] advertise_client_addr`: this node's own client-facing
+  address, reported as the leader client address (in `not_leader` hints and
+  cluster status/health) while this node is the leader — closing the gap where a
+  node could not name its own client address. Operator-declared and honest:
+  never guessed, never a peer transport address, omitted when unset.
+- Leader-hint propagation tests: `not_leader_includes_leader_client_addr_after_re_election`,
+  `not_leader_hint_does_not_use_peer_addr_as_client_addr`,
+  `not_leader_hint_omits_unknown_client_addr_safely`,
+  `cluster_status_leader_client_addr_matches_not_leader_hint`,
+  `leader_reports_its_own_client_addr_in_health`, and
+  `docker_compose_cluster_not_leader_hint_has_client_addr_if_configured`.
+- Snapshot/compaction-across-leader-change tests:
+  `snapshot_install_after_leader_change`,
+  `old_leader_rejoins_then_receives_snapshot_if_needed`,
+  `snapshot_metrics_after_leader_change`, `compaction_after_leader_change`, and
+  `snapshot_failure_after_leader_change_safe_to_retry`.
+- HA smoke diagnostics: old/new leader and candidate addresses, the
+  `leader_client_addr` hint at each leader, and the resolution path (direct hint
+  vs. re-resolve fallback) in `run_connector_leader_change.py`.
+- Operator runbook guidance for the `not_leader` leader-hint fallback and
+  leader re-resolution.
+
+### Changed
+- Example and Docker Compose cluster configs declare `advertise_client_addr` and
+  peer `client_addr`, with the Compose caveat documented (the in-network hint is
+  not the host-published port, so host clients re-resolve — the documented
+  fallback).
+- Improved leader-hint documentation and conformance reporting.
+- Improved HA smoke reliability and failure output.
+- Improved cluster troubleshooting and runbook guidance.
+
+### Fixed
+- The leader could not report its own client address (a node is absent from its
+  own peer list), so a `not_leader` hint or cluster status taken from the leader
+  itself omitted `leader_client_addr`; `advertise_client_addr` now provides it.
+
 ## [0.9.0] - 2026-06-07
 
 **HA release candidate** for the controlled static-cluster preview, not a

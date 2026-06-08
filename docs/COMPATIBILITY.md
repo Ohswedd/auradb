@@ -1,13 +1,16 @@
 # AuraDB Compatibility Matrix
 
-This document records what AuraDB v0.9.0 implements and how it interoperates with
-the Aura Connector client library and the Aura Wire Protocol (AWP). v0.9.0 is an
+This document records what AuraDB v0.9.1 implements and how it interoperates with
+the Aura Connector client library and the Aura Wire Protocol (AWP). v0.9.1 is an
 **HA release candidate for the controlled static-cluster preview, not a
-production HA guarantee** — it strengthens cluster failure testing, diagnostics,
-snapshot/compaction coverage, connector behavior under leader change, recovery
-runbooks, and the backup/restore story — that adds no new cluster architecture
-and changes no semantics, storage format, or wire protocol, and keeps the
-v0.8.x cluster-preview ergonomics (off by default). See
+production HA guarantee** — it stabilizes the v0.9.0 candidate: it adds an
+optional, additive `[cluster] advertise_client_addr` field so a leader can name
+its own client address in the `not_leader` hint and cluster status/health,
+extends snapshot/compaction and connector-leader-change test coverage across a
+leader change, and sharpens the HA candidate smoke and connector conformance
+diagnostics — it adds no new cluster architecture and changes no semantics,
+storage format, or wire protocol, and keeps the v0.8.x cluster-preview ergonomics
+(off by default). See
 [HA_RELEASE_CANDIDATE.md](HA_RELEASE_CANDIDATE.md). The v0.8.x candidate it builds
 on is a hardening, validation, and operability release — a production-readiness
 candidate for single-node and a stronger cluster preview — coordinated with the
@@ -23,7 +26,8 @@ from v0.4.x.
 
 | AuraDB | Aura Connector | Protocol | Status |
 | ------ | -------------- | -------- | ------ |
-| 0.9.0  | 0.4.1          | AWP 1    | Supported, recommended (HA release candidate for the controlled static-cluster preview, not production HA; connector unchanged; wire payload, storage format (v2), and semantics identical to 0.8.x) |
+| 0.9.1  | 0.4.1          | AWP 1    | Supported, recommended (HA release-candidate stabilization of the 0.9.0 candidate; adds the optional, backward-compatible `[cluster] advertise_client_addr` field; connector unchanged; wire payload, storage format (v2), and semantics identical to 0.9.0) |
+| 0.9.0  | 0.4.1          | AWP 1    | Supported (HA release candidate for the controlled static-cluster preview, not production HA; connector unchanged; wire payload, storage format (v2), and semantics identical to 0.8.x) |
 | 0.8.1  | 0.4.1          | AWP 1    | Supported (stabilization patch over 0.8.0; connector unchanged; wire payload, storage format, and semantics identical to 0.8.0) |
 | 0.8.0  | 0.4.1          | AWP 1    | Supported (AuraDB-focused hardening release; connector unchanged; wire payload identical to 0.7.x; storage format unchanged) |
 | 0.7.1  | 0.4.1          | AWP 1    | Supported, recommended (clearer `AuraNotLeaderError` messages, secure-by-default redirect, transaction-redirect docs; identical wire payload to 0.7.0) |
@@ -53,7 +57,7 @@ and TLS). Use Aura Connector 0.3.x to connect to an AuraDB 0.2.x server. See
 
 ## Versions
 
-- **AuraDB:** 0.8.1
+- **AuraDB:** 0.9.1
 - **Storage format:** v2 (commit-timestamped MVCC version chains), unchanged from
   v0.4.x. A v1 (≤ 0.2.x) data directory is migrated to v2 transparently on first
   open; an unknown future format is rejected. See [UPGRADING.md](UPGRADING.md).
@@ -67,8 +71,11 @@ and TLS). Use Aura Connector 0.3.x to connect to an AuraDB 0.2.x server. See
   controlled, **experimental multi-node server preview** gated by two opt-ins;
   single-node mode remains the recommended production path. v0.7.x improves the
   preview's connector-facing error ergonomics and v0.8.0 hardens preview recovery
-  testing, but it is **not** production HA. See
-  [CLUSTERING.md](CLUSTERING.md).
+  testing, but it is **not** production HA. v0.9.1 adds an optional
+  `[cluster] advertise_client_addr` field (this node's own client-facing address,
+  reported as the leader hint while it leads); it is **additive and backward
+  compatible** — a config that omits it behaves exactly as in v0.9.0. See
+  [CLUSTERING.md](CLUSTERING.md) and [CONFIGURATION.md](CONFIGURATION.md).
 
 ## Required connector features
 
@@ -152,7 +159,7 @@ and TLS). Use Aura Connector 0.3.x to connect to an AuraDB 0.2.x server. See
 
 ## Verification
 
-- **Test date:** 2026-06-06
+- **Test date:** 2026-06-08
 - **CI workflows:** `ci.yml` (build, fmt, clippy, test, benchmark compilation),
   `conformance.yml` (Python AWP conformance: auth disabled, auth enabled, and
   TLS, plus the Aura Connector smoke and conformance suites), `cluster.yml`

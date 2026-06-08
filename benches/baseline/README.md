@@ -19,14 +19,15 @@ number from one laptop is not comparable to a number from another.
 The benchmark opens the engine with `sync_on_commit = false` so it measures
 engine work rather than disk-flush latency. See [docs/BENCHMARKS.md](../../docs/BENCHMARKS.md).
 
-The current baseline is `v0.9.0.json`, captured on the v0.9.0 HA
-release-candidate branch. v0.9.0 changes no query, storage, or MVCC hot path (it
-is preview hardening, testing, and documentation), so its numbers track
-`v0.8.1.json` within run-to-run noise on the same machine; comparison is
+The current baseline is `v0.9.1.json`, captured on the v0.9.1 HA
+release-candidate stabilization branch. v0.9.1 adds only the optional
+`[cluster] advertise_client_addr` field plus test, smoke, and documentation work,
+so it changes no query, storage, or MVCC hot path and its numbers track
+`v0.9.0.json` within run-to-run noise on the same machine; comparison is
 **warn-only and machine-specific** (no fail threshold), and any per-benchmark
 delta in the single-digit-to-low-tens percent range on a shared developer machine
 is hardware variance — or concurrent load during capture — not a regression. The
-prior baseline is `v0.8.1.json`, and before it `v0.8.0.json`
+prior baseline is `v0.9.0.json`, and before it `v0.8.1.json` and `v0.8.0.json`
 (v0.7.0 and v0.7.1 were connector-ergonomics releases that did **not** refresh the
 engine baseline). It is the single-node engine suite; multi-node
 replicated-write and recovery latency (leader write, follower catch-up, snapshot

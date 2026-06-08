@@ -45,12 +45,20 @@ cluster_id = "0000000000000000000000000000a1a2"
 node_id = "00000000000000a1"
 listen_addr = "0.0.0.0:7172"
 advertise_addr = "node1:7172"
+# This node's in-Docker-network client address. Containers reach each node at
+# <service>:7171 on the bridge network, so that is the honest client address for
+# an *in-network* client and is what `not_leader` hints and diagnostics report
+# while this node leads. NOTE: it is NOT the host-published address
+# (127.0.0.1:7171), so a client running on the host (e.g. the HA smoke) cannot
+# use the hint directly and falls back to re-resolving the leader by host port —
+# the documented fallback. See docs/CLUSTER_TROUBLESHOOTING.md.
+advertise_client_addr = "node1:7171"
 bootstrap = true
 # Shared secret; change it. (Kept in the config file like other AuraDB secrets.)
 peer_auth_token = "change-me-preview-cluster-token"
 peers = [
-  { node_id = "00000000000000a2", addr = "node2:7172" },
-  { node_id = "00000000000000a3", addr = "node3:7172" },
+  { node_id = "00000000000000a2", addr = "node2:7172", client_addr = "node2:7171" },
+  { node_id = "00000000000000a3", addr = "node3:7172", client_addr = "node3:7171" },
 ]
 
 [cluster.tls]

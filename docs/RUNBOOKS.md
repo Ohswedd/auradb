@@ -228,11 +228,11 @@ the upgrade path tested in staging, and a rollback plan.
 
 ---
 
-### HA release-candidate recovery runbooks (v0.9.0)
+### HA release-candidate recovery runbooks (v0.9.0, refined in v0.9.1)
 
 > These cover the controlled static-cluster preview. It is an **HA release
-> candidate, not a production HA guarantee**; single-node mode remains the
-> recommended production mode. See
+> candidate, not a production HA guarantee** (v0.9.1 stabilizes it); single-node
+> mode remains the recommended production mode. See
 > [HA_RELEASE_CANDIDATE.md](HA_RELEASE_CANDIDATE.md) for the support level, the
 > operator assumptions, and the validated failure matrix. Every runbook below
 > lists when to restore from backup and what to include in a bug report.
@@ -390,6 +390,35 @@ the minimal reproduction. AuraDB redacts secrets in those reports.
 - **Expected**: the restored single node carries the latest committed state.
 - **Unsafe**: restoring into a running multi-node cluster (unsupported; restore
   targets an offline, fresh data dir).
+
+#### 18n. `not_leader` without a leader client address — re-resolve the leader (v0.9.1)
+
+- **Symptoms**: a write returns `not_leader` but the response carries no
+  `leader_client_addr` (the client cannot redirect from the hint alone).
+- **Why**: the leader's client address is reported only when declared — a peer's
+  `client_addr`, or the leader's own `[cluster] advertise_client_addr`. Undeclared
+  ⇒ reported as unknown (never guessed). Expected too in Docker Compose, where the
+  in-network hint (e.g. `node2:7171`) is not the host-published port.
+- **Commands** (the documented fallback)
+  ```bash
+  # Ask any reachable node who leads (and its client address, if known):
+  auradb cluster leader --addr "$ADDR" --json
+  # Or read the full cluster view, including leader_client_addr:
+  auradb cluster status --addr "$ADDR" --json
+  # If still unknown, probe each candidate client address — the leader accepts a write:
+  for a in "$NODE1" "$NODE2" "$NODE3"; do auradb cluster leader --addr "$a" --json; done
+  ```
+- **Stale hint vs. no leader**: a hint naming a leader id but no client address
+  means re-resolve; "no leader is currently known" means an election is in
+  progress — `auradb cluster wait-leader` and retry, do not treat as a failure.
+- **Make it reliable**: set each node's `advertise_client_addr` to its own client
+  address (matching peers' `client_addr` for it); then the leader self-reports its
+  hint after a leader change. See [CONFIGURATION.md](CONFIGURATION.md) and
+  [CLUSTER_TROUBLESHOOTING.md](CLUSTER_TROUBLESHOOTING.md).
+- **Logs to collect**: `auradb version`; redacted `cluster status`/`cluster
+  doctor` JSON from each node; node logs around the leader change.
+- **Restore from backup**: not needed — this is a routing/redirect concern, not
+  data loss.
 
 ---
 

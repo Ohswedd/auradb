@@ -2,7 +2,10 @@
 
 > **AuraDB v0.9.0 is an HA release candidate for the controlled static-cluster
 > preview, not a production HA guarantee. Single-node mode remains the
-> recommended production mode.**
+> recommended production mode.** v0.9.1 stabilizes this candidate (leader-hint
+> propagation, HA smoke diagnostics, snapshot/compaction-across-leader-change
+> coverage, and runbook clarity); it is still **not** production HA. See
+> [§9](#9-v091-stabilization).
 
 This document defines exactly what the v0.9.0 high-availability (HA) release
 candidate **does** and **does not** mean. It is the single place that states the
@@ -201,3 +204,61 @@ AuraDB will not claim production HA until **all** of the following are met and
 Until every criterion is met and documented, multi-node remains a controlled
 static-cluster preview and single-node remains the recommended production mode.
 See [ROADMAP.md](ROADMAP.md) and [PRODUCTION_READINESS.md](PRODUCTION_READINESS.md).
+
+## 9. v0.9.1 stabilization
+
+v0.9.1 stabilizes the v0.9.0 candidate without changing the cluster architecture,
+the wire protocol (AWP 1), or the storage format (v2). It makes no new guarantees.
+
+### Leader-hint (`client_addr`) propagation
+
+In v0.9.0 a node named another peer's client address in a `not_leader` hint and
+in cluster diagnostics from that peer's declared `client_addr`, but it could not
+name its **own** client address — a node is absent from its own peer list. So a
+hint or cluster status taken from the **leader itself** (for example the new
+leader right after an election, which the published-image HA smoke observed)
+omitted `leader_client_addr`, and clients fell back to re-resolving the leader.
+
+v0.9.1 adds the optional `[cluster] advertise_client_addr` — this node's own
+client-facing address. When set, a node reports it as the leader client address
+(in the `not_leader` hint and in cluster status/health) **while it is the
+leader**. The value is operator-declared and honest: never guessed, never the
+peer *transport* address, and omitted (clients re-resolve) when not declared. It
+should match the `client_addr` the other nodes list for this node. The shipped
+example and Compose cluster configs declare it.
+
+**Docker Compose caveat.** The Compose configs declare the in-Docker-network
+client address (e.g. `node2:7171`), which is the honest address for an in-network
+client but is **not** the host-published port (e.g. `127.0.0.1:7181`). A client on
+the **host** therefore re-resolves the leader by host port — the documented
+fallback, not a failure. See [CLUSTER_TROUBLESHOOTING.md](CLUSTER_TROUBLESHOOTING.md).
+
+This is validated by `not_leader_includes_leader_client_addr_after_re_election`,
+`not_leader_hint_does_not_use_peer_addr_as_client_addr`,
+`not_leader_hint_omits_unknown_client_addr_safely`,
+`cluster_status_leader_client_addr_matches_not_leader_hint`,
+`leader_reports_its_own_client_addr_in_health`, and
+`docker_compose_cluster_not_leader_hint_has_client_addr_if_configured`.
+
+### Snapshot and compaction across a leader change
+
+v0.9.1 adds targeted, CI-safe coverage of the v0.9.0 snapshot/compaction paths
+*after* a leader change: a snapshot install brings the rejoined old leader
+current (`snapshot_install_after_leader_change`), the old leader rejoins as a
+follower and catches up (`old_leader_rejoins_then_receives_snapshot_if_needed`),
+snapshot diagnostics stay consistent with no apply errors and a recorded leader
+change (`snapshot_metrics_after_leader_change`), the new leader can compact its
+log and keep serving writes (`compaction_after_leader_change`), and a corrupt
+install delivered after the change is rejected safely and is idempotent on retry
+(`snapshot_failure_after_leader_change_safe_to_retry`). Heavier variants remain
+`#[ignore]`d. These add coverage only; the snapshot is still a single bounded
+message (no chunked streaming), exactly as in v0.9.0.
+
+### HA smoke and conformance diagnostics
+
+`scripts/smoke_ha_candidate.sh` now prints the old leader, the new leader, and
+the candidate addresses; reports the `leader_client_addr` hint at the initial and
+new leader; and labels the in-network/host fallback as expected, so a real
+failure (no leader resolvable) is distinguishable from the documented fallback.
+`tests/conformance/python/run_connector_leader_change.py` reports which path
+resolved the leader (direct hint vs. re-resolve fallback).

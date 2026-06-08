@@ -232,6 +232,19 @@ python tests/conformance/python/run_connector_leader_change.py \
 It exits 0 on success, 1 on a failed check, and 2 if the connector is
 missing/too old (so coordinated work does not block on connector publish timing).
 
+### v0.9.1 leader-resolution path reporting (HA release-candidate stabilization)
+
+v0.9.1 keeps the v0.9.0 scenario above and makes the new-leader discovery step
+explicit: `run_connector_leader_change.py` now **reports the resolution path** it
+took — whether it reached the new leader **directly from the `not_leader` hint**
+(which now carries the leader's own client address when the leader sets
+`[cluster] advertise_client_addr`) or fell back to a **bounded re-resolve probe**
+of the candidate addresses. It prefers the hint and then probes. Both paths are
+valid HA-candidate behavior: when the hint's client address is reachable from the
+client it is used directly; when it is not (for example a Docker in-network
+address that is not the host-published port), the documented re-resolve fallback
+applies. The script's exit codes are unchanged.
+
 ## Running
 
 Rust (no server needed - the test spawns one):

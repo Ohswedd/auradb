@@ -31,6 +31,8 @@ cluster_id = "0000000000000000000000000000a1a2"
 node_id = "00000000000000a3"
 listen_addr = "127.0.0.1:7192"
 advertise_addr = "127.0.0.1:7192"
+# This node's own client address (reported as the leader hint while it leads).
+advertise_client_addr = "127.0.0.1:7191"
 bootstrap = true
 peers = [
   { node_id = "00000000000000a1", addr = "127.0.0.1:7172", client_addr = "127.0.0.1:7171" },

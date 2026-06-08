@@ -33,11 +33,14 @@ cluster_id = "0000000000000000000000000000a1a2"
 node_id = "00000000000000a2"
 listen_addr = "0.0.0.0:7172"
 advertise_addr = "node2:7172"
+# In-Docker-network client address (the leader hint while this node leads).
+# Not the host-published port; host clients fall back to re-resolve. See node1.toml.
+advertise_client_addr = "node2:7171"
 bootstrap = true
 peer_auth_token = "change-me-preview-cluster-token"
 peers = [
-  { node_id = "00000000000000a1", addr = "node1:7172" },
-  { node_id = "00000000000000a3", addr = "node3:7172" },
+  { node_id = "00000000000000a1", addr = "node1:7172", client_addr = "node1:7171" },
+  { node_id = "00000000000000a3", addr = "node3:7172", client_addr = "node3:7171" },
 ]
 
 [cluster.tls]

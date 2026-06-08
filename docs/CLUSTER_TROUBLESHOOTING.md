@@ -3,9 +3,9 @@
 This guide covers diagnosing and recovering AuraDB's optional cluster mode. It
 applies to **single-node cluster mode** and to the **multi-node preview**.
 
-> **AuraDB v0.9.0 is an HA release candidate for the controlled static-cluster
-> preview, not a production HA guarantee. Single-node mode remains the
-> recommended production mode.** For the support level, the operator assumptions,
+> **AuraDB v0.9.1 stabilizes the v0.9.0 HA release candidate. It is still not
+> production HA; single-node mode remains the recommended production mode.** For
+> the support level, the operator assumptions,
 > the validated failure matrix, and the strict criteria required before any
 > future production HA claim, see
 > [HA_RELEASE_CANDIDATE.md](HA_RELEASE_CANDIDATE.md). The HA recovery runbooks are
@@ -162,6 +162,50 @@ bounded `client.with_leader_redirect()`. v0.4.1 renders a clearer message (the
 node reached, the leader address, the redirect call) and refuses a redirect that
 would silently drop TLS. Transactions are never auto-redirected — restart the
 transaction on the leader. See the connector's `examples/auradb_leader_redirect.py`.
+
+## When a `not_leader` hint lacks `leader_client_addr` (v0.9.1)
+
+A `not_leader` response names the leader's **client address** only when an
+operator declared it. A node names a peer-leader's address from that peer's
+`client_addr`, and names its **own** address (while it is the leader) from its
+own `[cluster] advertise_client_addr` — a node never appears in its own peer
+list, so without `advertise_client_addr` the leader cannot report its own client
+address. When the relevant address was not declared, AuraDB reports it as unknown
+(honest) rather than guessing, and the hint is omitted. This is expected, not a
+bug — including in **Docker Compose**, where the declared client address is the
+in-network name (e.g. `node2:7171`) and a client on the **host** cannot use it
+directly (the host reaches nodes on published ports such as `127.0.0.1:7181`).
+
+When the hint is absent, **re-resolve the leader** — the documented fallback:
+
+```sh
+# 1. Ask any reachable node who the leader is (and its client address, if known):
+auradb cluster leader --addr 127.0.0.1:7171 --json
+# 2. Or read the cluster view, including leader_client_addr, from any node:
+auradb cluster status --addr 127.0.0.1:7171 --json
+# 3. If neither names a usable client address, try each candidate client address
+#    in turn — the leader is the one that accepts a write:
+auradb cluster leader --addr 127.0.0.1:7181 --json
+auradb cluster leader --addr 127.0.0.1:7191 --json
+```
+
+**Stale hint vs. no leader.** A `not_leader` that names a leader id but no client
+address means a leader exists but its client address was not declared — re-resolve
+as above. A `not_leader` that says *no leader is currently known* means an
+election is in progress — wait with `auradb cluster wait-leader` and retry; do not
+treat it as a failure.
+
+**After a leader change**, the new leader reports its own client address as the
+hint when it declared `advertise_client_addr` (v0.9.1). A surviving follower
+converges on that same address. Until it propagates (a brief window), or when it
+was not declared, use the re-resolve fallback above. To make the hint reliable,
+set each node's `advertise_client_addr` to its own client address — matching the
+`client_addr` the other nodes list for it (see [CONFIGURATION.md](CONFIGURATION.md)).
+
+The HA smoke (`scripts/smoke_ha_candidate.sh`) prints the old leader, the new
+leader, the candidate addresses, and the `leader_client_addr` hint at each
+leader, and labels the in-network/host fallback as expected — so a real failure
+(no leader resolvable at all) is distinguishable from the documented fallback.
 
 ## Multi-node preview troubleshooting (v0.5.0)
 
