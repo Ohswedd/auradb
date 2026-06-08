@@ -203,6 +203,35 @@ transaction redirect is rejected; auth/TLS preserved when configured).
   `require_published_connector` input set so a missing/too-old connector **fails**
   the job. Flip it on only once Aura Connector v0.4.1 is published.
 
+### v0.9.0 connector behavior under leader change (HA release candidate)
+
+v0.9.0 adds a leader-change conformance scenario,
+`tests/conformance/python/run_connector_leader_change.py`, for the controlled
+static-cluster preview (an **HA release candidate, not production HA**). Run it
+against a live cluster **after** a leader change (for example from
+`scripts/smoke_ha_candidate.sh`, which stops the leader, waits for a new one, and
+then invokes the script). It confirms, with the published Aura Connector v0.4.1:
+
+- the old leader no longer accepts a leader write (it is down or demoted) — a
+  single bounded attempt, no infinite retry;
+- the client discovers the new leader from the `not_leader` hint or by a bounded
+  probe of the candidate addresses;
+- a write to the new leader succeeds;
+- `connect_to_leader` and the bounded `with_leader_redirect` reach the new
+  leader, preserving auth and TLS across the redirect;
+- a transaction is never auto-redirected across a leader change.
+
+Invoke it directly with:
+
+```bash
+python tests/conformance/python/run_connector_leader_change.py \
+  --leader <old-leader-client-addr> \
+  --candidate-addrs <addr1,addr2,addr3>
+```
+
+It exits 0 on success, 1 on a failed check, and 2 if the connector is
+missing/too old (so coordinated work does not block on connector publish timing).
+
 ## Running
 
 Rust (no server needed - the test spawns one):

@@ -4,9 +4,41 @@ This roadmap describes where AuraDB is headed beyond the first single-node
 release. It is a statement of direction, not a delivery commitment. Items are
 grouped by theme and listed roughly in the order we expect to approach them.
 
-## Current release: 0.8.1
+## Current release: 0.9.0
 
-AuraDB 0.8.1 (released) is a **production-readiness stabilization patch** for the
+AuraDB 0.9.0 is an **HA release candidate for the controlled static-cluster
+preview, not a production HA guarantee**. It strengthens cluster failure testing
+(a 3-cycle CI fail-stop suite plus ignored stress runs), snapshot/compaction
+coverage (larger installs, compaction with an offline follower, indexed-workload
+preservation, safe-to-retry install failures, snapshot metrics), connector
+behavior under leader change, operator recovery runbooks, the cluster
+backup/restore story (leader logical export → single-node restore, validated
+around a leader change), a published-image HA candidate smoke, and GitHub Actions
+Node 24 maintenance. It adds **no** new cluster architecture and changes **no**
+semantics; the storage format (v2) and AWP 1 are unchanged and Aura Connector
+v0.4.1 stays compatible. **Single-node mode remains the recommended production
+mode**; multi-node remains a controlled static-cluster preview. See
+[V0_9_RELEASE_NOTES.md](V0_9_RELEASE_NOTES.md) and
+[HA_RELEASE_CANDIDATE.md](HA_RELEASE_CANDIDATE.md).
+
+### Future production HA criteria
+
+AuraDB will **not** claim production HA until all of the following are met and
+documented with evidence (none are met in 0.9.0): repeated long soak; snapshot
+install under large state (with chunked/streaming transfer if needed);
+backup/restore cluster drills with documented RPO/RTO; network partitions across
+real environments (not just loopback); disk-full and I/O-error behavior;
+process-supervisor (systemd / Docker / Kubernetes) integration; TLS and token
+rotation drills; published SLOs and non-goals; connector behavior under leader
+change across every supported client; operational monitoring and alert
+thresholds; and an external feedback / dogfood period. Until then, multi-node is
+a controlled static-cluster preview. See
+[HA_RELEASE_CANDIDATE.md](HA_RELEASE_CANDIDATE.md) and
+[PRODUCTION_READINESS.md](PRODUCTION_READINESS.md).
+
+### Delivered in 0.8.1
+
+AuraDB 0.8.1 is a **production-readiness stabilization patch** for the
 v0.8.0 candidate: more backup/restore and resource-limit edge-case coverage,
 soak-script and release-artifact-verification improvements, and runbook polish.
 It adds **no** new database features and changes **no** semantics; the storage

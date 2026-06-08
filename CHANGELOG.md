@@ -4,6 +4,70 @@ All notable changes to AuraDB are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and the project uses
 [Semantic Versioning](https://semver.org/).
 
+## [0.9.0] - 2026-06-07
+
+**HA release candidate** for the controlled static-cluster preview, not a
+production HA guarantee. v0.9.0 strengthens failure testing, cluster
+diagnostics, snapshot/compaction coverage, connector behavior under leader
+change, operator recovery runbooks, the cluster backup/restore story, and the
+release criteria. It introduces **no** new cluster architecture and changes
+**no** Raft, storage, query, MVCC, replication, or snapshot semantics except
+where a documented bug is fixed. The storage format (v2) and the Aura Wire
+Protocol (AWP 1) are unchanged, and Aura Connector v0.4.1 compatibility is
+preserved. Multi-node mode remains a controlled static-cluster preview — **not**
+production HA — and **single-node mode remains the recommended production mode.**
+See [docs/HA_RELEASE_CANDIDATE.md](docs/HA_RELEASE_CANDIDATE.md) and
+[docs/V0_9_RELEASE_NOTES.md](docs/V0_9_RELEASE_NOTES.md).
+
+### Added
+- HA release-candidate criteria for the controlled static-cluster preview
+  (`docs/HA_RELEASE_CANDIDATE.md`): support levels, required operator
+  assumptions, the validated failure matrix, what is not yet production HA, and
+  the strict criteria required before any future production HA claim.
+- Cluster failure matrix and validation coverage, mapped across
+  `docs/HA_RELEASE_CANDIDATE.md`, `docs/CLUSTER_TROUBLESHOOTING.md`, and
+  `docs/TESTING.md`.
+- Longer repeated fail-stop tests: `ha_repeated_leader_restart_3_cycles`
+  (CI-safe), `ha_old_leader_rejoins_each_cycle`,
+  `ha_repeated_restart_no_duplicate_apply`,
+  `ha_repeated_restart_indices_converge`, and an `#[ignore]`d
+  `ha_repeated_leader_restart_10_cycles_ignored` stress run.
+- Larger snapshot install and compaction tests:
+  `ha_snapshot_install_after_compaction_with_offline_follower`,
+  `ha_snapshot_install_then_more_writes_converges`,
+  `ha_snapshot_install_preserves_indexed_workload`,
+  `ha_compaction_with_all_followers_caught_up`,
+  `ha_compaction_with_offline_follower_requires_snapshot`,
+  `ha_snapshot_failure_safe_to_retry`, `ha_snapshot_metrics_after_install`, and
+  an `#[ignore]`d `ha_snapshot_large_ignored_stress`.
+- Published-image HA smoke workflow and `scripts/smoke_ha_candidate.sh`
+  (leader kill → new leader → old-leader rejoin → catch-up → status), wired as a
+  manual / post-release job in `.github/workflows/cluster.yml`.
+- Connector redirect-under-leader-change validation:
+  `tests/conformance/python/run_connector_leader_change.py`.
+- Operator recovery runbooks in `docs/RUNBOOKS.md` and
+  `docs/CLUSTER_TROUBLESHOOTING.md`.
+- Cluster backup and restore guidance and tests
+  (`cluster_backup_before_and_after_leader_change`,
+  `cluster_backup_restore_latest_leader_state`,
+  `cluster_restore_live_cluster_rejected_or_documented`,
+  `cluster_restore_to_single_node_then_bootstrap_preview_cluster`).
+- GitHub Actions Node 24 maintenance.
+
+### Changed
+- Improved cluster recovery diagnostics and release criteria.
+- Improved cluster preview testing and release checklist.
+- Updated GitHub Actions versions to avoid Node 20 deprecation
+  (`actions/setup-python` → v6, `actions/upload-artifact` /
+  `actions/download-artifact` → v5; `actions/checkout`, `actions/cache`, and the
+  `docker/*` actions were already on Node-24 majors).
+
+### Fixed
+- Any leader-change, snapshot-install, compaction, connector-redirect, workflow,
+  or recovery-diagnostics bugs found during validation. No product behavior
+  regressions were found in v0.8.1; this release is primarily preview hardening,
+  validation, and documentation.
+
 ## [0.8.1] - 2026-06-07
 
 Production-readiness **stabilization patch** for the v0.8.0 candidate. It narrows

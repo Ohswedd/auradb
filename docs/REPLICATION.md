@@ -1,5 +1,14 @@
 # Replication
 
+> **AuraDB v0.9.0 is an HA release candidate for the controlled static-cluster
+> preview, not a production HA guarantee. Single-node mode remains the
+> recommended production mode.** v0.9.0 strengthens snapshot/compaction coverage
+> (larger installs, compaction with an offline follower, indexed-workload
+> preservation, safe-to-retry install failures, snapshot metrics) without
+> changing replication semantics or the storage format (v2). See
+> [HA_RELEASE_CANDIDATE.md](HA_RELEASE_CANDIDATE.md) and
+> [V0_9_RELEASE_NOTES.md](V0_9_RELEASE_NOTES.md).
+
 > **AuraDB v0.6.0 improves the controlled multi-node preview and validates
 > fail-stop recovery. It is _not_ production HA. Single-node mode remains the
 > recommended production mode.** v0.6.0 adds the first real **peer snapshot

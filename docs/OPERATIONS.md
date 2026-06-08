@@ -7,10 +7,18 @@ AuraDB v0.5.0 adds a controlled, experimental multi-node server preview (see
 [Multi-node preview operations](#multi-node-preview-operations-v050)); it is off
 by default and not a production path.
 
-v0.8.1 is a stabilization patch over the v0.8.0 production-readiness candidate for
-single-node operations; the operability surface below is unchanged. For
-single-node production guidance and step-by-step operator runbooks, see
-[PRODUCTION_READINESS.md](PRODUCTION_READINESS.md) and [RUNBOOKS.md](RUNBOOKS.md).
+v0.9.0 is an **HA release candidate for the controlled static-cluster preview,
+not a production HA guarantee**; the single-node operability surface below is
+unchanged, and single-node remains the recommended production mode. The cluster
+backup story is a **leader logical export → single-node restore** path: take
+`auradb dump` from the current leader, `auradb backup verify` it, and `auradb
+restore` into a fresh single-node data directory (restore never targets a live
+cluster). To rebuild a preview cluster, restore to a single node and bootstrap a
+new static cluster around it. See
+[HA_RELEASE_CANDIDATE.md](HA_RELEASE_CANDIDATE.md) and the HA recovery runbooks in
+[RUNBOOKS.md](RUNBOOKS.md). For single-node production guidance and step-by-step
+operator runbooks, see [PRODUCTION_READINESS.md](PRODUCTION_READINESS.md) and
+[RUNBOOKS.md](RUNBOOKS.md).
 Three operability tools introduced in v0.8.0 are referenced throughout this guide:
 `auradb check --json` (a structured consistency report that exits non-zero on
 failure — schedule it to detect storage/catalog/index/stats/raft/snapshot

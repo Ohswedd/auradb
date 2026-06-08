@@ -188,6 +188,54 @@ SOAK_DURATION_SECS=10 scripts/soak_cluster_preview.sh
 
 These are operator/manual tools and are not part of required CI.
 
+## HA release-candidate suites (v0.9.0)
+
+> **AuraDB v0.9.0 is an HA release candidate for the controlled static-cluster
+> preview, not a production HA guarantee. Single-node mode remains the
+> recommended production mode.** See
+> [HA_RELEASE_CANDIDATE.md](HA_RELEASE_CANDIDATE.md).
+
+v0.9.0 strengthens the repeated fail-stop and snapshot/compaction coverage in
+`crates/auradb-replication/tests/multi_node.rs`. The CI-safe variants are part of
+the default (required) serial suite; the heaviest variants are `#[ignore]`d and
+run on demand with `cargo test -p auradb-replication --test multi_node --
+--ignored --test-threads=1`.
+
+Failure-matrix scenario → test mapping (see the full matrix in
+[HA_RELEASE_CANDIDATE.md](HA_RELEASE_CANDIDATE.md) and
+[CLUSTER_TROUBLESHOOTING.md](CLUSTER_TROUBLESHOOTING.md)):
+
+- **Repeated leader kill / re-election (CI-safe)** —
+  `ha_repeated_leader_restart_3_cycles`, `ha_old_leader_rejoins_each_cycle`,
+  `ha_repeated_restart_no_duplicate_apply`, `ha_repeated_restart_indices_converge`;
+  ignored stress: `ha_repeated_leader_restart_10_cycles_ignored`.
+- **Snapshot install after compaction with an offline follower** —
+  `ha_snapshot_install_after_compaction_with_offline_follower`,
+  `ha_compaction_with_offline_follower_requires_snapshot`.
+- **Compaction while all followers are caught up** —
+  `ha_compaction_with_all_followers_caught_up`.
+- **Snapshot install then more writes / indexed workload / metrics / safe retry** —
+  `ha_snapshot_install_then_more_writes_converges`,
+  `ha_snapshot_install_preserves_indexed_workload`,
+  `ha_snapshot_metrics_after_install`, `ha_snapshot_failure_safe_to_retry`;
+  ignored stress: `ha_snapshot_large_ignored_stress`.
+- **Cluster backup/restore around a leader change** —
+  `cluster_backup_before_and_after_leader_change`,
+  `cluster_backup_restore_latest_leader_state`,
+  `cluster_restore_live_cluster_rejected_or_documented`,
+  `cluster_restore_to_single_node_then_bootstrap_preview_cluster`.
+- **Connector redirect under leader change** —
+  `tests/conformance/python/run_connector_leader_change.py` (run against a live
+  cluster after a leader change, e.g. from `scripts/smoke_ha_candidate.sh`).
+- **Published-image HA candidate smoke** — `scripts/smoke_ha_candidate.sh`
+  (manual / post-release; an HA *candidate* smoke, not production HA proof).
+
+Run the serial cluster suite the same way as before:
+
+```bash
+cargo test -p auradb-replication --test multi_node -- --test-threads=1
+```
+
 ## MVCC stabilization suites (v0.3.1)
 
 - `crates/auradb/tests/transaction_lifecycle.rs` — the active transaction

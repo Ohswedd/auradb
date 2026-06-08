@@ -1,18 +1,26 @@
 # Production readiness
 
-AuraDB **v0.8.1** is a **production-readiness stabilization patch** for the
-v0.8.0 **production-readiness candidate for single-node deployments** and
-**stronger cluster preview**. It is **not** production HA. **Single-node mode
-remains the recommended production mode.**
+AuraDB **v0.9.0** is an **HA release candidate for the controlled static-cluster
+preview**, built on the v0.8.x **production-readiness candidate for single-node
+deployments**. It is **not** production HA. **Single-node mode remains the
+recommended production mode.**
 
 "Production-readiness candidate" means **scoped**, not blanket production-ready:
 single-node mode, run with the checklist below (authentication, TLS, scheduled
 backups with a rehearsed restore, and monitoring), is the recommended production
-path. The cluster preview is **not** production HA — no production automatic
-failover, no linearizable follower reads, no distributed transactions, no dynamic
-membership, no sharding, no multi-region. v0.8.1 changes none of this scope; it
-stabilizes the operational edges (backup/restore, resource limits, soak,
-release-artifact verification, runbooks).
+path. The multi-node cluster is an **HA release candidate** — a controlled
+static-cluster preview validated against a failure matrix — and is **not**
+production HA: no production automatic failover, no linearizable follower reads,
+no distributed transactions, no dynamic membership, no sharding, no multi-region.
+v0.9.0 changes none of this scope; it strengthens cluster failure testing,
+diagnostics, snapshot/compaction coverage, connector behavior under leader
+change, recovery runbooks, the backup/restore story, and the release criteria.
+
+The exact support level for each mode, the operator assumptions the static
+cluster requires, the validated failure matrix, and the **strict criteria that
+must be met and documented before AuraDB ever claims production HA** are in
+[HA_RELEASE_CANDIDATE.md](HA_RELEASE_CANDIDATE.md). None of those production-HA
+criteria are met in v0.9.0; multi-node remains a controlled preview.
 
 This document states, honestly, what is supported at what level, and gives the
 checklists to run before and during a production single-node deployment. For

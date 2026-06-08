@@ -1,5 +1,34 @@
 # Upgrading
 
+## From v0.8.1 to v0.9.0
+
+> **AuraDB v0.9.0 is an HA release candidate for the controlled static-cluster
+> preview, not a production HA guarantee. Single-node mode remains the
+> recommended production mode.**
+
+v0.9.0 is a **drop-in** binary replacement for v0.8.1. There is **no storage
+migration** (format stays at v2), the wire protocol is unchanged (AWP 1), and Aura
+Connector v0.4.1 remains compatible. It changes no semantics and adds no new
+cluster architecture — only stronger cluster failure testing, diagnostics,
+snapshot/compaction coverage, connector behavior under leader change, operator
+recovery runbooks, the cluster backup/restore story, and GitHub Actions Node 24
+maintenance. See [HA_RELEASE_CANDIDATE.md](HA_RELEASE_CANDIDATE.md).
+
+As always, take a backup and rehearse a restore before upgrading a production
+deployment:
+
+```bash
+auradb dump --data-dir /var/lib/auradb --output backup-before-0.9.0.jsonl
+auradb backup verify --input backup-before-0.9.0.jsonl --json
+# Stop the old binary, swap in the v0.9.0 binary, start it, then:
+auradb check --data-dir /var/lib/auradb --json
+```
+
+**Rollback plan.** v0.8.1 and v0.9.0 share the same on-disk and wire formats, so a
+v0.9.0 data directory can be reopened by v0.8.1. Keep the pre-upgrade backup. For
+a cluster preview, take a backup from the current leader before rolling back (see
+[RUNBOOKS.md](RUNBOOKS.md) §18l).
+
 ## From v0.8.0 to v0.8.1
 
 > **AuraDB v0.8.1 is a production-readiness stabilization patch. It is not

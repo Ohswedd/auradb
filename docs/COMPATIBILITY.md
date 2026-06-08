@@ -1,15 +1,17 @@
 # AuraDB Compatibility Matrix
 
-This document records what AuraDB v0.8.1 implements and how it interoperates with
-the Aura Connector client library and the Aura Wire Protocol (AWP). v0.8.1 is a
-stabilization patch over v0.8.0 — more backup/restore and resource-limit
-edge-case coverage, soak and release-artifact-verification improvements, and
-runbook polish — that adds no features and changes no semantics, storage format,
-or wire protocol. The v0.8.0 candidate it builds on is a
-hardening, validation, and operability release — a production-readiness candidate
-for single-node and a stronger cluster preview — coordinated with the unchanged
-Aura Connector v0.4.1. It adds no new database features and keeps the v0.7.x
-cluster-preview ergonomics (off by default). Single-node mode remains the recommended production mode. It
+This document records what AuraDB v0.9.0 implements and how it interoperates with
+the Aura Connector client library and the Aura Wire Protocol (AWP). v0.9.0 is an
+**HA release candidate for the controlled static-cluster preview, not a
+production HA guarantee** — it strengthens cluster failure testing, diagnostics,
+snapshot/compaction coverage, connector behavior under leader change, recovery
+runbooks, and the backup/restore story — that adds no new cluster architecture
+and changes no semantics, storage format, or wire protocol, and keeps the
+v0.8.x cluster-preview ergonomics (off by default). See
+[HA_RELEASE_CANDIDATE.md](HA_RELEASE_CANDIDATE.md). The v0.8.x candidate it builds
+on is a hardening, validation, and operability release — a production-readiness
+candidate for single-node and a stronger cluster preview — coordinated with the
+unchanged Aura Connector v0.4.1. Single-node mode remains the recommended production mode. It
 keeps **AWP 1** unchanged and makes no incompatible protocol change: the
 `not_leader` error frame carries an additive structured `not_leader` object
 (leader client address, leader/current node ids, term, role, and a usable
@@ -21,7 +23,8 @@ from v0.4.x.
 
 | AuraDB | Aura Connector | Protocol | Status |
 | ------ | -------------- | -------- | ------ |
-| 0.8.1  | 0.4.1          | AWP 1    | Supported, recommended (stabilization patch over 0.8.0; connector unchanged; wire payload, storage format, and semantics identical to 0.8.0) |
+| 0.9.0  | 0.4.1          | AWP 1    | Supported, recommended (HA release candidate for the controlled static-cluster preview, not production HA; connector unchanged; wire payload, storage format (v2), and semantics identical to 0.8.x) |
+| 0.8.1  | 0.4.1          | AWP 1    | Supported (stabilization patch over 0.8.0; connector unchanged; wire payload, storage format, and semantics identical to 0.8.0) |
 | 0.8.0  | 0.4.1          | AWP 1    | Supported (AuraDB-focused hardening release; connector unchanged; wire payload identical to 0.7.x; storage format unchanged) |
 | 0.7.1  | 0.4.1          | AWP 1    | Supported, recommended (clearer `AuraNotLeaderError` messages, secure-by-default redirect, transaction-redirect docs; identical wire payload to 0.7.0) |
 | 0.7.1  | 0.3.x / 0.4.0  | AWP 1    | Supported (additive `not_leader` payload; older clients route the leader manually or via 0.4.0 helpers) |

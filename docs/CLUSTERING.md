@@ -1,5 +1,17 @@
 # Clustering
 
+> **AuraDB v0.9.0 is an HA release candidate for the controlled static-cluster
+> preview, not a production HA guarantee. Single-node mode remains the
+> recommended production mode.** v0.9.0 strengthens failure testing, cluster
+> diagnostics, snapshot/compaction coverage, connector behavior under leader
+> change, operator recovery runbooks, and the cluster backup/restore story. It
+> adds no new cluster architecture and changes no Raft, storage (v2), or wire
+> (AWP 1) semantics. The cluster backup story remains a **leader logical export →
+> single-node restore** path; to rebuild a preview cluster, restore to a single
+> node and bootstrap a new static cluster around it. See
+> [HA_RELEASE_CANDIDATE.md](HA_RELEASE_CANDIDATE.md) and
+> [V0_9_RELEASE_NOTES.md](V0_9_RELEASE_NOTES.md).
+
 > **AuraDB v0.8.0 hardens cluster-preview _recovery_ testing and adds operator
 > runbooks. It is _not_ production HA; the multi-node cluster remains an
 > experimental, opt-in preview, and single-node mode remains the recommended

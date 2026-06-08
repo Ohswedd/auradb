@@ -228,6 +228,171 @@ the upgrade path tested in staging, and a rollback plan.
 
 ---
 
+### HA release-candidate recovery runbooks (v0.9.0)
+
+> These cover the controlled static-cluster preview. It is an **HA release
+> candidate, not a production HA guarantee**; single-node mode remains the
+> recommended production mode. See
+> [HA_RELEASE_CANDIDATE.md](HA_RELEASE_CANDIDATE.md) for the support level, the
+> operator assumptions, and the validated failure matrix. Every runbook below
+> lists when to restore from backup and what to include in a bug report.
+
+For every runbook: **bug report** = `auradb version`, the redacted
+`auradb cluster status --addr "$ADDR" --json` and `auradb cluster doctor --addr
+"$ADDR" --json` from each reachable node, the node logs around the event, and
+the minimal reproduction. AuraDB redacts secrets in those reports.
+
+#### 18a. Leader process killed
+
+- **Symptoms**: writes to the old leader fail; `cluster status` on a survivor
+  shows a re-election.
+- **Commands**: `auradb cluster wait-leader --addr "$SURVIVOR" --timeout-secs 30`;
+  `auradb cluster leader --addr "$SURVIVOR"`.
+- **Expected**: with a majority alive, a new leader is elected within seconds and
+  writes resume on it.
+- **Safe**: let the supervisor restart the old node; it rejoins as a follower.
+- **Unsafe**: forcing a second node down (you may lose quorum).
+- **Restore from backup**: not needed for a single leader loss with quorum
+  intact.
+
+#### 18b. Leader graceful shutdown
+
+- **Symptoms**: a planned stop of the leader; the cluster re-elects.
+- **Commands**: stop the process via your supervisor; then
+  `auradb cluster wait-leader --addr "$SURVIVOR" --timeout-secs 30`.
+- **Expected**: identical to a kill from the cluster's view (there is no
+  `step-down`; stopping the process is the supported path).
+- **Unsafe**: stopping a second node before the first has rejoined.
+- **Restore from backup**: not needed.
+
+#### 18c. No leader
+
+- **Symptoms**: every node reports no leader; writes return `not_leader`.
+- **Commands**: `auradb cluster status --addr "$ADDR" --json` on each node;
+  `auradb cluster doctor --addr "$ADDR" --json`; check `quorum_available`.
+- **Expected**: if a majority is alive, an election completes; if not, see
+  *Quorum lost*.
+- **Safe**: confirm peer connectivity (TLS, token, network) — a peer auth/TLS
+  fault can stall elections.
+- **Restore from backup**: only if storage corruption is also indicated by
+  `auradb check`.
+
+#### 18d. Quorum lost
+
+- **Symptoms**: a minority is alive; `quorum_available` is `false`; no writes
+  commit.
+- **Commands**: `auradb cluster status --addr "$ADDR" --json` (count live peers).
+- **Expected**: the minority **cannot** and **must not** commit (this is the
+  safety property). Restore the majority by bringing stopped nodes back.
+- **Unsafe**: never force a minority to accept writes; that risks split-brain and
+  data loss.
+- **Restore from backup**: if the majority is unrecoverable, restore the latest
+  leader backup to a single node and rebuild the cluster (see 18m).
+
+#### 18e. Old leader rejoins
+
+- **Symptoms**: a previously-stopped leader restarts.
+- **Commands**: `auradb cluster wait-ready --addr "$REJOINED" --timeout-secs 60`;
+  `auradb cluster status --addr "$LEADER" --json` (per-peer `match_index`).
+- **Expected**: it rejoins as a follower at the current term and catches up by
+  log replay or a snapshot install.
+- **Restore from backup**: not needed.
+
+#### 18f. Follower stuck behind
+
+- **Symptoms**: a follower's `match_index` is far behind and not advancing.
+- **Commands**: `auradb cluster doctor --addr "$LEADER" --json` (follower lag,
+  snapshot-needed); check disk and network on the follower.
+- **Expected**: it catches up via append-entries, or a snapshot install if it
+  fell behind the compacted prefix.
+- **Safe**: give it bandwidth; verify its disk is not full.
+- **Restore from backup**: only if `auradb check` on the follower reports
+  storage corruption.
+
+#### 18g. Snapshot needed / snapshot install failing
+
+- **Symptoms**: `doctor` reports a snapshot is needed; or snapshot counters show
+  a rejected install.
+- **Commands**: `auradb cluster status --addr "$ADDR" --json` (snapshot
+  counters: sent / installed / rejected); node logs for the rejection reason.
+- **Expected**: the leader installs a snapshot automatically. A rejected install
+  (oversized, wrong cluster, bad digest, future format) is **safe** — existing
+  follower state is preserved and the install is retried.
+- **Unsafe**: hand-editing a follower's data dir.
+- **Restore from backup**: if a follower's local state is corrupt, stop it,
+  restore the latest leader backup to a fresh single node, and re-add it offline.
+
+#### 18h. Minority / majority partition
+
+- **Symptoms**: a network split; one side has quorum, the other does not.
+- **Commands**: `auradb cluster status --addr "$ADDR" --json` on each side
+  (`quorum_available`).
+- **Expected**: the majority side keeps committing; the minority serves no
+  writes and rejoins on heal.
+- **Unsafe**: never run two majorities (do not reconfigure membership during a
+  partition).
+- **Restore from backup**: not needed; heal the network.
+
+#### 18i. Peer reconnect storm
+
+- **Symptoms**: repeated peer connect/disconnect churn; `doctor` warns on a
+  reconnect storm.
+- **Commands**: `auradb cluster doctor --addr "$ADDR" --json`; check the
+  network and the peers' clocks/load.
+- **Expected**: bounded-backoff reconnects recover replication without duplicate
+  apply.
+- **Restore from backup**: not needed.
+
+#### 18j. Peer TLS failure / token mismatch
+
+- See **17. Peer TLS failure** and **18. Peer token mismatch** above. Rotate
+  certs/tokens on **all** nodes together; validate with
+  `auradb config validate --config <node>.toml`. Restore from backup is not
+  required for a transport-auth fault.
+
+#### 18k. Published-image HA smoke failed
+
+- **Symptoms**: `scripts/smoke_ha_candidate.sh` exits non-zero.
+- **Commands**: re-run with the failing image; read the dumped `docker compose
+  logs`; confirm the image tag/version matches (the script fails loudly on a
+  mismatch).
+- **Expected**: the smoke is a candidate check, not production HA proof. Treat a
+  failure as a release blocker for the cluster preview, not a single-node
+  blocker.
+- **Restore from backup**: N/A (smoke uses throwaway volumes).
+
+#### 18l. Roll back from a bad release
+
+- **Symptoms**: a new AuraDB version misbehaves in the preview cluster.
+- **Commands**: stop all nodes; redeploy the previous image tag; start nodes;
+  `auradb cluster wait-leader`. The storage format (v2) is unchanged, so a
+  same-format rollback needs no migration.
+- **Safe**: take a backup from the current leader before rolling back.
+- **Unsafe**: rolling back across a storage-format change (none in this release).
+- **Restore from backup**: if the bad release wrote unexpected data, restore the
+  pre-upgrade backup to a single node (see 18m).
+
+#### 18m. Restore a single-node backup after a cluster incident
+
+- **When**: the majority is unrecoverable, or corruption is confirmed by
+  `auradb check`.
+- **Commands**
+  ```bash
+  # 1. Take/locate the latest backup from the (most current) leader.
+  auradb dump --data-dir "$LEADER_DATA" --out latest.jsonl
+  auradb backup verify --input latest.jsonl
+  # 2. Restore into a FRESH single-node data dir (never a live cluster).
+  auradb restore --data-dir /var/lib/auradb-restored --input latest.jsonl
+  auradb check --data-dir /var/lib/auradb-restored --json
+  # 3. Run single node in production, or bootstrap a fresh preview cluster
+  #    around the restored data dir (see CLUSTERING.md).
+  ```
+- **Expected**: the restored single node carries the latest committed state.
+- **Unsafe**: restoring into a running multi-node cluster (unsupported; restore
+  targets an offline, fresh data dir).
+
+---
+
 ## 19. Restoring from backup
 
 When in doubt, restore. A logical restore is the safe recovery path for storage

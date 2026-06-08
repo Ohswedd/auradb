@@ -14,9 +14,9 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: "Published image tag to smoke against (e.g. 0.8.0)"
+        description: "Published image tag to smoke against (e.g. 0.9.0)"
         required: false
-        default: "0.8.0"
+        default: "0.9.0"
       require_published_connector:
         description: "Fail (don't skip) if the published Aura Connector >=0.4.1,<0.5 is unavailable. Set for release/tag conformance."
         type: boolean
@@ -114,7 +114,7 @@ jobs:
       - name: Build CLI
         run: cargo build -p auradb-cli
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v6
         with:
           python-version: "3.11"
 
@@ -209,11 +209,11 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
 
       - name: Build the auradb image for the Compose cluster
-        run: docker build -t auradb:0.8.0 .
+        run: docker build -t auradb:0.9.0 .
 
       - name: Generate dev certs, run the cluster, and tear it down
         env:
-          AURADB_IMAGE: auradb:0.8.0
+          AURADB_IMAGE: auradb:0.9.0
         run: bash scripts/smoke_cluster_compose.sh
 
   published-image-smoke:
@@ -239,3 +239,47 @@ jobs:
         env:
           AURADB_IMAGE: ghcr.io/ohswedd/auradb:${{ inputs.version }}
         run: bash scripts/smoke_cluster_compose.sh
+
+  ha-candidate-smoke:
+    name: HA candidate smoke (manual, local image)
+    # v0.9.0 HA release-candidate smoke: build the image locally, stand up a
+    # three-node Compose cluster, kill the leader, confirm a new leader accepts a
+    # write, rejoin the old leader, and confirm catch-up. This is an HA *candidate*
+    # smoke, not production HA proof. Manual only (workflow_dispatch) so it never
+    # blocks a PR — see docs/HA_RELEASE_CANDIDATE.md.
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Build the auradb image for the HA candidate smoke
+        run: docker build -t auradb:0.9.0 .
+
+      - name: Run the HA candidate smoke and tear it down
+        env:
+          AURADB_IMAGE: auradb:0.9.0
+        run: bash scripts/smoke_ha_candidate.sh
+
+  published-image-ha-smoke:
+    name: HA candidate smoke (published GHCR image)
+    # Post-release HA candidate verification against the published image. Manual
+    # only, so unreliable GHCR publish timing never blocks a PR. Run after a
+    # release tag has published the image. Not production HA proof.
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Set up Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Inspect the published multi-arch manifest
+        run: docker buildx imagetools inspect ghcr.io/ohswedd/auradb:${{ inputs.version }}
+
+      - name: Run the HA candidate smoke against the published image
+        env:
+          AURADB_IMAGE: ghcr.io/ohswedd/auradb:${{ inputs.version }}
+        run: bash scripts/smoke_ha_candidate.sh
