@@ -1,32 +1,36 @@
 # Production readiness
 
-AuraDB **v0.9.0** is an **HA release candidate for the controlled static-cluster
-preview**, built on the v0.8.x **production-readiness candidate for single-node
-deployments**. It is **not** production HA. **Single-node mode remains the
-recommended production mode.**
+AuraDB **v1.0.0** is a **single-node production release with a multi-node HA
+candidate preview**. It supports production single-node deployments configured with
+authentication, TLS, backups, monitoring, and the documented runbooks. It is
+**not** production HA. **Single-node mode is the recommended production mode.**
 
-"Production-readiness candidate" means **scoped**, not blanket production-ready:
-single-node mode, run with the checklist below (authentication, TLS, scheduled
-backups with a rehearsed restore, and monitoring), is the recommended production
-path. The multi-node cluster is an **HA release candidate** — a controlled
-static-cluster preview validated against a failure matrix — and is **not**
-production HA: no production automatic failover, no linearizable follower reads,
-no distributed transactions, no dynamic membership, no sharding, no multi-region.
-v0.9.0 changes none of this scope; it strengthens cluster failure testing,
-diagnostics, snapshot/compaction coverage, connector behavior under leader
-change, recovery runbooks, the backup/restore story, and the release criteria.
-v0.9.1 and **v0.9.2** (the final planned HA candidate stabilization) change none
-of this scope either: they polish leader-hint propagation, tests, the HA smoke,
-runbooks, and — in v0.9.2 — add the
-[v1.0 decision checklist](V1_0_DECISION_CHECKLIST.md) that records exactly what a
-future v1.0 can and cannot claim and the evidence required.
+The production-support statement is **scoped**, not blanket: single-node mode, run
+with the checklist below (authentication, TLS, scheduled backups with a rehearsed
+restore, and monitoring), is the supported production path. A single-node
+deployment that omits auth, TLS, backups, or monitoring is not a supported
+production configuration. The multi-node cluster is an **HA candidate preview** — a
+controlled static-cluster preview with strong release-candidate evidence, validated
+against a failure matrix — and is **not** production HA: no production automatic
+failover, no linearizable follower reads, no distributed transactions, no dynamic
+membership, no sharding, no multi-region. v1.0.0 carries forward all v0.9.2
+behavior and changes none of this scope; it finalizes the v1.0 support policy,
+freezes the AWP 1 and storage format v2 compatibility surfaces, and states the
+upgrade guarantee, the backup/restore release gate, and the security review.
 
-The exact support level for each mode, the operator assumptions the static
-cluster requires, the validated failure matrix, and the **strict criteria that
-must be met and documented before AuraDB ever claims production HA** are in
+The authoritative support boundary is [SUPPORT_POLICY.md](SUPPORT_POLICY.md). The
+exact support level for each mode, the operator assumptions the static cluster
+requires, the validated failure matrix, and the **strict criteria that must be met
+and documented before AuraDB ever claims production HA** are in
 [HA_RELEASE_CANDIDATE.md](HA_RELEASE_CANDIDATE.md) and the
 [v1.0 decision checklist](V1_0_DECISION_CHECKLIST.md). None of those production-HA
-criteria are met in v0.9.2; multi-node remains a controlled preview.
+criteria are met in v1.0.0; multi-node remains an HA candidate preview.
+
+**Frozen for v1.** AuraDB v1.0.0 uses Aura Wire Protocol 1 and storage format v2.
+AWP 1 is the stable v1 wire protocol and storage format v2 is the stable v1
+single-node storage format; AuraDB v1.x preserves both unless a security,
+correctness, safety, or corruption issue requires a documented change or migration.
+See [COMPATIBILITY.md](COMPATIBILITY.md) and [STORAGE_ENGINE.md](STORAGE_ENGINE.md).
 
 This document states, honestly, what is supported at what level, and gives the
 checklists to run before and during a production single-node deployment. For
@@ -34,19 +38,20 @@ step-by-step procedures see [RUNBOOKS.md](RUNBOOKS.md).
 
 ## Support levels
 
-### Recommended (production candidate)
+### Production-supported
 
 - **Single-node mode** with authentication and TLS enabled, scheduled backups,
   monitoring, and the upgrade runbook. This is the recommended way to run AuraDB
-  in production.
+  in production, and the supported production deployment mode in v1.0.
 
-### Experimental preview (not for production)
+### HA candidate preview (not for production)
 
 - **Multi-node static cluster mode.** Real cross-process leader election and Raft
   replication work and are tested, but the preview is off by default, gated
   behind two explicit `[cluster]` opt-ins, uses static membership, and makes no
-  high-availability guarantee. Use it to evaluate the direction, not to serve
-  production traffic.
+  high-availability guarantee. It is an HA candidate preview with strong
+  release-candidate evidence, **not** production HA. Use it to evaluate the
+  direction, not to serve production traffic that requires high availability.
 
 ### Not supported (do not rely on these)
 
@@ -71,7 +76,51 @@ step-by-step procedures see [RUNBOOKS.md](RUNBOOKS.md).
 - **Cluster preview caveats.** See the experimental-preview note above and
   [CLUSTERING.md](CLUSTERING.md).
 
-## Single-node production-candidate checklist
+## Production single-node release runbook checklist
+
+Run this before declaring a single-node deployment production-ready. Each item
+expands into the detailed sections below and the step-by-step procedures in
+[RUNBOOKS.md](RUNBOOKS.md).
+
+1. Configure authentication (`[auth] enabled = true`, Argon2id token hash).
+2. Configure TLS (`[tls] enabled = true`, valid cert/key; consider mutual TLS).
+3. Configure scheduled backups (`auradb dump` + `auradb backup verify`).
+4. Run a restore drill (`auradb restore` into a scratch dir + `auradb check`).
+5. Configure monitoring (health endpoint + Prometheus metrics + disk alerting).
+6. Configure log retention.
+7. Run `auradb check --json` and confirm `ok == true`.
+8. Run an upgrade rehearsal (backup → swap binary in a canary → `check`).
+9. Verify disk capacity and headroom for the data directory.
+10. Document the rollback plan (keep the previous binary and pre-upgrade backup;
+    rollback means restore from backup).
+
+## Backup and restore release gate
+
+A v1.0 release must pass this backup/restore gate, exercised by the backup/restore
+and upgrade-gate tests in `auradb-cli` (see [TESTING.md](TESTING.md) and
+[RELEASE.md](RELEASE.md)):
+
+1. Back up a mixed dataset (indexes, stats, relationships, vectors, full-text,
+   document-path) with `auradb dump`.
+2. Validate the dump without importing it: `auradb backup verify --input <file> --json`.
+3. Restore into a fresh single-node directory: `auradb restore`.
+4. Run `auradb check --json` on the restored directory.
+5. Query smoke.
+6. Relationship-include smoke.
+7. Vector smoke.
+8. Full-text smoke.
+9. Document-path smoke.
+10. Index and planner-stats validation.
+11. Confirm no secrets appear in the backup-verify output.
+
+```bash
+auradb dump --data-dir ./data --output backup.jsonl
+auradb backup verify --input backup.jsonl --json
+auradb restore --data-dir ./restore --input backup.jsonl
+auradb check --data-dir ./restore --json
+```
+
+## Single-node production checklist
 
 ### 1. Secure configuration
 
@@ -131,7 +180,7 @@ step-by-step procedures see [RUNBOOKS.md](RUNBOOKS.md).
 
 ## Validation that backs this candidate
 
-AuraDB v0.8.0 ships with, and is gated by, the following validation (see
+AuraDB v1.0.0 ships with, and is gated by, the following validation (see
 [TESTING.md](TESTING.md)):
 
 - storage corruption drills and a structured `auradb check --json`;

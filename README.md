@@ -7,7 +7,7 @@
 [![CI](https://github.com/Ohswedd/auradb/actions/workflows/ci.yml/badge.svg)](https://github.com/Ohswedd/auradb/actions/workflows/ci.yml)
 [![Security](https://github.com/Ohswedd/auradb/actions/workflows/security.yml/badge.svg)](https://github.com/Ohswedd/auradb/actions/workflows/security.yml)
 [![Docker](https://github.com/Ohswedd/auradb/actions/workflows/docker.yml/badge.svg)](https://github.com/Ohswedd/auradb/actions/workflows/docker.yml)
-[![Release](https://img.shields.io/badge/release-v0.9.2-green.svg)](CHANGELOG.md)
+[![Release](https://img.shields.io/badge/release-v1.0.0-green.svg)](CHANGELOG.md)
 [![Rust](https://img.shields.io/badge/rust-1.85%2B-orange.svg)](https://www.rust-lang.org)
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
 
@@ -29,6 +29,38 @@ a real, persistent, recoverable, single-node server, not a mock or an in-memory
 demo.
 
 ## Scope and honesty
+
+**AuraDB v1.0.0 is a single-node production release with a multi-node HA candidate
+preview.** It supports production **single-node** deployments configured with
+authentication, TLS, backups, monitoring, and the documented runbooks.
+**Single-node mode is the recommended production mode.** Multi-node static
+clustering remains an **HA candidate preview** — strong release-candidate evidence,
+but **not** a production HA guarantee, no production automatic failover, no
+production cluster readiness. v1.0.0 carries forward all v0.9.2 behavior and adds no
+new architecture.
+
+For the v1.x line, **Aura Wire Protocol 1 and storage format v2 are frozen**: AWP 1
+is the stable v1 wire protocol and storage format v2 is the stable v1 single-node
+storage format, each preserved across v1.x unless a security, correctness, safety,
+or corruption issue requires a documented change or migration. Aura Connector v0.4.1
+(and compatible 0.4.x) is the supported client. The authoritative boundaries are in
+[`docs/SUPPORT_POLICY.md`](docs/SUPPORT_POLICY.md),
+[`docs/V1_0_RELEASE_NOTES.md`](docs/V1_0_RELEASE_NOTES.md), and the support matrix in
+[`docs/COMPATIBILITY.md`](docs/COMPATIBILITY.md).
+
+### v1.0 support at a glance
+
+| Mode / capability | Status | Production use |
+| ----------------- | ------ | -------------- |
+| Single-node with auth + TLS + backups + monitoring | Stable | **Yes (recommended)** |
+| Docker secure Compose | Stable | **Yes** |
+| Backup / restore, upgrade from v0.x | Stable | **Yes** |
+| Aura Connector 0.4.x, AWP 1, storage format v2 | Stable / frozen for v1 | **Yes** |
+| Exact vector search, tokenized full-text | Stable | **Yes** |
+| Static multi-node cluster, peer networking | HA candidate preview | No (not production HA) |
+
+See [`docs/SUPPORT_POLICY.md`](docs/SUPPORT_POLICY.md) for the full matrix and the
+list of what v1.0 does not support.
 
 AuraDB 0.5.0 introduces a **controlled, experimental multi-node server preview**:
 real AuraDB server processes can form a cross-process cluster, elect a leader, and
@@ -429,7 +461,7 @@ auradb check --data-dir .local/auradb
 auradb gc --data-dir .local/auradb
 auradb stats analyze --data-dir .local/auradb
 auradb stats show --data-dir .local/auradb --json
-auradb bench --json --output benches/baseline/v0.5.1.json
+auradb bench --json --output benches/baseline/v1.0.0.json
 auradb status --addr 127.0.0.1:7171 --json
 auradb cluster leader --addr 127.0.0.1:7171 --json
 auradb cluster wait-leader --addr 127.0.0.1:7171 --timeout-secs 30
@@ -534,7 +566,7 @@ are exposed. No external collector is required to run the server. See
 A published image is available on the GitHub Container Registry:
 
 ```bash
-docker run --rm -p 7171:7171 -v auradb-data:/data ghcr.io/ohswedd/auradb:0.5.1
+docker run --rm -p 7171:7171 -v auradb-data:/data ghcr.io/ohswedd/auradb:1.0.0
 ```
 
 The image runs as a non-root user, exposes `7171`, stores data in the `/data`
@@ -590,7 +622,7 @@ and `EXPLAIN ANALYZE`.
 The CLI also runs a baseline suite and writes a JSON snapshot:
 
 ```bash
-auradb bench --json --output benches/baseline/v0.5.1.json
+auradb bench --json --output benches/baseline/v1.0.0.json
 ```
 
 Benchmarks are hardware-dependent and exist to catch regressions on the same

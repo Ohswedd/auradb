@@ -1,5 +1,18 @@
 # HA release candidate
 
+> **AuraDB v1.0.0 ships multi-node static clustering as an HA candidate preview,
+> not production HA.** Multi-node static clustering in v1.0 remains an HA candidate
+> preview. It has strong release-candidate evidence, but it is not a production HA
+> guarantee. v1.0.0 adds no cluster architecture and changes no semantics over
+> v0.9.2 (storage format v2 and AWP 1 are unchanged and frozen for v1; Aura
+> Connector v0.4.1 stays compatible). **Single-node mode is the recommended
+> production mode.** The evidence still required before AuraDB claims production HA
+> is unchanged: cross-host chaos; longer soak; disk-full and I/O-error drills;
+> larger-state snapshot streaming or an equivalent (the current install is a single
+> bounded 8 MiB message); documented operator SLOs; and an external dogfood period
+> (see [§8](#8-strict-criteria-for-any-future-production-ha-claim) and
+> [V1_0_DECISION_CHECKLIST.md](V1_0_DECISION_CHECKLIST.md) §6).
+>
 > **AuraDB v0.9.0 is an HA release candidate for the controlled static-cluster
 > preview, not a production HA guarantee. Single-node mode remains the
 > recommended production mode.** v0.9.1 stabilizes this candidate (leader-hint

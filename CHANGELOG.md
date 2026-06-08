@@ -4,6 +4,72 @@ All notable changes to AuraDB are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and the project uses
 [Semantic Versioning](https://semver.org/).
 
+## [1.0.0] - 2026-06-08
+
+**Single-node production release, multi-node HA candidate preview.** AuraDB v1.0.0
+supports production single-node deployments when configured with auth, TLS, backups,
+monitoring, and the documented runbooks; single-node mode is the recommended
+production mode. Multi-node static clustering remains an HA candidate preview — not
+production HA, no production automatic failover, no production cluster readiness.
+v1.0.0 carries forward all v0.9.2 behavior and adds no new database or cluster
+architecture. **Aura Wire Protocol 1 is frozen for v1** (AWP 1 is the stable v1 wire
+protocol, preserved across v1.x unless a security or correctness issue requires a
+documented break), and **storage format v2 is frozen for v1** (the stable v1
+single-node storage format, preserved across v1.x unless a safety, corruption, or
+security issue requires a documented migration). Aura Connector v0.4.1 (and
+compatible 0.4.x) is the supported client. Known limitations are unchanged: exact
+vector search (not ANN/HNSW), tokenized full-text with term-frequency ranking (not
+BM25 or hybrid fusion), single-node snapshot isolation (not serializable), and
+multi-node as an HA candidate preview (no linearizable/follower reads, distributed
+transactions, dynamic membership, sharding, multi-region, or Kubernetes operator).
+See [docs/SUPPORT_POLICY.md](docs/SUPPORT_POLICY.md),
+[docs/V1_0_RELEASE_NOTES.md](docs/V1_0_RELEASE_NOTES.md),
+[docs/HA_RELEASE_CANDIDATE.md](docs/HA_RELEASE_CANDIDATE.md), and
+[docs/V1_0_DECISION_CHECKLIST.md](docs/V1_0_DECISION_CHECKLIST.md).
+
+### Added
+- v1.0 support policy ([docs/SUPPORT_POLICY.md](docs/SUPPORT_POLICY.md)): what is
+  supported, in preview, and unsupported, plus the security and upgrade support
+  policy.
+- Single-node production support statement (scoped to auth + TLS + backups +
+  monitoring + runbooks).
+- Aura Wire Protocol 1 compatibility statement (frozen for v1).
+- Storage format v2 compatibility statement (frozen for v1).
+- Upgrade guarantee statement ([docs/UPGRADING.md](docs/UPGRADING.md)): in-place
+  upgrade from documented v0.x release fixtures; backup-first and `auradb check`
+  before and after; no downgrade guarantee; rollback via restore from backup.
+- Backup and restore release gate
+  ([docs/PRODUCTION_READINESS.md](docs/PRODUCTION_READINESS.md),
+  [docs/RELEASE.md](docs/RELEASE.md)).
+- Security hardening review for the production single-node mode
+  ([docs/SECURITY.md](docs/SECURITY.md)).
+- v1.0 support matrix ([docs/COMPATIBILITY.md](docs/COMPATIBILITY.md),
+  [README.md](README.md)).
+- Production single-node runbook checklist
+  ([docs/RUNBOOKS.md](docs/RUNBOOKS.md),
+  [docs/PRODUCTION_READINESS.md](docs/PRODUCTION_READINESS.md)).
+- v1.0 release notes ([docs/V1_0_RELEASE_NOTES.md](docs/V1_0_RELEASE_NOTES.md)).
+
+### Changed
+- Clarified multi-node as an HA candidate preview, not production HA, across the
+  README and docs.
+- Improved production-readiness and support documentation.
+- Tightened release artifact verification
+  ([scripts/verify_release_artifacts.sh](scripts/verify_release_artifacts.sh)): the
+  `--tag` release-body check now requires the single-node production statement, the
+  multi-node preview disclaimer, the AWP 1 statement, the storage format v2
+  statement, and known limitations.
+- Updated GitHub Actions for Node 24 compatibility: upgraded the `docker/*` actions
+  (`setup-buildx-action` v3→v4, `build-push-action` v6→v7, `login-action` v3→v4,
+  `metadata-action` v5→v6, `setup-qemu-action` v3→v4), resolving the v0.9.2 Node 20
+  warning with no change to the Docker publish security posture.
+- Refreshed the benchmark baseline (`benches/baseline/v1.0.0.json`); benchmark
+  numbers remain machine-specific and warn-only.
+
+### Fixed
+- Resolved the non-blocking GitHub Actions Node 20 deprecation warning on the Docker
+  build/publish actions.
+
 ## [0.9.2] - 2026-06-08
 
 **Final HA candidate stabilization.** v0.9.2 is the last planned stabilization

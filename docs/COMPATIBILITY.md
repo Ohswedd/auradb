@@ -1,32 +1,35 @@
 # AuraDB Compatibility Matrix
 
-This document records what AuraDB v0.9.2 implements and how it interoperates with
-the Aura Connector client library and the Aura Wire Protocol (AWP). v0.9.2 is the
-**final planned HA candidate stabilization** for the controlled static-cluster
-preview, **not a production HA guarantee** — it adds no new configuration, cluster
-architecture, or semantics over v0.9.1. It finalizes the HA candidate evidence and
-gap list, adds the [v1.0 decision checklist](V1_0_DECISION_CHECKLIST.md),
-strengthens the leader-hint tests and operator runbooks, sharpens the HA smoke and
-published-image post-release checklist, and maps the
-snapshot/compaction/old-leader-rejoin coverage. It carries forward the v0.9.1
-optional, additive `[cluster] advertise_client_addr` field unchanged, keeps the
-v0.8.x cluster-preview ergonomics (off by default), and changes no storage format
-or wire protocol. See
-[HA_RELEASE_CANDIDATE.md](HA_RELEASE_CANDIDATE.md). The v0.8.x candidate it builds
-on is a hardening, validation, and operability release — a production-readiness
-candidate for single-node and a stronger cluster preview — coordinated with the
-unchanged Aura Connector v0.4.1. Single-node mode remains the recommended production mode. It
-keeps **AWP 1** unchanged and makes no incompatible protocol change: the
-`not_leader` error frame carries an additive structured `not_leader` object
+This document records what AuraDB v1.0.0 implements and how it interoperates with
+the Aura Connector client library and the Aura Wire Protocol (AWP). AuraDB v1.0.0
+is a **single-node production release with a multi-node HA candidate preview**: it
+supports production single-node deployments configured with auth, TLS, backups,
+monitoring, and the documented runbooks, while multi-node static clustering remains
+an HA candidate preview, **not a production HA guarantee**. It carries forward all
+v0.9.2 behavior and adds no new configuration, cluster architecture, or semantics.
+See [SUPPORT_POLICY.md](SUPPORT_POLICY.md),
+[HA_RELEASE_CANDIDATE.md](HA_RELEASE_CANDIDATE.md), and the
+[v1.0 decision checklist](V1_0_DECISION_CHECKLIST.md).
+
+**Aura Wire Protocol 1 is frozen for v1.** AuraDB v1.0.0 uses Aura Wire Protocol 1.
+AWP 1 is the stable v1 wire protocol. AuraDB v1.x will preserve AWP 1 compatibility
+unless a security or correctness issue requires a documented compatibility break.
+The `not_leader` error frame carries an additive structured `not_leader` object
 (leader client address, leader/current node ids, term, role, and a usable
 `leader_hint`) — byte-for-byte the same as v0.7.0 — that older clients ignore,
-alongside the existing additive cluster health and `retryable` fields. Aura
-Connector 0.4.x reads the new fields; Aura Connector 0.3.x stays fully compatible
-(it simply does not consume them). The on-disk **storage format is unchanged**
-from v0.4.x.
+alongside the additive cluster health and `retryable` fields. Aura Connector 0.4.x
+reads the new fields; Aura Connector 0.3.x stays fully compatible (it simply does
+not consume them).
+
+**Storage format v2 is frozen for v1.** AuraDB v1.0.0 uses storage format v2.
+Storage format v2 is the stable v1 single-node storage format. AuraDB v1.x will
+preserve storage format v2 compatibility unless a safety, corruption, or security
+issue requires a documented migration. The on-disk format is unchanged from
+v0.4.x. Single-node mode remains the recommended production mode.
 
 | AuraDB | Aura Connector | Protocol | Status |
 | ------ | -------------- | -------- | ------ |
+| 1.0.0  | 0.4.1          | AWP 1    | Supported, recommended (single-node production release; multi-node HA candidate preview, not production HA; no new config, architecture, or semantics over 0.9.2; connector unchanged; AWP 1 and storage format v2 frozen for v1) |
 | 0.9.2  | 0.4.1          | AWP 1    | Supported, recommended (final HA candidate stabilization; no new config, architecture, or semantics over 0.9.1; connector unchanged; wire payload, storage format (v2), and semantics identical to 0.9.1) |
 | 0.9.1  | 0.4.1          | AWP 1    | Supported (HA release-candidate stabilization of the 0.9.0 candidate; adds the optional, backward-compatible `[cluster] advertise_client_addr` field; connector unchanged; wire payload, storage format (v2), and semantics identical to 0.9.0) |
 | 0.9.0  | 0.4.1          | AWP 1    | Supported (HA release candidate for the controlled static-cluster preview, not production HA; connector unchanged; wire payload, storage format (v2), and semantics identical to 0.8.x) |
@@ -59,25 +62,50 @@ and TLS). Use Aura Connector 0.3.x to connect to an AuraDB 0.2.x server. See
 
 ## Versions
 
-- **AuraDB:** 0.9.2
-- **Storage format:** v2 (commit-timestamped MVCC version chains), unchanged from
-  v0.4.x. A v1 (≤ 0.2.x) data directory is migrated to v2 transparently on first
-  open; an unknown future format is rejected. See [UPGRADING.md](UPGRADING.md).
+- **AuraDB:** 1.0.0
+- **Storage format:** v2 (commit-timestamped MVCC version chains), **frozen for
+  v1** and unchanged from v0.4.x. AuraDB v1.x preserves storage format v2 unless a
+  safety, corruption, or security issue requires a documented migration. A v1
+  (≤ 0.2.x) data directory is migrated to v2 transparently on first open; an
+  unknown future format is rejected. See [UPGRADING.md](UPGRADING.md).
 - **Aura Wire Protocol:** AWP 1 (44-byte framed header, CRC32-checked, JSON
-  payloads), unchanged in v0.8.0. The cluster health section, the optional
+  payloads), **frozen for v1** and unchanged since v0.8.0. AuraDB v1.x preserves
+  AWP 1 unless a security or correctness issue requires a documented compatibility
+  break. The cluster health section, the optional
   additive `retryable` error hint, the `not_leader` error code, and the
   additive structured `not_leader` object on the error frame are all additive and
   ignored by older clients. See [PROTOCOL.md](PROTOCOL.md).
 - **Aura Connector (tested):** 0.4.1 (also compatible with 0.4.0 and 0.3.x single-node)
 - **Cluster mode:** optional, off by default. Single-node cluster, plus a
-  controlled, **experimental multi-node server preview** gated by two opt-ins;
-  single-node mode remains the recommended production path. v0.7.x improves the
-  preview's connector-facing error ergonomics and v0.8.0 hardens preview recovery
-  testing, but it is **not** production HA. v0.9.1 adds an optional
+  controlled multi-node server **HA candidate preview** gated by two opt-ins;
+  single-node mode remains the recommended production path. Multi-node static
+  clustering in v1.0 remains an HA candidate preview — strong release-candidate
+  evidence, but **not** a production HA guarantee. The optional
   `[cluster] advertise_client_addr` field (this node's own client-facing address,
-  reported as the leader hint while it leads); it is **additive and backward
-  compatible** — a config that omits it behaves exactly as in v0.9.0. See
+  reported as the leader hint while it leads) is **additive and backward
+  compatible** — a config that omits it behaves exactly as before. See
   [CLUSTERING.md](CLUSTERING.md) and [CONFIGURATION.md](CONFIGURATION.md).
+
+## v1.0 support matrix
+
+This summarizes the support level of each deployment mode and capability. The
+authoritative policy is [SUPPORT_POLICY.md](SUPPORT_POLICY.md).
+
+| Mode / capability | Status | Supported in v1.0 | Production use | Notes |
+| ----------------- | ------ | ----------------- | -------------- | ----- |
+| Single-node, local loopback bind | Stable | Yes | Dev / local | Auth may be disabled for local dev only |
+| Single-node, network bind with auth + TLS | Stable | Yes | **Yes (recommended)** | The supported production mode; run the production runbook |
+| Docker single-node (base image) | Stable | Yes | Dev / local | Base image binds all interfaces with `--allow-insecure-bind`; dev only |
+| Docker secure Compose | Stable | Yes | **Yes** | Auth + TLS, non-root, read-only root fs, no committed secret |
+| Static multi-node cluster | Preview | Preview only | No | HA candidate preview, not production HA |
+| Public peer networking | Preview | Preview only | No | Requires peer TLS + token; off by default |
+| Backup / restore | Stable | Yes | **Yes** | `dump` → `backup verify` → `restore` → `check` |
+| Upgrade from v0.x | Stable | Yes | **Yes** | Backup first; `check` before and after; see [UPGRADING.md](UPGRADING.md) |
+| Aura Connector 0.4.x | Stable | Yes | **Yes** | v0.4.1 recommended |
+| AWP 1 | Frozen for v1 | Yes | **Yes** | Preserved across v1.x unless security/correctness break |
+| Storage format v2 | Frozen for v1 | Yes | **Yes** | Preserved across v1.x unless safety/corruption/security migration |
+| Exact vector search | Stable | Yes | **Yes** | `cosine` / `euclidean` / `dot_product`; not ANN/HNSW |
+| Tokenized full-text search | Stable | Yes | **Yes** | Term-frequency ranking; not BM25 |
 
 ## Required connector features
 
@@ -145,12 +173,11 @@ and TLS). Use Aura Connector 0.3.x to connect to an AuraDB 0.2.x server. See
 
 ## Known limitations
 
-- Single-node mode is the recommended production path. v0.5.0 added a controlled,
-  experimental multi-node server preview (off by default, gated by two opt-ins),
-  v0.5.x hardened it, and v0.6.0 improves its fail-stop recovery ergonomics and
-  diagnostics; it is **not** production multi-node clustering. It has no
-  production automatic failover, no linearizable follower reads, no distributed
-  transactions, no dynamic membership, and no sharding or multi-region.
+- Single-node mode is the recommended production path. The controlled multi-node
+  server cluster is an **HA candidate preview** (off by default, gated by two
+  opt-ins); it is **not** production multi-node clustering. It has no production
+  automatic failover, no linearizable follower reads, no distributed transactions,
+  no dynamic membership, and no sharding or multi-region.
 - AuraDB v0.3.0 implements single-node snapshot isolation with optimistic write
   conflict detection. It is not serializable isolation (it does not prevent
   write-skew).
