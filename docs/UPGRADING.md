@@ -539,3 +539,16 @@ changes. New optional surface:
 
 See [SECURITY.md](SECURITY.md), [CONFIGURATION.md](CONFIGURATION.md), and
 [CLI.md](CLI.md).
+
+## Upgrading to v1.1.0
+
+In-place upgrade from v1.0.x is supported and requires no migration. The storage log format
+(v2) and index file framing are unchanged; the v1.1.0 search clauses are additive Query IR.
+
+- Existing data opens unchanged.
+- BM25 length statistics persist additively in the index snapshot. A snapshot written by an
+  older version has no length table and is rebuilt safely on open (or via `auradb index
+  rebuild`). Ranked search works immediately after the rebuild.
+- Full-text and exact vector indexes survive restart, backup/restore, and compaction.
+
+No downgrade-incompatible on-disk change is introduced.

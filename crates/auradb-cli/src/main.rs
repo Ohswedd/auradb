@@ -12,8 +12,9 @@ use auradb_cli::{
     cmd_cluster_restore_plan, cmd_cluster_status, cmd_cluster_status_live, cmd_cluster_wait_leader,
     cmd_cluster_wait_ready, cmd_compact, cmd_compatibility, cmd_config_validate, cmd_doctor,
     cmd_doctor_json, cmd_dump, cmd_gc, cmd_index_check, cmd_index_rebuild, cmd_init, cmd_restore,
-    cmd_server, cmd_snapshot_create, cmd_snapshot_inspect, cmd_snapshot_restore, cmd_stats_analyze,
-    cmd_stats_show, cmd_status, cmd_status_json, cmd_version,
+    cmd_search_explain, cmd_server, cmd_snapshot_create, cmd_snapshot_inspect,
+    cmd_snapshot_restore, cmd_stats_analyze, cmd_stats_show, cmd_status, cmd_status_json,
+    cmd_version,
 };
 use clap::{Parser, Subcommand};
 
@@ -173,6 +174,11 @@ enum Command {
     Index {
         #[command(subcommand)]
         command: IndexCommand,
+    },
+    /// Search and ranking utilities (`search explain`).
+    Search {
+        #[command(subcommand)]
+        command: SearchCommand,
     },
     /// Cluster (Raft) administration.
     Cluster {
@@ -442,6 +448,23 @@ enum IndexCommand {
 }
 
 #[derive(Subcommand)]
+enum SearchCommand {
+    /// Explain a query (read from a JSON file as a FindQuery IR), reporting the
+    /// chosen ranked-retrieval plan. With `--analyze`, execute it and attach
+    /// measured metrics.
+    Explain {
+        #[arg(long, default_value = ".local/auradb")]
+        data_dir: PathBuf,
+        /// Path to a JSON file containing a FindQuery IR.
+        #[arg(long, visible_alias = "in")]
+        input: PathBuf,
+        /// Execute the query and attach EXPLAIN ANALYZE metrics.
+        #[arg(long)]
+        analyze: bool,
+    },
+}
+
+#[derive(Subcommand)]
 enum BackupCommand {
     /// Validate a JSONL backup without importing it.
     Verify {
@@ -651,6 +674,13 @@ async fn main() -> Result<()> {
             } => {
                 println!("{}", cmd_cert_generate_dev(&out_dir, server_name, san)?)
             }
+        },
+        Command::Search { command } => match command {
+            SearchCommand::Explain {
+                data_dir,
+                input,
+                analyze,
+            } => println!("{}", cmd_search_explain(&data_dir, &input, analyze)?),
         },
         Command::Index { command } => match command {
             IndexCommand::Check { data_dir } => println!("{}", cmd_index_check(&data_dir)?),

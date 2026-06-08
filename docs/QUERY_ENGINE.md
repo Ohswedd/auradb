@@ -164,3 +164,20 @@ deserialize the v0.3.0 shape. Planner regression coverage lives in
 `crates/auradb/tests/planner_regression.rs` and the ANALYZE shape in
 `crates/auradb/tests/explain_analyze_fields.rs`; whatever access path the planner
 chooses, the rows returned are correct.
+
+## Ranked retrieval (v1.1.0)
+
+The planner recognizes three ranked-retrieval clauses on a find: `vector` (exact
+nearest-neighbour), `text_search` (BM25 ranked full-text), and `hybrid` (fused text+vector).
+At most one may be set; results are ordered by score (descending, ties broken by record id).
+
+- **Planner.** Ranked clauses force their access path. Candidate counts are estimated from
+  full-text/vector statistics; `EXPLAIN` reports the strategy (`full_text_bm25`, `hybrid`,
+  `vector_exact_scan`), the indexed field(s), ranking mode/operator, and — for hybrid — the
+  fusion mode, weights, and text/vector candidate sources.
+- **EXPLAIN ANALYZE.** Additionally reports scanned/matched/returned rows, per-signal
+  candidate counts, and timing. The shape is additive: existing fields are unchanged.
+- **Statistics.** `auradb stats analyze` refreshes the full-text document counts used to
+  estimate candidates. Stale statistics never change correctness, only plan choice.
+
+See [SEARCH_AND_RANKING.md](SEARCH_AND_RANKING.md) for the clause reference.

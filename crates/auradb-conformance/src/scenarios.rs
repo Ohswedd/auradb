@@ -1,11 +1,13 @@
 //! The Aura Connector conformance scenario suite, run over the wire protocol.
 
 use auradb::core::{
-    Cardinality, CollectionSchema, Document, FieldDef, FieldType, OnDelete, Relationship, Value,
+    Cardinality, CollectionSchema, Document, FieldDef, FieldType, IndexDef, IndexKind, OnDelete,
+    Relationship, Value,
 };
 use auradb::core::{Error, Result};
 use auradb::query::{
-    CompareOp, CountQuery, ExistsQuery, Filter, FindQuery, Mutation, VectorSearch,
+    CompareOp, CountQuery, ExistsQuery, Filter, FindQuery, FusionMode, HybridSearch, HybridWeights,
+    Mutation, TextOperator, TextRank, TextSearch, VectorSearch,
 };
 
 use crate::client::Client;
@@ -108,9 +110,14 @@ fn doc_schema() -> CollectionSchema {
             indexed: true,
         })
         .with_field(FieldDef::new("title", FieldType::String))
+        .with_field(FieldDef::new("body", FieldType::String))
         .with_field(FieldDef::new("views", FieldType::Int))
         .with_field(FieldDef::new("metadata", FieldType::Document))
         .with_field(FieldDef::new("embedding", FieldType::Vector { dim: 3 }))
+        .with_index(IndexDef {
+            path: "body".into(),
+            kind: IndexKind::FullText,
+        })
         .with_relationship(Relationship {
             name: "owner".into(),
             target: "User".into(),
@@ -119,11 +126,21 @@ fn doc_schema() -> CollectionSchema {
         })
 }
 
+/// Deterministic full-text body for a seeded document.
+fn doc_body(id: &str) -> &'static str {
+    match id {
+        "d1" => "raft consensus raft",
+        "d2" => "the raft module coordinates replicas across nodes",
+        _ => "storage compaction and flushing",
+    }
+}
+
 fn doc(id: &str, status: &str, views: i64, embedding: Vec<f32>) -> Document {
     let mut m = Document::new();
     m.insert("id".into(), Value::Text(id.into()));
     m.insert("status".into(), Value::Text(status.into()));
     m.insert("title".into(), Value::Text(format!("Title {id}")));
+    m.insert("body".into(), Value::Text(doc_body(id).into()));
     m.insert("views".into(), Value::Int(views));
     m.insert("owner".into(), Value::Text("u1".into()));
     m.insert("embedding".into(), Value::Vector(embedding));
@@ -266,6 +283,72 @@ pub async fn run_all(addr: &str) -> Result<ConformanceReport> {
                 "d1 is nearest",
             )?;
             check(rows[0].score.is_some(), "score present")
+        }
+        .await,
+    );
+
+    report.record(
+        "text_search_bm25",
+        async {
+            let mut q = FindQuery::new("Doc");
+            q.text_search = Some(Box::new(TextSearch {
+                field: "body".into(),
+                query: "raft".into(),
+                operator: TextOperator::Or,
+                rank: TextRank::Bm25,
+                k1: None,
+                b: None,
+            }));
+            let rows = client.find_all(&q).await?;
+            check(rows.len() == 2, "two BM25 matches")?;
+            check(
+                rows[0].fields.get("id") == Some(&Value::Text("d1".into())),
+                "dense doc ranks first",
+            )?;
+            check(rows[0].rank == Some(1), "1-based rank present")
+        }
+        .await,
+    );
+
+    report.record(
+        "hybrid_search",
+        async {
+            let mut q = FindQuery::new("Doc");
+            q.hybrid = Some(Box::new(HybridSearch {
+                text_field: "body".into(),
+                text_query: "raft".into(),
+                vector_field: "embedding".into(),
+                vector: vec![1.0, 0.0, 0.0],
+                top_k: 3,
+                metric: None,
+                weights: HybridWeights::default(),
+                fusion: FusionMode::WeightedSum,
+                operator: TextOperator::Or,
+                k1: None,
+                b: None,
+            }));
+            let rows = client.find_all(&q).await?;
+            check(!rows.is_empty(), "hybrid returns rows")?;
+            check(rows[0].score.is_some(), "fused score present")
+        }
+        .await,
+    );
+
+    report.record(
+        "search_explain_analyze",
+        async {
+            let mut q = FindQuery::new("Doc");
+            q.text_search = Some(Box::new(TextSearch {
+                field: "body".into(),
+                query: "raft".into(),
+                operator: TextOperator::Or,
+                rank: TextRank::Bm25,
+                k1: None,
+                b: None,
+            }));
+            let plan = client.explain_analyze(&q).await?;
+            check(plan.text_search.is_some(), "text_search summary present")?;
+            check(plan.analysis.is_some(), "analyze metrics present")
         }
         .await,
     );

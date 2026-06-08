@@ -13,7 +13,7 @@ use auradb_index::CollectionIndexes;
 use auradb_query::exec::DataSource;
 use auradb_query::{
     self as query, CollectionStats, CountQuery, ExistsQuery, ExplainPlan, FindQuery,
-    MigrationEstimate, Mutation, MutationResult, PlannerStats, Row,
+    MigrationEstimate, Mutation, MutationResult, PlannerStats, Row, Scored,
 };
 use auradb_storage::{Batch, LogOp, Storage, StorageOptions};
 use auradb_txn::{Key, StagedOp, Transaction};
@@ -148,6 +148,44 @@ pub struct IndexLoadReport {
     /// Collections whose indexes were rebuilt from storage (snapshot absent,
     /// stale, corrupt, or schema-incompatible).
     pub rebuilt: usize,
+}
+
+/// Search-index summary for one full-text field.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct TextIndexInfo {
+    /// The indexed field name.
+    pub field: String,
+    /// Number of indexed documents (BM25 corpus size).
+    pub documents: usize,
+    /// Number of distinct terms in the inverted index.
+    pub distinct_terms: usize,
+    /// Average document length in tokens (BM25 `avgdl`).
+    pub avg_doc_len: f32,
+    /// A warning when statistics look incomplete, if any.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub warning: Option<String>,
+}
+
+/// Search-index summary for one vector field.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct VectorIndexInfo {
+    /// The indexed field name.
+    pub field: String,
+    /// Vector dimensionality.
+    pub dim: usize,
+    /// Number of indexed vectors.
+    pub vectors: usize,
+}
+
+/// Per-collection search-index report (full-text BM25 and exact vector indexes).
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct SearchIndexInfo {
+    /// The collection name.
+    pub collection: String,
+    /// Full-text (BM25) index summaries.
+    pub text_fields: Vec<TextIndexInfo>,
+    /// Exact vector index summaries.
+    pub vector_fields: Vec<VectorIndexInfo>,
 }
 
 struct Inner {
@@ -522,6 +560,55 @@ impl Engine {
         query::estimate_migration(&*inner, target)
     }
 
+    /// Report the search indexes (full-text BM25 and exact vector) across all
+    /// collections, with their statistics, for `auradb index check` and
+    /// `auradb doctor`. A BM25 index with documents but a zero average length
+    /// signals missing length statistics that a rebuild would repair.
+    pub fn search_index_report(&self) -> Vec<SearchIndexInfo> {
+        let inner = self.lock();
+        let mut out = Vec::new();
+        for schema in inner.storage.list_schemas() {
+            let Some(indexes) = inner.indexes.get(&schema.name) else {
+                continue;
+            };
+            let mut text_fields = Vec::new();
+            for field in indexes.text_field_names() {
+                if let Some(s) = indexes.text_index_stats(field) {
+                    let warning = if s.documents > 0 && s.avg_doc_len <= 0.0 {
+                        Some("missing length statistics; run `auradb index rebuild`".to_string())
+                    } else {
+                        None
+                    };
+                    text_fields.push(TextIndexInfo {
+                        field: field.to_string(),
+                        documents: s.documents,
+                        distinct_terms: s.distinct_terms,
+                        avg_doc_len: s.avg_doc_len,
+                        warning,
+                    });
+                }
+            }
+            text_fields.sort_by(|a, b| a.field.cmp(&b.field));
+            let mut vector_fields: Vec<VectorIndexInfo> = indexes
+                .vector_field_stats()
+                .map(|(field, dim, count)| VectorIndexInfo {
+                    field: field.to_string(),
+                    dim,
+                    vectors: count,
+                })
+                .collect();
+            vector_fields.sort_by(|a, b| a.field.cmp(&b.field));
+            if !text_fields.is_empty() || !vector_fields.is_empty() {
+                out.push(SearchIndexInfo {
+                    collection: schema.name.clone(),
+                    text_fields,
+                    vector_fields,
+                });
+            }
+        }
+        out
+    }
+
     // ----- reads -----
 
     /// Plan a find and return ordered ids/scores plus the EXPLAIN plan.
@@ -531,9 +618,21 @@ impl Engine {
     }
 
     /// Materialize specific rows of a find (used for cursor paging).
-    pub fn materialize(&self, q: &FindQuery, page: &[(RecordId, Option<f32>)]) -> Result<Vec<Row>> {
+    pub fn materialize(&self, q: &FindQuery, page: &[Scored]) -> Result<Vec<Row>> {
         let inner = self.lock();
         query::materialize(&*inner, q, page)
+    }
+
+    /// Materialize a page of a find with a starting rank offset (cursor paging),
+    /// so each row's reported `rank` is stable across pages.
+    pub fn materialize_page(
+        &self,
+        q: &FindQuery,
+        page: &[Scored],
+        start_rank: usize,
+    ) -> Result<Vec<Row>> {
+        let inner = self.lock();
+        query::materialize_page(&*inner, q, page, start_rank)
     }
 
     /// Run a find to completion, returning all matching rows.
@@ -713,12 +812,26 @@ impl Engine {
         &self,
         txn: &Transaction,
         q: &FindQuery,
-        page: &[(RecordId, Option<f32>)],
+        page: &[Scored],
     ) -> Result<Vec<Row>> {
         let mut inner = self.lock();
         inner.touch_txn(txn.id().get())?;
         let view = inner.txn_view(txn, &q.collection)?;
         query::materialize(&view, q, page)
+    }
+
+    /// Materialize a page of a transactional find with a starting rank offset.
+    pub fn txn_materialize_page(
+        &self,
+        txn: &Transaction,
+        q: &FindQuery,
+        page: &[Scored],
+        start_rank: usize,
+    ) -> Result<Vec<Row>> {
+        let mut inner = self.lock();
+        inner.touch_txn(txn.id().get())?;
+        let view = inner.txn_view(txn, &q.collection)?;
+        query::materialize_page(&view, q, page, start_rank)
     }
 
     /// Run a find to completion within a transaction, returning all matching

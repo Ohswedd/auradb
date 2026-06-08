@@ -1,0 +1,12 @@
+{
+  "collection": "Doc",
+  "text_search": {
+    "field": "body",
+    "query": "raft consensus",
+    "operator": "or",
+    "rank": "bm25",
+    "k1": 1.2,
+    "b": 0.75
+  },
+  "limit": 10
+}

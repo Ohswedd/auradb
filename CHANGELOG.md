@@ -4,6 +4,46 @@ All notable changes to AuraDB are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and the project uses
 [Semantic Versioning](https://semver.org/).
 
+## [1.1.0] - 2026-06-08
+
+**Search and ranking — single-node production line, multi-node HA candidate preview.**
+AuraDB v1.1.0 is the first larger post-1.0 release. It expands search and ranking for the
+single-node production line and adds connector-native support, without changing the
+production support claim. Single-node mode remains the recommended production mode;
+multi-node static clustering remains an HA candidate preview — not production HA, no
+production automatic failover, no production cluster readiness. **Aura Wire Protocol 1 and
+storage format v2 stay frozen**: the new query clauses are additive Query IR and response
+fields, and the BM25 length statistics persist additively in the existing index snapshot
+format (rebuilt safely on open from older snapshots). Aura Connector **v0.5.0** (compatible
+0.5.x) is the paired client. See [docs/V1_1_RELEASE_NOTES.md](docs/V1_1_RELEASE_NOTES.md)
+and [docs/SEARCH_AND_RANKING.md](docs/SEARCH_AND_RANKING.md).
+
+### Added
+
+- **BM25 ranked full-text search.** A new `text_search` query clause ranks full-text
+  indexed documents by Okapi BM25 relevance (document frequency, term frequency, and
+  document-length normalization), with `or`/`and` term operators and tunable `k1`/`b`
+  (defaults 1.2 / 0.75). The legacy `contains_text` boolean predicate is unchanged.
+- **Hybrid text + vector ranking.** A new `hybrid` query clause fuses BM25 text relevance
+  with exact vector similarity using `weighted_sum` (min-max normalized) or
+  `reciprocal_rank_fusion`, with configurable per-signal weights. Results expose fused,
+  text, and vector component scores and a 1-based rank.
+- **Planner awareness** of ranked text and hybrid retrieval, with candidate estimates from
+  full-text statistics and a stable, additive EXPLAIN / EXPLAIN ANALYZE shape (ranking mode,
+  candidate sources and counts, fusion mode, weights).
+- **CLI:** `auradb compatibility` now reports the search capabilities and Aura Connector
+  0.5.0/0.5.x; `auradb index check` validates BM25 and vector index statistics; `auradb
+  stats analyze` refreshes full-text statistics; new `auradb search explain [--analyze]`.
+- **Observability:** `search_text_queries_total`, `search_hybrid_queries_total`,
+  `search_vector_queries_total` counters and a `ranking_latency` histogram.
+
+### Unchanged
+
+- Exact vector search remains the correctness baseline. **Approximate (ANN/HNSW) vector
+  search is not implemented in v1.1.0.**
+- Aura Wire Protocol 1, storage format v2, auth, TLS, backup/restore, upgrade, Docker, and
+  the single-node production support scope. Multi-node remains an HA candidate preview.
+
 ## [1.0.1] - 2026-06-08
 
 **First production patch — single-node production line, multi-node HA candidate

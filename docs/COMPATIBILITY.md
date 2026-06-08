@@ -1,18 +1,23 @@
 # AuraDB Compatibility Matrix
 
-This document records what AuraDB v1.0.1 implements and how it interoperates with
-the Aura Connector client library and the Aura Wire Protocol (AWP). AuraDB v1.0.1
-is the **first production patch on the v1.0 single-node production line**: it
-supports production single-node deployments configured with auth, TLS, backups,
-monitoring, and the documented runbooks, while multi-node static clustering remains
-an HA candidate preview, **not a production HA guarantee**. It carries forward all
-v1.0.0 behavior and adds no new configuration, cluster architecture, or semantics.
-See [SUPPORT_POLICY.md](SUPPORT_POLICY.md),
+This document records what AuraDB v1.1.0 implements and how it interoperates with
+the Aura Connector client library and the Aura Wire Protocol (AWP). AuraDB v1.1.0
+is the **first larger post-1.0 release on the v1 single-node production line**: it
+adds BM25 ranked full-text search, hybrid text+vector ranking, and connector-native
+support, while remaining a production single-node deployment configured with auth,
+TLS, backups, monitoring, and the documented runbooks. Multi-node static clustering
+remains an HA candidate preview, **not a production HA guarantee**. The new search
+clauses are additive Query IR and response fields, so AWP 1 and storage format v2 are
+unchanged. Exact vector search remains the correctness baseline; approximate (ANN)
+vector search is not implemented. See [SEARCH_AND_RANKING.md](SEARCH_AND_RANKING.md),
+[SUPPORT_POLICY.md](SUPPORT_POLICY.md),
 [HA_RELEASE_CANDIDATE.md](HA_RELEASE_CANDIDATE.md), and the
 [v1.0 decision checklist](V1_0_DECISION_CHECKLIST.md).
 
-**Aura Wire Protocol 1 is frozen for v1.** AuraDB v1.0.1 uses Aura Wire Protocol 1.
-AWP 1 is the stable v1 wire protocol. AuraDB v1.x will preserve AWP 1 compatibility
+**Aura Wire Protocol 1 is frozen for v1.** AuraDB v1.1.0 uses Aura Wire Protocol 1.
+AWP 1 is the stable v1 wire protocol. The v1.1.0 search and ranking clauses
+(`text_search`, `hybrid`) and their response score fields are additive: older
+clients omit and ignore them, so the wire revision is unchanged. AuraDB v1.x will preserve AWP 1 compatibility
 unless a security or correctness issue requires a documented compatibility break.
 The `not_leader` error frame carries an additive structured `not_leader` object
 (leader client address, leader/current node ids, term, role, and a usable
@@ -21,15 +26,18 @@ alongside the additive cluster health and `retryable` fields. Aura Connector 0.4
 reads the new fields; Aura Connector 0.3.x stays fully compatible (it simply does
 not consume them).
 
-**Storage format v2 is frozen for v1.** AuraDB v1.0.1 uses storage format v2.
-Storage format v2 is the stable v1 single-node storage format. AuraDB v1.x will
+**Storage format v2 is frozen for v1.** AuraDB v1.1.0 uses storage format v2.
+Storage format v2 is the stable v1 single-node storage format. BM25 length
+statistics persist additively inside the existing index snapshot format (rebuilt
+safely on open from pre-v1.1.0 snapshots); the storage log format is unchanged. AuraDB v1.x will
 preserve storage format v2 compatibility unless a safety, corruption, or security
 issue requires a documented migration. The on-disk format is unchanged from
 v0.4.x. Single-node mode remains the recommended production mode.
 
 | AuraDB | Aura Connector | Protocol | Status |
 | ------ | -------------- | -------- | ------ |
-| 1.0.1  | 0.4.1          | AWP 1    | Supported, recommended (first production patch on the v1.0 single-node production line; multi-node HA candidate preview, not production HA; no new config, architecture, or semantics over 1.0.0; connector unchanged; AWP 1 and storage format v2 frozen for v1) |
+| 1.1.0  | 0.5.0          | AWP 1    | Supported, recommended (search and ranking release: BM25 ranked full-text, hybrid text+vector; single-node production line; multi-node HA candidate preview, not production HA; new clauses are additive Query IR/response fields; AWP 1 and storage format v2 unchanged; exact vector search only, no ANN) |
+| 1.0.1  | 0.4.1          | AWP 1    | Supported (first production patch on the v1.0 single-node production line; multi-node HA candidate preview, not production HA; no new config, architecture, or semantics over 1.0.0; connector unchanged; AWP 1 and storage format v2 frozen for v1) |
 | 1.0.0  | 0.4.1          | AWP 1    | Supported (single-node production release; multi-node HA candidate preview, not production HA; no new config, architecture, or semantics over 0.9.2; connector unchanged; AWP 1 and storage format v2 frozen for v1) |
 | 0.9.2  | 0.4.1          | AWP 1    | Supported, recommended (final HA candidate stabilization; no new config, architecture, or semantics over 0.9.1; connector unchanged; wire payload, storage format (v2), and semantics identical to 0.9.1) |
 | 0.9.1  | 0.4.1          | AWP 1    | Supported (HA release-candidate stabilization of the 0.9.0 candidate; adds the optional, backward-compatible `[cluster] advertise_client_addr` field; connector unchanged; wire payload, storage format (v2), and semantics identical to 0.9.0) |

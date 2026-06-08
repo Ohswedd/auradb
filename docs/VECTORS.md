@@ -48,3 +48,11 @@ is the seam where an ANN index can be added with recall and persistence tests.
 
 `crates/auradb/benches/vector.rs` measures exact top-10 search over 10k
 64-dimensional vectors with `cargo bench -p auradb`.
+
+## v1.1.0: still exact, plus hybrid
+
+Vector search remains **exact** in v1.1.0. ANN/HNSW remains unsupported; exact search is the
+correctness baseline. v1.1.0 adds hybrid retrieval that fuses BM25 text relevance with exact
+vector similarity — see [SEARCH_AND_RANKING.md](SEARCH_AND_RANKING.md). The `VectorIndex`
+trait still leaves room for a future approximate implementation without changing the query
+engine.

@@ -4,18 +4,19 @@ This roadmap describes where AuraDB is headed beyond the first single-node
 release. It is a statement of direction, not a delivery commitment. Items are
 grouped by theme and listed roughly in the order we expect to approach them.
 
-## Current release: 1.0.1
+## Current release: 1.1.0
 
-AuraDB 1.0.1 is the **first production patch on the v1.0 single-node production
-line**. It is a documentation, validation, and release-engineering patch: it
-re-verifies the v1.0 production gates on the v1.0.1 build and refreshes the version
-pointers and support docs. It carries forward **all** v1.0.0 behavior and adds
-**no** new database or cluster architecture, changes **no** semantics, and touches
-**no** on-disk or wire format. **Single-node mode remains the recommended
-production mode**; multi-node static clustering remains an **HA candidate preview,
-not a production HA guarantee**. AWP 1 and storage format v2 stay frozen for v1, and
-Aura Connector v0.4.1 stays compatible. See
-[V1_0_1_RELEASE_NOTES.md](V1_0_1_RELEASE_NOTES.md),
+AuraDB 1.1.0 is the **first larger post-1.0 release: search and ranking**. It adds
+BM25 ranked full-text search, hybrid text+vector ranking, planner awareness for
+ranked retrieval, search-focused CLI/observability improvements, and connector-native
+support (Aura Connector v0.5.0). The new query clauses are additive Query IR and
+response fields, so it changes **no** on-disk or wire format: **AWP 1 and storage
+format v2 stay frozen for v1**. **Single-node mode remains the recommended production
+mode**; multi-node static clustering remains an **HA candidate preview, not a
+production HA guarantee**. Exact vector search remains the correctness baseline;
+approximate (ANN/HNSW) vector search is **not** implemented. See
+[V1_1_RELEASE_NOTES.md](V1_1_RELEASE_NOTES.md),
+[SEARCH_AND_RANKING.md](SEARCH_AND_RANKING.md),
 [SUPPORT_POLICY.md](SUPPORT_POLICY.md), and [COMPATIBILITY.md](COMPATIBILITY.md).
 
 ### Delivered in 1.0.0
@@ -334,9 +335,10 @@ These single-node hardening items are now delivered:
 - Persisted index snapshots with fingerprint-based staleness detection and safe
   rebuild.
 - Document-path indexes for nested-field equality lookups.
-- Basic full-text search (tokenized boolean-AND matching with term-frequency
-  ranking; not BM25).
-- Richer conformance coverage (auth, TLS, document-path, and full-text scenarios).
+- Full-text search: the tokenized boolean-AND `contains_text` predicate (term-frequency
+  ranking) plus, as of v1.1.0, BM25 ranked full-text search (`text_search`) and hybrid
+  text+vector ranking (`hybrid`).
+- Richer conformance coverage (auth, TLS, document-path, full-text, and search scenarios).
 - Deterministic seeded recovery and corruption fuzzing.
 - A published Docker image (`ghcr.io/ohswedd/auradb`) and prebuilt binary release
   artifacts with `SHA256SUMS`.

@@ -64,15 +64,42 @@ pub fn tokenize(text: &str) -> Vec<String> {
         .collect()
 }
 
+/// The default BM25 term-saturation parameter `k1`.
+pub const BM25_DEFAULT_K1: f32 = 1.2;
+/// The default BM25 length-normalization parameter `b`.
+pub const BM25_DEFAULT_B: f32 = 0.75;
+
+/// Summary statistics for one full-text index, surfaced by `auradb index check`
+/// and `EXPLAIN` for ranked text search.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct TextIndexStats {
+    /// Number of indexed documents (records with a non-empty value for the field).
+    pub documents: usize,
+    /// Number of distinct terms in the inverted index.
+    pub distinct_terms: usize,
+    /// Average document length in tokens (0.0 when there are no documents).
+    pub avg_doc_len: f32,
+}
+
 /// A simple in-memory inverted index over the tokens of one text field.
+///
+/// In addition to `term -> (id -> term frequency)` postings, the index tracks the
+/// token length of every indexed document and a running total, which are the
+/// statistics BM25 needs for length normalization (`avgdl`) and the corpus size
+/// (`N`). Document frequency per term is the length of a term's posting list.
 #[derive(Debug, Default)]
 struct TextIndex {
     /// term -> (record id -> term frequency within this field).
     postings: HashMap<String, HashMap<RecordId, u32>>,
+    /// record id -> token length of this field for that record.
+    doc_lengths: HashMap<RecordId, u32>,
+    /// Sum of all document lengths (cached for `avgdl`).
+    total_tokens: u64,
 }
 
 impl TextIndex {
     fn add(&mut self, id: RecordId, text: &str) {
+        let mut len = 0u32;
         for term in tokenize(text) {
             *self
                 .postings
@@ -80,10 +107,16 @@ impl TextIndex {
                 .or_default()
                 .entry(id)
                 .or_insert(0) += 1;
+            len += 1;
+        }
+        if len > 0 {
+            *self.doc_lengths.entry(id).or_insert(0) += len;
+            self.total_tokens += len as u64;
         }
     }
 
     fn remove(&mut self, id: RecordId, text: &str) {
+        let mut len = 0u32;
         for term in tokenize(text) {
             if let Some(map) = self.postings.get_mut(&term) {
                 map.remove(&id);
@@ -91,12 +124,51 @@ impl TextIndex {
                     self.postings.remove(&term);
                 }
             }
+            len += 1;
         }
+        if let Some(existing) = self.doc_lengths.get(&id).copied() {
+            let dec = len.min(existing);
+            self.total_tokens -= dec as u64;
+            if existing <= len {
+                self.doc_lengths.remove(&id);
+            } else {
+                self.doc_lengths.insert(id, existing - len);
+            }
+        }
+    }
+
+    /// The number of indexed documents (corpus size `N`).
+    fn doc_count(&self) -> usize {
+        self.doc_lengths.len()
+    }
+
+    /// The average document length in tokens (`avgdl`), 0.0 when empty.
+    fn avg_doc_len(&self) -> f32 {
+        let n = self.doc_lengths.len();
+        if n == 0 {
+            0.0
+        } else {
+            self.total_tokens as f32 / n as f32
+        }
+    }
+
+    /// Recompute `doc_lengths`/`total_tokens` from the postings. Used when a
+    /// persisted snapshot predates BM25 stats so the length table is missing.
+    fn rebuild_lengths(&mut self) {
+        let mut lengths: HashMap<RecordId, u32> = HashMap::new();
+        for map in self.postings.values() {
+            for (id, tf) in map {
+                *lengths.entry(*id).or_insert(0) += *tf;
+            }
+        }
+        self.total_tokens = lengths.values().map(|&l| l as u64).sum();
+        self.doc_lengths = lengths;
     }
 
     /// Boolean-AND search: a record matches when it contains every distinct
     /// query term. Results are ranked by summed term frequency (descending),
-    /// tie-broken by record id.
+    /// tie-broken by record id. This is the legacy `contains_text` behavior and
+    /// is preserved unchanged for compatibility.
     fn search(&self, query: &str) -> Vec<(RecordId, f32)> {
         let mut terms = tokenize(query);
         terms.sort();
@@ -119,6 +191,57 @@ impl TextIndex {
             .into_iter()
             .filter(|(_, (m, _))| *m == need)
             .map(|(id, (_, score))| (id, score))
+            .collect();
+        out.sort_by(|a, b| {
+            b.1.partial_cmp(&a.1)
+                .unwrap_or(std::cmp::Ordering::Equal)
+                .then(a.0.cmp(&b.0))
+        });
+        out
+    }
+
+    /// Okapi BM25 ranked search. `require_all` selects AND semantics (a document
+    /// must contain every query term) versus OR semantics (any term contributes).
+    /// Results are ranked by descending BM25 score, tie-broken by record id, so
+    /// they are deterministic. Returns an empty result for an empty query or an
+    /// empty corpus.
+    fn bm25_search(&self, query: &str, require_all: bool, k1: f32, b: f32) -> Vec<(RecordId, f32)> {
+        let mut terms = tokenize(query);
+        terms.sort();
+        terms.dedup();
+        if terms.is_empty() {
+            return Vec::new();
+        }
+        let n = self.doc_lengths.len() as f32;
+        if n == 0.0 {
+            return Vec::new();
+        }
+        let avgdl = (self.total_tokens as f32 / n).max(1.0);
+        // (accumulated score, number of distinct query terms matched).
+        let mut acc: HashMap<RecordId, (f32, u32)> = HashMap::new();
+        for term in &terms {
+            let Some(postings) = self.postings.get(term) else {
+                continue;
+            };
+            let df = postings.len() as f32;
+            // BM25+ style IDF: always non-negative, avoids penalizing very common
+            // terms below zero.
+            let idf = ((n - df + 0.5) / (df + 0.5) + 1.0).ln();
+            for (id, tf) in postings {
+                let tf = *tf as f32;
+                let dl = *self.doc_lengths.get(id).unwrap_or(&0) as f32;
+                let denom = tf + k1 * (1.0 - b + b * dl / avgdl);
+                let contribution = idf * (tf * (k1 + 1.0)) / denom;
+                let entry = acc.entry(*id).or_insert((0.0, 0));
+                entry.0 += contribution;
+                entry.1 += 1;
+            }
+        }
+        let need = terms.len() as u32;
+        let mut out: Vec<(RecordId, f32)> = acc
+            .into_iter()
+            .filter(|(_, (_, matched))| !require_all || *matched == need)
+            .map(|(id, (score, _))| (id, score))
             .collect();
         out.sort_by(|a, b| {
             b.1.partial_cmp(&a.1)
@@ -432,6 +555,48 @@ impl CollectionIndexes {
         Ok(ti.search(query))
     }
 
+    /// BM25 ranked full-text search over a text-indexed field. `require_all`
+    /// selects AND term semantics; otherwise any matching term contributes (OR).
+    /// `k1`/`b` are the BM25 tuning parameters (see [`BM25_DEFAULT_K1`] /
+    /// [`BM25_DEFAULT_B`]). Results are ranked by descending relevance and are
+    /// deterministic. Errors when no full-text index covers `field`.
+    pub fn text_bm25_search(
+        &self,
+        field: &str,
+        query: &str,
+        require_all: bool,
+        k1: f32,
+        b: f32,
+    ) -> Result<Vec<(RecordId, f32)>> {
+        let ti = self
+            .text_maps
+            .get(field)
+            .ok_or_else(|| Error::InvalidRequest(format!("no full-text index on field {field}")))?;
+        Ok(ti.bm25_search(query, require_all, k1, b))
+    }
+
+    /// Summary statistics for the full-text index on `field`, if one exists.
+    pub fn text_index_stats(&self, field: &str) -> Option<TextIndexStats> {
+        self.text_maps.get(field).map(|ti| TextIndexStats {
+            documents: ti.doc_count(),
+            distinct_terms: ti.postings.len(),
+            avg_doc_len: ti.avg_doc_len(),
+        })
+    }
+
+    /// The names of fields that have a full-text index.
+    pub fn text_field_names(&self) -> impl Iterator<Item = &str> {
+        self.text_maps.keys().map(String::as_str)
+    }
+
+    /// The names of fields that have a vector index, with each field's
+    /// dimensionality and indexed vector count.
+    pub fn vector_field_stats(&self) -> impl Iterator<Item = (&str, usize, usize)> {
+        self.vector_maps
+            .iter()
+            .map(|(field, idx)| (field.as_str(), idx.dim(), idx.len()))
+    }
+
     /// Exact nearest-neighbour search over a vector field.
     pub fn vector_nearest(
         &self,
@@ -516,6 +681,7 @@ impl CollectionIndexes {
                             (term.clone(), m.iter().map(|(id, tf)| (*id, *tf)).collect())
                         })
                         .collect(),
+                    doc_lengths: ti.doc_lengths.iter().map(|(id, len)| (*id, *len)).collect(),
                 })
                 .collect(),
         }
@@ -578,6 +744,16 @@ impl CollectionIndexes {
             let ti = idx.text_maps.get_mut(&t.field).expect("checked above");
             for (term, posting) in t.postings {
                 ti.postings.entry(term).or_default().extend(posting);
+            }
+            if t.doc_lengths.is_empty() {
+                // Snapshot predates BM25 stats: rebuild lengths from postings so
+                // ranked search works immediately without a full index rebuild.
+                ti.rebuild_lengths();
+            } else {
+                for (id, len) in t.doc_lengths {
+                    *ti.doc_lengths.entry(id).or_insert(0) += len;
+                    ti.total_tokens += len as u64;
+                }
             }
         }
         for v in snapshot.vectors {
@@ -872,5 +1048,158 @@ mod tests {
             indexed: false,
         });
         assert!(CollectionIndexes::from_snapshot(&other, snap).is_err());
+    }
+
+    use auradb_core::{IndexDef, IndexKind};
+
+    fn text_schema() -> CollectionSchema {
+        CollectionSchema::new("Doc")
+            .with_field(FieldDef {
+                name: "id".into(),
+                field_type: FieldType::Uuid,
+                primary_key: true,
+                unique: true,
+                nullable: false,
+                indexed: false,
+            })
+            .with_field(FieldDef::new("body", FieldType::String))
+            .with_index(IndexDef {
+                path: "body".into(),
+                kind: IndexKind::FullText,
+            })
+    }
+
+    fn doc(id: u128, body: &str) -> Record {
+        let mut f = Document::new();
+        f.insert("id".into(), Value::Text(format!("id-{id}")));
+        f.insert("body".into(), Value::Text(body.into()));
+        Record::new(RecordId::from_u128(id), CollectionId::new("Doc"), f)
+    }
+
+    #[test]
+    fn bm25_ranks_term_density_and_rarity() {
+        let mut idx = CollectionIndexes::from_schema(&text_schema());
+        // doc 1 mentions "raft" twice in a short body (high density);
+        // doc 2 mentions it once amid many other words; doc 3 not at all.
+        idx.insert(&doc(1, "raft consensus raft"));
+        idx.insert(&doc(
+            2,
+            "the raft protocol coordinates many replicas across nodes",
+        ));
+        idx.insert(&doc(3, "storage engine compaction and flushing"));
+        let out = idx
+            .text_bm25_search("body", "raft", false, BM25_DEFAULT_K1, BM25_DEFAULT_B)
+            .unwrap();
+        assert_eq!(out.len(), 2);
+        // The short, dense document ranks first.
+        assert_eq!(out[0].0, RecordId::from_u128(1));
+        assert_eq!(out[1].0, RecordId::from_u128(2));
+        assert!(out[0].1 > out[1].1);
+    }
+
+    #[test]
+    fn bm25_idf_prefers_rarer_terms() {
+        let mut idx = CollectionIndexes::from_schema(&text_schema());
+        idx.insert(&doc(1, "common common common rare"));
+        idx.insert(&doc(2, "common common common common"));
+        idx.insert(&doc(3, "common word here"));
+        // "rare" appears in only one document, so it carries high IDF.
+        let out = idx
+            .text_bm25_search(
+                "body",
+                "rare common",
+                false,
+                BM25_DEFAULT_K1,
+                BM25_DEFAULT_B,
+            )
+            .unwrap();
+        assert_eq!(out[0].0, RecordId::from_u128(1));
+    }
+
+    #[test]
+    fn bm25_and_semantics_require_all_terms() {
+        let mut idx = CollectionIndexes::from_schema(&text_schema());
+        idx.insert(&doc(1, "vector search engine"));
+        idx.insert(&doc(2, "vector database"));
+        let any = idx
+            .text_bm25_search(
+                "body",
+                "vector engine",
+                false,
+                BM25_DEFAULT_K1,
+                BM25_DEFAULT_B,
+            )
+            .unwrap();
+        assert_eq!(any.len(), 2);
+        let all = idx
+            .text_bm25_search(
+                "body",
+                "vector engine",
+                true,
+                BM25_DEFAULT_K1,
+                BM25_DEFAULT_B,
+            )
+            .unwrap();
+        assert_eq!(all.len(), 1);
+        assert_eq!(all[0].0, RecordId::from_u128(1));
+    }
+
+    #[test]
+    fn bm25_empty_query_and_corpus() {
+        let mut idx = CollectionIndexes::from_schema(&text_schema());
+        // Empty corpus.
+        assert!(idx
+            .text_bm25_search("body", "anything", false, BM25_DEFAULT_K1, BM25_DEFAULT_B)
+            .unwrap()
+            .is_empty());
+        idx.insert(&doc(1, "hello world"));
+        // Empty query.
+        assert!(idx
+            .text_bm25_search("body", "   ", false, BM25_DEFAULT_K1, BM25_DEFAULT_B)
+            .unwrap()
+            .is_empty());
+    }
+
+    #[test]
+    fn bm25_missing_index_errors() {
+        let idx = CollectionIndexes::from_schema(&text_schema());
+        assert!(idx
+            .text_bm25_search("nope", "q", false, BM25_DEFAULT_K1, BM25_DEFAULT_B)
+            .is_err());
+    }
+
+    #[test]
+    fn bm25_stats_rebuild_from_legacy_snapshot() {
+        let mut idx = CollectionIndexes::from_schema(&text_schema());
+        idx.insert(&doc(1, "alpha beta beta"));
+        idx.insert(&doc(2, "beta gamma"));
+        let mut snap = idx.snapshot(1, 0);
+        // Simulate a pre-BM25 snapshot: drop the persisted doc lengths.
+        for t in &mut snap.text {
+            t.doc_lengths.clear();
+        }
+        let reopened = CollectionIndexes::from_snapshot(&text_schema(), snap).unwrap();
+        let stats = reopened.text_index_stats("body").unwrap();
+        assert_eq!(stats.documents, 2);
+        // doc 1 has 3 tokens, doc 2 has 2 tokens -> avg 2.5.
+        assert!((stats.avg_doc_len - 2.5).abs() < 1e-6);
+        // Ranking still works after the rebuild.
+        let out = reopened
+            .text_bm25_search("body", "beta", false, BM25_DEFAULT_K1, BM25_DEFAULT_B)
+            .unwrap();
+        assert_eq!(out.len(), 2);
+        assert_eq!(out[0].0, RecordId::from_u128(1));
+    }
+
+    #[test]
+    fn bm25_stats_persist_across_snapshot() {
+        let mut idx = CollectionIndexes::from_schema(&text_schema());
+        idx.insert(&doc(1, "alpha beta beta"));
+        idx.insert(&doc(2, "beta gamma delta"));
+        let snap = idx.snapshot(1, 0);
+        let reopened = CollectionIndexes::from_snapshot(&text_schema(), snap).unwrap();
+        let stats = reopened.text_index_stats("body").unwrap();
+        assert_eq!(stats.documents, 2);
+        assert!((stats.avg_doc_len - 3.0).abs() < 1e-6); // (3 + 3) / 2
     }
 }

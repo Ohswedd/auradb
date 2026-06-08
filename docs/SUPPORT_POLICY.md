@@ -1,8 +1,10 @@
 # AuraDB v1.0 support policy
 
-> **AuraDB v1.0.1 supports production single-node deployments when configured
+> **AuraDB v1.1.0 supports production single-node deployments when configured
 > with auth, TLS, backups, monitoring, and the documented runbooks. Multi-node
-> static clustering remains an HA candidate preview, not production HA.**
+> static clustering remains an HA candidate preview, not production HA. v1.1.0 adds
+> BM25 ranked full-text and hybrid text+vector search to the single-node production
+> line; exact vector search remains the correctness baseline (no ANN).**
 
 This document is the authoritative statement of what AuraDB v1.0 supports, at what
 level, and for how long. It is written to be precise rather than expansive: a
@@ -18,7 +20,7 @@ compatibility matrix in [COMPATIBILITY.md](COMPATIBILITY.md).
 
 ## Production support statement
 
-AuraDB v1.0.1 supports production **single-node** deployments when configured with
+AuraDB v1.1.0 supports production **single-node** deployments when configured with
 authentication, TLS, scheduled backups with a rehearsed restore, monitoring, and
 the documented runbooks. This is the recommended production deployment mode.
 
@@ -34,6 +36,10 @@ These are validated and supported for production single-node use, run per the
 
 - **Single-node AuraDB** — durable local storage, crash recovery, MVCC single-node
   snapshot isolation, version GC, and a cost-based query planner.
+- **Search and ranking (v1.1.0)** — BM25 ranked full-text search, exact vector
+  search (the correctness baseline), and hybrid text+vector ranking, with planner
+  awareness and EXPLAIN/EXPLAIN ANALYZE support. Approximate (ANN/HNSW) vector
+  search is **not** implemented. See [SEARCH_AND_RANKING.md](SEARCH_AND_RANKING.md).
 - **Authentication and TLS for network exposure** — enforced static-token auth
   (Argon2id) and server-terminated TLS with optional mutual TLS (rustls), both
   fail-closed. See [SECURITY.md](SECURITY.md).
@@ -42,7 +48,7 @@ These are validated and supported for production single-node use, run per the
   directory, with `auradb check` consistency reporting.
 - **Upgrade** from all documented supported release fixtures (see
   [UPGRADING.md](UPGRADING.md) and `tests/fixtures/`).
-- **Aura Connector v0.4.1** (and compatible 0.4.x).
+- **Aura Connector v0.5.0** (and compatible 0.5.x).
 - **Aura Wire Protocol 1 (AWP 1)** compatibility within v1.x, unless a security or
   correctness issue requires a documented change.
 - **Storage format v2** compatibility within v1.x, unless a safety, corruption, or
@@ -90,14 +96,17 @@ AuraDB v1.0 does **not** provide, and **must not** be relied on for, any of:
 - automatic failover SLA;
 - dynamic cluster membership;
 - online membership changes (`join` / `leave` / `step-down`, joint consensus);
-- linearizable follower reads (followers reject client reads);
+- linearizable follower reads or any production read-consistency guarantee (in the
+  preview, followers serve only eventually-consistent, non-linearizable reads; the
+  supported path is leader-served reads);
 - distributed transactions;
 - cross-shard transactions;
 - sharding;
 - multi-region deployment;
 - serializable isolation (single-node isolation is snapshot isolation);
-- approximate nearest-neighbour vector search (ANN / HNSW);
-- BM25 ranking or hybrid lexical-vector fusion;
+- approximate nearest-neighbour vector search (ANN / HNSW) — exact vector search is
+  the correctness baseline (BM25 ranking and hybrid lexical-vector fusion are
+  supported as of v1.1.0);
 - a Kubernetes operator;
 - a managed cloud service;
 - official SDKs beyond the current Aura Connector scope.
@@ -141,7 +150,7 @@ AuraDB v1.0 does **not** provide, and **must not** be relied on for, any of:
 
 ## Changes to this policy
 
-This policy applies to AuraDB v1.0.1 and the v1.x line. Material changes — for
+This policy applies to AuraDB v1.1.0 and the v1.x line. Material changes — for
 example promoting multi-node from preview to production HA once the evidence in
 [HA_RELEASE_CANDIDATE.md](HA_RELEASE_CANDIDATE.md) §8 is complete — will be
 documented here and in the release notes, never claimed implicitly.

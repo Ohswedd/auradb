@@ -52,8 +52,38 @@ pub fn plan_find(
 ) -> Plan {
     let row_count = stats.map(|s| s.row_count).unwrap_or(live_row_count);
 
-    // A vector clause forces an exact vector search (the only way to satisfy it).
-    let chosen = if let Some(vs) = &query.vector {
+    // A hybrid clause forces a fused text+vector plan; a ranked text clause forces
+    // a BM25 search; a vector clause forces exact vector search. These ranked
+    // clauses are mutually exclusive and each is the only way to satisfy itself.
+    let chosen = if let Some(hs) = &query.hybrid {
+        let text_docs = stats
+            .and_then(|s| s.text_field_docs.get(&hs.text_field).copied())
+            .unwrap_or(row_count);
+        let vec_count = stats
+            .and_then(|s| s.vector_count.get(&hs.vector_field).copied())
+            .unwrap_or(row_count);
+        let candidates = text_docs.saturating_add(vec_count);
+        Candidate {
+            access: Access::Hybrid {
+                text_field: hs.text_field.clone(),
+                vector_field: hs.vector_field.clone(),
+            },
+            estimated_rows: hs.top_k.max(1).min(candidates.max(1)),
+            cost: candidates as f64,
+        }
+    } else if let Some(ts) = &query.text_search {
+        let docs = stats
+            .and_then(|s| s.text_field_docs.get(&ts.field).copied())
+            .unwrap_or(row_count);
+        let rows = query.limit.map(|l| l.min(docs)).unwrap_or(docs).max(1);
+        Candidate {
+            access: Access::TextRanked {
+                field: ts.field.clone(),
+            },
+            estimated_rows: rows,
+            cost: docs as f64,
+        }
+    } else if let Some(vs) = &query.vector {
         let rows = stats
             .and_then(|s| s.vector_count.get(&vs.field).copied())
             .unwrap_or(row_count)
@@ -214,10 +244,42 @@ fn build_tree(query: &FindQuery, chosen: &Candidate) -> PlanNode {
             field: field.clone(),
             estimated_rows: rows,
         },
+        Access::TextRanked { field } => {
+            let ts = query.text_search.as_ref();
+            PlanNode::FullTextBm25Search {
+                index: field.clone(),
+                field: field.clone(),
+                rank: match ts.map(|t| t.rank) {
+                    Some(crate::ir::TextRank::TermFrequency) => "term_frequency".into(),
+                    _ => "bm25".into(),
+                },
+                operator: match ts.map(|t| t.operator) {
+                    Some(crate::ir::TextOperator::And) => "and".into(),
+                    _ => "or".into(),
+                },
+                estimated_rows: rows,
+            }
+        }
         Access::Vector { field, k, metric } => PlanNode::VectorSearch {
             field: field.clone(),
             k: *k,
             metric: metric.clone(),
+            estimated_rows: rows,
+        },
+        Access::Hybrid {
+            text_field,
+            vector_field,
+        } => PlanNode::HybridSearch {
+            text_field: text_field.clone(),
+            vector_field: vector_field.clone(),
+            fusion: match query.hybrid.as_ref().map(|h| h.fusion) {
+                Some(crate::ir::FusionMode::ReciprocalRankFusion) => {
+                    "reciprocal_rank_fusion".into()
+                }
+                _ => "weighted_sum".into(),
+            },
+            text_source: format!("bm25:{text_field}"),
+            vector_source: format!("exact_vector:{vector_field}"),
             estimated_rows: rows,
         },
         Access::Scan => PlanNode::Scan {
@@ -239,7 +301,10 @@ fn build_tree(query: &FindQuery, chosen: &Candidate) -> PlanNode {
     // otherwise.
     let score_ordered = matches!(
         chosen.access,
-        Access::Vector { .. } | Access::FullText { .. }
+        Access::Vector { .. }
+            | Access::FullText { .. }
+            | Access::TextRanked { .. }
+            | Access::Hybrid { .. }
     );
     if !score_ordered && !query.order_by.is_empty() {
         node = PlanNode::Sort {
@@ -471,6 +536,80 @@ mod tests {
             panic!("expected sort");
         };
         assert!(matches!(input.as_ref(), PlanNode::Filter { .. }));
+    }
+
+    #[test]
+    fn planner_uses_bm25_full_text_index() {
+        use crate::ir::{TextOperator, TextRank, TextSearch};
+        let mut q = FindQuery::new("Doc");
+        q.text_search = Some(Box::new(TextSearch {
+            field: "body".into(),
+            query: "hello world".into(),
+            operator: TextOperator::Or,
+            rank: TextRank::Bm25,
+            k1: None,
+            b: None,
+        }));
+        q.limit = Some(5);
+        let plan = plan_find(&q, &schema(), &idx(), None, 1000);
+        assert!(matches!(plan.access, Access::TextRanked { .. }));
+        assert_eq!(plan.used_index.as_deref(), Some("body"));
+        // The BM25 access leaf sits under the limit operator.
+        let PlanNode::Limit { input, .. } = &plan.node else {
+            panic!("expected limit root, got {:?}", plan.node);
+        };
+        assert!(matches!(
+            input.as_ref(),
+            PlanNode::FullTextBm25Search { .. }
+        ));
+        // Limit-bounded estimate.
+        assert_eq!(plan.estimated_rows, 5);
+    }
+
+    #[test]
+    fn planner_uses_hybrid_plan() {
+        use crate::ir::{FusionMode, HybridSearch, HybridWeights, TextOperator};
+        let mut q = FindQuery::new("Doc");
+        q.hybrid = Some(Box::new(HybridSearch {
+            text_field: "body".into(),
+            text_query: "hello".into(),
+            vector_field: "embedding".into(),
+            vector: vec![1.0, 0.0, 0.0],
+            top_k: 7,
+            metric: None,
+            weights: HybridWeights::default(),
+            fusion: FusionMode::WeightedSum,
+            operator: TextOperator::Or,
+            k1: None,
+            b: None,
+        }));
+        let plan = plan_find(&q, &schema(), &idx(), None, 1000);
+        assert!(matches!(plan.access, Access::Hybrid { .. }));
+        assert!(matches!(plan.node, PlanNode::HybridSearch { .. }));
+        // top_k bounds the estimate.
+        assert_eq!(plan.estimated_rows, 7);
+    }
+
+    #[test]
+    fn planner_text_estimate_uses_text_stats() {
+        use crate::ir::{TextOperator, TextRank, TextSearch};
+        let mut q = FindQuery::new("Doc");
+        q.text_search = Some(Box::new(TextSearch {
+            field: "body".into(),
+            query: "hello".into(),
+            operator: TextOperator::Or,
+            rank: TextRank::Bm25,
+            k1: None,
+            b: None,
+        }));
+        let mut stats = CollectionStats {
+            row_count: 1000,
+            ..Default::default()
+        };
+        stats.text_field_docs.insert("body".into(), 40);
+        // Without an explicit limit the estimate is bounded by indexed text docs.
+        let plan = plan_find(&q, &schema(), &idx(), Some(&stats), 0);
+        assert_eq!(plan.estimated_rows, 40);
     }
 
     #[test]

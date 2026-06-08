@@ -21,12 +21,14 @@ pub mod planner;
 pub mod stats;
 
 pub use exec::{
-    execute_count, execute_exists, execute_find, explain, explain_analyze, materialize, DataSource,
-    ExplainAnalysis, ExplainPlan, PlannedFind, Strategy, VectorPlan,
+    execute_count, execute_exists, execute_find, explain, explain_analyze, materialize,
+    materialize_page, DataSource, ExplainAnalysis, ExplainPlan, HybridPlan, PlannedFind, Scored,
+    Strategy, TextSearchPlan, VectorPlan,
 };
 pub use ir::{
-    CompareOp, CountQuery, ExistsQuery, Filter, FindQuery, Mutation, MutationResult, OrderKey,
-    QueryResultPage, ReadRequest, Row, VectorSearch,
+    CompareOp, CountQuery, ExistsQuery, Filter, FindQuery, FusionMode, HybridSearch, HybridWeights,
+    Mutation, MutationResult, OrderKey, QueryResultPage, ReadRequest, Row, TextOperator, TextRank,
+    TextSearch, VectorSearch, BM25_DEFAULT_B, BM25_DEFAULT_K1,
 };
 pub use migrate::{estimate as estimate_migration, MigrationEstimate};
 pub use plan::{Access, Plan, PlanNode};

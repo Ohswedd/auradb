@@ -94,8 +94,10 @@ In a single-node cluster the sole node is always the leader and is its own
 majority, so a proposed entry is committed immediately. In the v0.5.0 multi-node
 preview, the leader replicates the entry to its peers and the write path **blocks
 until a majority commits** — a minority cannot commit, and a follower that
-receives the write returns `not_leader` rather than accepting it. Followers also
-reject reads by default. When cluster mode is disabled (the default), no
+receives the write returns `not_leader` rather than accepting it. Followers serve
+reads from their locally replicated state, but those reads are eventually consistent
+and not linearizable (send reads to the leader for fresh, correct results). When
+cluster mode is disabled (the default), no
 replicated log is attached and commits go straight to storage exactly as in
 v0.3.1.
 
@@ -278,6 +280,7 @@ is normally zero because each commit is applied inline.
   See [CLUSTERING.md](CLUSTERING.md) and [RAFT.md](RAFT.md).
 - Peer snapshot install (v0.6.0) is a **bounded, single-message** transfer, not
   chunked streaming, and targets the strictly-behind follower case.
-- No follower reads or linearizable reads; followers reject reads by default.
+- No linearizable reads or production read-consistency guarantee; followers serve
+  only eventually-consistent, non-linearizable reads (send reads to the leader).
 - No distributed transactions. Cluster mode orders commits through Raft but does
   not change single-node isolation semantics; see [TRANSACTIONS.md](TRANSACTIONS.md).

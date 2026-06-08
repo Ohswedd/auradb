@@ -42,6 +42,10 @@ pub enum Capability {
     DocumentPathIndexes,
     /// Tokenized full-text search over string fields.
     FullTextSearch,
+    /// BM25-style ranked full-text relevance search.
+    FullTextBm25Ranking,
+    /// Hybrid text-plus-vector ranked retrieval with score fusion.
+    HybridSearch,
 }
 
 impl Capability {
@@ -63,6 +67,8 @@ impl Capability {
             Capability::PersistedIndexes,
             Capability::DocumentPathIndexes,
             Capability::FullTextSearch,
+            Capability::FullTextBm25Ranking,
+            Capability::HybridSearch,
         ]
     }
 }
