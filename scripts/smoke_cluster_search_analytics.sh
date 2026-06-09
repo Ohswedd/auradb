@@ -33,6 +33,7 @@ CONF="${REPO_ROOT}/tests/conformance/python"
 # host client ports published by docker-compose.cluster.yml. Plain case lookups
 # (not associative arrays) so this runs on the stock macOS bash 3.2 too.
 ALL_ADDRS=(127.0.0.1:7171 127.0.0.1:7181 127.0.0.1:7191)
+ALL_PORTS=(7171 7181 7191)
 
 port_of_service() {
   case "$1" in
@@ -92,15 +93,37 @@ cleanup() {
 }
 trap cleanup EXIT
 
-resolve_leader_addr() {
-  # Resolve the leader's published host client address from any reachable node.
-  local seed
-  for seed in "${ALL_ADDRS[@]}"; do
-    local out
-    out="$("${AURADB}" cluster leader --addr "${seed}" --json 2>/dev/null || true)"
+# Report the role a host port's node currently recognizes for itself ("Leader",
+# "Follower", "Candidate"), from `cluster status --json`.
+node_role() {
+  local port="$1"
+  "${AURADB}" cluster status --addr "127.0.0.1:${port}" --json 2>/dev/null \
+    | grep -o '"role"[^,}]*' | grep -o '"[A-Za-z]*"$' | tr -d '"' | head -1 || true
+}
+
+# Find the host port whose node reports it is the leader, among the given host
+# ports, within a bounded deadline. Echoes "127.0.0.1:<port>", or nothing.
+#
+# This polls each node's OWN self-reported role rather than trusting a
+# "leader_client_addr" hint. The cluster advertises the leader by its in-network
+# address (e.g. "node2:7171"), which is unreachable from the host and cannot be
+# mapped to a host-published port without guessing. Polling self-reported roles
+# also rules out a STALE leader: right after the leader is stopped a survivor can
+# still name the dead node as leader until its election timeout fires, so we wait
+# until a reachable node actually reports role=Leader.
+find_leader_addr() {
+  local deadline=$(( SECONDS + 60 ))
+  while [ "${SECONDS}" -lt "${deadline}" ]; do
     local port
-    port="$(printf '%s' "${out}" | grep -o '127.0.0.1:[0-9]*' | head -1 | cut -d: -f2 || true)"
-    if [ -n "${port:-}" ]; then echo "127.0.0.1:${port}"; return 0; fi
+    for port in "$@"; do
+      local role
+      role="$(node_role "${port}")"
+      if [ "${role}" = "Leader" ] || [ "${role}" = "leader" ]; then
+        echo "127.0.0.1:${port}"
+        return 0
+      fi
+    done
+    sleep 1
   done
   return 1
 }
@@ -126,7 +149,7 @@ docker compose -f "${COMPOSE_FILE}" up -d
 
 echo "waiting for a leader (bounded poll)..."
 "${AURADB}" cluster wait-leader --addr 127.0.0.1:7171 --timeout-secs 60
-LEADER_ADDR="$(resolve_leader_addr)" || { echo "could not resolve a leader" >&2; exit 1; }
+LEADER_ADDR="$(find_leader_addr "${ALL_PORTS[@]}")" || { echo "could not resolve a leader" >&2; exit 1; }
 echo "initial leader: ${LEADER_ADDR}"
 "${AURADB}" cluster status --addr "${LEADER_ADDR}" --json
 
@@ -144,17 +167,20 @@ OLD_SERVICE="$(service_of_port "${LEADER_PORT}" || true)"
 echo "stopping the leader container (${OLD_SERVICE}) to force an election..."
 docker compose -f "${COMPOSE_FILE}" stop "${OLD_SERVICE}" >/dev/null
 
-# Find a still-running node to poll for the new leader.
-SURVIVOR=""
-for addr in "${ALL_ADDRS[@]}"; do
-  [ "${addr}" = "${LEADER_ADDR}" ] && continue
-  SURVIVOR="${addr}"; break
+# Poll the SURVIVORS only (the stopped node is unreachable) until one reports it is
+# the leader. A plain wait-leader can return the STALE leader here: a survivor keeps
+# naming the stopped node as leader until its election timeout fires, so resolving
+# by self-reported role and excluding the stopped port is what guarantees we target
+# a live new leader rather than the dead one.
+SURVIVOR_PORTS=()
+for port in "${ALL_PORTS[@]}"; do
+  [ "${port}" = "${LEADER_PORT}" ] && continue
+  SURVIVOR_PORTS+=("${port}")
 done
-echo "waiting for a new leader via ${SURVIVOR} (bounded poll)..."
-"${AURADB}" cluster wait-leader --addr "${SURVIVOR}" --timeout-secs 60
-NEW_LEADER_ADDR="$(resolve_leader_addr)" || { echo "no new leader after failover" >&2; exit 1; }
+echo "waiting for a new leader among the survivors (bounded poll)..."
+NEW_LEADER_ADDR="$(find_leader_addr "${SURVIVOR_PORTS[@]}")" || { echo "no new leader after failover" >&2; exit 1; }
 echo "new leader: ${NEW_LEADER_ADDR}"
-[ "${NEW_LEADER_ADDR}" != "${LEADER_ADDR}" ] || echo "note: leader address unchanged after stop (re-check election)"
+[ "${NEW_LEADER_ADDR}" != "${LEADER_ADDR}" ] || { echo "ERROR: the new leader matches the stopped leader address" >&2; exit 1; }
 
 # Search/facet/pagination/group-by must still pass under the new leader.
 run_analytics_suite "${NEW_LEADER_ADDR}" "post-failover leader"
