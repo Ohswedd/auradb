@@ -467,6 +467,124 @@ fn search_doc_mutation(id: i64, body: &str, vec: Vec<f32>) -> Mutation {
     }
 }
 
+/// Schema for aggregation/facet cluster tests: an indexed `category` (for the
+/// index-backed facet path) plus a full-text `body` (for search facets).
+fn agg_schema() -> CollectionSchema {
+    CollectionSchema::new("AG")
+        .with_field(FieldDef {
+            name: "id".into(),
+            field_type: FieldType::Int,
+            primary_key: true,
+            unique: true,
+            nullable: false,
+            indexed: false,
+        })
+        .with_field(FieldDef {
+            name: "category".into(),
+            field_type: FieldType::String,
+            primary_key: false,
+            unique: false,
+            nullable: false,
+            indexed: true,
+        })
+        .with_field(FieldDef::new("body", FieldType::String))
+        .with_index(IndexDef {
+            path: "body".into(),
+            kind: IndexKind::FullText,
+        })
+}
+
+fn agg_doc_mutation(id: i64, category: &str, body: &str) -> Mutation {
+    let mut f = Document::new();
+    f.insert("id".into(), Value::Int(id));
+    f.insert("category".into(), Value::Text(category.into()));
+    f.insert("body".into(), Value::Text(body.into()));
+    Mutation::Insert {
+        collection: "AG".into(),
+        fields: f,
+    }
+}
+
+/// Apply an insert through the given node's engine (blocking work off the async
+/// runtime), matching how the other cluster search tests drive leader writes.
+async fn apply_on(cluster: &TestCluster, idx: usize, mutation: Mutation) {
+    let engine = cluster.nodes[idx].engine.clone();
+    tokio::task::spawn_blocking(move || engine.apply_mutation(mutation))
+        .await
+        .unwrap()
+        .unwrap();
+}
+
+/// Poll until every node in `idxs` has replicated at least `n` rows of the `AG`
+/// collection. (The built-in `wait_*_have` helpers count the default `C`
+/// collection, so the aggregate/facet tests need their own wait on `AG`.)
+async fn wait_ag_have(cluster: &TestCluster, idxs: &[usize], n: usize, timeout: Duration) {
+    let deadline = Instant::now() + timeout;
+    loop {
+        let ok = idxs.iter().all(|&i| {
+            cluster.nodes[i]
+                .engine
+                .find(&FindQuery::new("AG"))
+                .map(|r| r.len())
+                .unwrap_or(0)
+                >= n
+        });
+        if ok {
+            return;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "nodes {idxs:?} did not replicate {n} AG rows"
+        );
+        tokio::time::sleep(Duration::from_millis(25)).await;
+    }
+}
+
+/// The cyclic category for a given id, so a churned dataset has a few distinct
+/// facet values.
+fn ag_category(id: i64) -> &'static str {
+    match id.rem_euclid(3) {
+        0 => "a",
+        1 => "b",
+        _ => "c",
+    }
+}
+
+/// Commit an AG insert through whichever of `live` currently leads, retrying on
+/// transient `not_leader` / commit-timeout conditions (mirrors the built-in
+/// `write_via_leader`, which is hard-wired to the default `C` collection).
+async fn apply_ag_via_leader(cluster: &TestCluster, live: &[usize], id: i64) {
+    let deadline = Instant::now() + Duration::from_secs(30);
+    let mut may_have_committed = false;
+    loop {
+        if let Some(li) = cluster.live_leader_index(live) {
+            let engine = cluster.nodes[li].engine.clone();
+            let mutation = agg_doc_mutation(id, ag_category(id), "alpha running boot body");
+            let result = tokio::task::spawn_blocking(move || engine.apply_mutation(mutation))
+                .await
+                .unwrap();
+            match result {
+                Ok(_) => return,
+                Err(auradb::core::Error::UniqueViolation(_)) if may_have_committed => return,
+                Err(err) => {
+                    let transient = matches!(&err, auradb::core::Error::NotLeader(_))
+                        || matches!(&err, auradb::core::Error::Internal(m)
+                            if m.contains("replication timed out"));
+                    if !transient {
+                        panic!("AG write {id} via leader {li} failed: {err}");
+                    }
+                    may_have_committed = true;
+                }
+            }
+        }
+        assert!(
+            Instant::now() < deadline,
+            "could not commit AG write {id} via a leader among {live:?} within 30s"
+        );
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn cluster_search_bm25_and_hybrid_after_replication() {
     // Search writes go through the leader and replicate; a follower rebuilds its
@@ -551,6 +669,285 @@ async fn cluster_search_bm25_and_hybrid_after_replication() {
         !cluster.nodes[follower].engine.find(&hy).unwrap().is_empty(),
         "hybrid on follower after replication"
     );
+
+    cluster.shutdown().await;
+}
+
+/// Seed the AG collection on the leader and return the leader index once a
+/// follower has replicated all `n` rows. Categories: a×3, b×2, c×1.
+async fn seed_agg_cluster(cluster: &TestCluster) -> (usize, usize) {
+    let leader = cluster.wait_for_leader(Duration::from_secs(10)).await;
+    let docs = [
+        (1i64, "a", "alpha running shoe"),
+        (2, "a", "alpha running sandal"),
+        (3, "a", "beta running boot"),
+        (4, "b", "winter boot"),
+        (5, "b", "rain boot"),
+        (6, "c", "wool sock"),
+    ];
+    for (id, cat, body) in docs {
+        apply_on(cluster, leader, agg_doc_mutation(id, cat, body)).await;
+    }
+    let follower = (0..cluster.nodes.len()).find(|&i| i != leader).unwrap();
+    wait_ag_have(cluster, &[follower], 6, Duration::from_secs(5)).await;
+    (leader, follower)
+}
+
+fn category_count_facet() -> auradb::query::AggregateQuery {
+    let mut q = auradb::query::AggregateQuery::new("AG");
+    q.facets = vec![auradb::query::FacetRequest {
+        field: "category".into(),
+        limit: None,
+    }];
+    q.metrics = vec![auradb::query::AggregateMetric {
+        op: auradb::query::AggregateOp::Count,
+        field: None,
+    }];
+    q
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn cluster_aggregate_and_facets_after_replication() {
+    // Aggregations and terms facets are computed from a node's local indexes,
+    // which a follower rebuilds from the replicated log. Follower reads are
+    // eventually consistent (not linearizable); multi-node remains an HA
+    // candidate preview, not production HA.
+    let cluster = TestCluster::start_with(3, agg_schema()).await;
+    let (_leader, follower) = seed_agg_cluster(&cluster).await;
+
+    // Count + terms facet on the follower's rebuilt indexes.
+    let result = cluster.nodes[follower]
+        .engine
+        .aggregate(&category_count_facet())
+        .unwrap();
+    assert_eq!(result.matched, 6);
+    assert_eq!(result.metrics[0].value, Value::Int(6));
+    let buckets = &result.facets[0].buckets;
+    assert_eq!(buckets[0].value, Value::Text("a".into()));
+    assert_eq!(buckets[0].count, 3);
+    assert_eq!(buckets[1].value, Value::Text("b".into()));
+    assert_eq!(buckets[1].count, 2);
+    assert_eq!(buckets[2].value, Value::Text("c".into()));
+    assert_eq!(buckets[2].count, 1);
+    // The equality index rebuilt on the follower -> index-backed facet path.
+    assert!(result.facets[0].used_index);
+
+    // A BM25 search facet over the follower's full-text index.
+    let mut sf = auradb::query::AggregateQuery::new("AG");
+    sf.text_search = Some(Box::new(auradb::query::TextSearch {
+        field: "body".into(),
+        query: "running".into(),
+        operator: auradb::query::TextOperator::Or,
+        rank: auradb::query::TextRank::Bm25,
+        k1: None,
+        b: None,
+    }));
+    sf.facets = vec![auradb::query::FacetRequest {
+        field: "category".into(),
+        limit: None,
+    }];
+    let sresult = cluster.nodes[follower].engine.aggregate(&sf).unwrap();
+    assert!(sresult.search_scoped);
+    assert_eq!(sresult.matched, 3, "three 'running' docs replicated");
+    assert_eq!(sresult.facets[0].buckets[0].value, Value::Text("a".into()));
+    assert_eq!(sresult.facets[0].buckets[0].count, 3);
+
+    cluster.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn cluster_search_page_after_replication() {
+    // Ranked pagination by cursor token works on a follower's rebuilt indexes:
+    // paging reconstructs the single-shot ranked order with no duplicates.
+    let cluster = TestCluster::start_with(3, agg_schema()).await;
+    let (_leader, follower) = seed_agg_cluster(&cluster).await;
+
+    let mut bm = FindQuery::new("AG");
+    bm.text_search = Some(Box::new(auradb::query::TextSearch {
+        field: "body".into(),
+        query: "running boot".into(),
+        operator: auradb::query::TextOperator::Or,
+        rank: auradb::query::TextRank::Bm25,
+        k1: None,
+        b: None,
+    }));
+
+    let reference: Vec<Value> = cluster.nodes[follower]
+        .engine
+        .find(&bm)
+        .unwrap()
+        .iter()
+        .map(|r| r.fields.get("id").cloned().unwrap())
+        .collect();
+    assert!(reference.len() >= 4, "several docs match 'running boot'");
+
+    // Page on the follower with page_size 2 and reconstruct the order.
+    let mut paged: Vec<Value> = Vec::new();
+    let mut cursor: Option<String> = None;
+    loop {
+        let (rows, next) = cluster.nodes[follower]
+            .engine
+            .search_page(&bm, 2, cursor.as_deref())
+            .unwrap();
+        assert!(rows.len() <= 2);
+        paged.extend(rows.iter().map(|r| r.fields.get("id").cloned().unwrap()));
+        match next {
+            Some(t) => cursor = Some(t),
+            None => break,
+        }
+    }
+    assert_eq!(
+        paged, reference,
+        "follower paging reconstructs ranked order"
+    );
+
+    cluster.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 6)]
+async fn cluster_aggregate_after_leader_change() {
+    // After a leader change, the new leader serves aggregations/facets from its
+    // own replicated state. Still an HA candidate preview, not production HA.
+    let cluster = TestCluster::start_with(3, agg_schema()).await;
+    let (leader, _follower) = seed_agg_cluster(&cluster).await;
+    // Ensure every node (including the future leader) has the data.
+    wait_ag_have(&cluster, &[0, 1, 2], 6, Duration::from_secs(5)).await;
+
+    // Stop the leader; the surviving majority elects a new one.
+    cluster.stop(leader).await;
+    let live: Vec<usize> = (0..3).filter(|&i| i != leader).collect();
+    let new_leader = cluster
+        .wait_for_live_leader(&live, Duration::from_secs(10))
+        .await;
+    assert_ne!(new_leader, leader);
+
+    let result = cluster.nodes[new_leader]
+        .engine
+        .aggregate(&category_count_facet())
+        .unwrap();
+    assert_eq!(result.matched, 6, "new leader aggregates replicated data");
+    assert_eq!(result.facets[0].buckets[0].count, 3);
+
+    cluster.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 6)]
+async fn cluster_aggregate_after_follower_restart() {
+    // A follower stopped during writes, then restarted, replays its durable log,
+    // catches up the entries it missed, and rebuilds its BM25 / equality indexes
+    // on open — so it serves aggregations/facets and ranked pagination correctly
+    // afterward.
+    let mut cluster = TestCluster::start_with(3, agg_schema()).await;
+    let ids = cluster.ids();
+    let addrs = cluster.addrs();
+    let (_leader, follower) = seed_agg_cluster(&cluster).await; // 6 rows: a3 b2 c1
+    wait_ag_have(&cluster, &[0, 1, 2], 6, Duration::from_secs(5)).await;
+
+    // Stop a follower; commit more rows it misses (a 2/3 majority still commits).
+    cluster.stop(follower).await;
+    let live: Vec<usize> = (0..3).filter(|&i| i != follower).collect();
+    apply_ag_via_leader(&cluster, &live, 7).await; // category "b"
+    apply_ag_via_leader(&cluster, &live, 9).await; // category "a"
+
+    // Restart the follower: it catches up the missed entries and rebuilds indexes.
+    cluster.restart(follower, &ids, &addrs).await;
+    wait_ag_have(&cluster, &[follower], 8, Duration::from_secs(15)).await;
+
+    let result = cluster.nodes[follower]
+        .engine
+        .aggregate(&category_count_facet())
+        .unwrap();
+    assert_eq!(result.matched, 8, "restarted follower aggregates all rows");
+    // a = 3 (ids 1,2,3) + id 9 = 4; the top bucket is still "a".
+    assert_eq!(result.facets[0].buckets[0].value, Value::Text("a".into()));
+    assert_eq!(result.facets[0].buckets[0].count, 4);
+    assert!(
+        result.facets[0].used_index,
+        "the equality index rebuilt on restart"
+    );
+
+    // Ranked pagination also works on the restarted follower.
+    let mut bm = FindQuery::new("AG");
+    bm.text_search = Some(Box::new(auradb::query::TextSearch {
+        field: "body".into(),
+        query: "running".into(),
+        operator: auradb::query::TextOperator::Or,
+        rank: auradb::query::TextRank::Bm25,
+        k1: None,
+        b: None,
+    }));
+    let (rows, _next) = cluster.nodes[follower]
+        .engine
+        .search_page(&bm, 3, None)
+        .unwrap();
+    assert!(!rows.is_empty(), "search_page works after follower restart");
+
+    cluster.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 6)]
+async fn cluster_aggregate_after_snapshot_install() {
+    // A follower that misses a long run while down — long enough that the
+    // survivors compact past the entries it needs — can only be brought current
+    // by a snapshot install, which moves the whole engine state. After the
+    // install it rebuilds its indexes and aggregates the recovered data.
+    let mut cluster = TestCluster::start_with(3, agg_schema()).await;
+    let ids = cluster.ids();
+    let addrs = cluster.addrs();
+    let leader = cluster.wait_for_leader(Duration::from_secs(15)).await;
+    let all: Vec<usize> = (0..3).collect();
+
+    // Baseline every node holds.
+    for id in 1..=20i64 {
+        apply_ag_via_leader(&cluster, &all, id).await;
+    }
+    wait_ag_have(&cluster, &all, 20, Duration::from_secs(15)).await;
+
+    // Stop a follower and commit a long run it misses.
+    let follower = (0..3).find(|&i| i != leader).unwrap();
+    cluster.stop(follower).await;
+    let live: Vec<usize> = (0..3).filter(|&i| i != follower).collect();
+    let target = 90usize;
+    for id in 21..=target as i64 {
+        apply_ag_via_leader(&cluster, &live, id).await;
+    }
+    wait_ag_have(&cluster, &live, target, Duration::from_secs(30)).await;
+
+    // Compact the survivors so the entries the follower needs are gone: the only
+    // catch-up path on rejoin is a snapshot install, not AppendEntries.
+    for &i in &live {
+        let _ = cluster.nodes[i].peer.compact_log();
+    }
+
+    // Rejoin the follower; it converges via snapshot install + index rebuild.
+    cluster.restart(follower, &ids, &addrs).await;
+    wait_ag_have(&cluster, &[follower], target, Duration::from_secs(30)).await;
+
+    // Confirm an actual snapshot install occurred (not AppendEntries) — the
+    // follower's engine reaches `target` inside the install handler a hair before
+    // the counter ticks, so poll with a bounded deadline.
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        let installed = cluster.nodes[follower].peer.snapshot_counters().1;
+        if installed >= 1 {
+            break;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "expected a snapshot install to recover the follower"
+        );
+        tokio::time::sleep(Duration::from_millis(25)).await;
+    }
+
+    let result = cluster.nodes[follower]
+        .engine
+        .aggregate(&category_count_facet())
+        .unwrap();
+    assert_eq!(
+        result.matched, target,
+        "aggregate reflects the snapshot-installed state"
+    );
+    assert!(result.facets[0].used_index, "indexes rebuilt after install");
 
     cluster.shutdown().await;
 }

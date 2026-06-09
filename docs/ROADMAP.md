@@ -18,7 +18,8 @@ deliverables.
 - **Search and ranking** (BM25 full-text and hybrid text+vector) are part of the
   single-node production line — see [SEARCH_AND_RANKING.md](SEARCH_AND_RANKING.md).
 - **Exact vector search is the correctness baseline.** Approximate
-  (ANN / HNSW) vector search is not implemented.
+  (HNSW) vector search is available as an **opt-in preview** (v1.2.0), not
+  production ANN.
 
 For what is and is not supported today, see [SUPPORT_POLICY.md](SUPPORT_POLICY.md).
 
@@ -51,19 +52,29 @@ operability of search, not the existence of search.
 - [ ] Search relevance evaluation datasets.
 - [ ] BM25 parameter (k1 / b) tuning guidance.
 - [~] Highlight / snippet support — evaluate.
-- [ ] Faceting and aggregations over result sets.
-- [ ] Search pagination stability under concurrent writes.
+- [x] Faceting and aggregations over result sets — shipped in v1.2.0 (`aggregate`
+  request: `count`/`min`/`max` metrics and terms facets, including BM25 search
+  facets, with an index-backed facet path and honest scan fallback).
+- [x] Search pagination stability under concurrent writes — stable ranked-cursor
+  *tokens* (keyset pagination) shipped in v1.2.0 end-to-end: `Engine::search_page`,
+  the `search_page` AWP request (`ranked_pagination` capability), and the connector
+  `QueryBuilder.search_pages()` helper.
 - [ ] Query-time analyzers / tokenizers.
 - [ ] Synonyms or custom analyzers.
 - [ ] Hybrid ranking calibration tooling.
 
 ## Vector search
 
-Exact vector search is the correctness baseline; approximate search is research,
-not a committed feature.
+Exact vector search is the correctness baseline; approximate search shipped as an
+opt-in preview in v1.2.0 and is hardening toward production-grade.
 
-- [ ] ANN / HNSW design and prototype behind the existing `VectorIndex` seam.
-- [ ] Recall and latency benchmark harness.
+- [x] ANN / HNSW prototype behind the `VectorIndex` seam — shipped in v1.2.0 as an
+  opt-in, recall-tested preview (`vector_ann`); exact remains the default/baseline.
+- [ ] **Persistent / incremental HNSW graphs** — the preview rebuilds the in-memory
+  graph from the exact vectors; persistence and incremental maintenance are the next
+  step toward production ANN.
+- [ ] ANN-specific `index check` / `stats analyze` (graph health, recall sampling).
+- [~] Recall and latency benchmark harness for ANN vs exact.
 - [ ] Exact-vs-ANN comparison tooling.
 - [~] Vector quantization / memory-planning research for large embedding sets.
 - [ ] Larger vector dataset tests.
@@ -77,8 +88,11 @@ operator control.
 - [ ] Histograms or richer column statistics.
 - [ ] Multi-field index planning.
 - [ ] More `EXPLAIN ANALYZE` diagnostics.
-- [ ] Query timeout / cancellation controls.
-- [~] Aggregations — evaluate scope and Query IR shape.
+- [x] Query timeout / cancellation controls — shipped in v1.2.0 as a cooperative
+  deadline (`[limits] max_query_time_ms` default + per-query `timeout_ms`,
+  structured `query_timeout`). Preemptive mid-operation cancellation remains out
+  of scope; the check is cooperative.
+- [x] Aggregations — Query IR shape settled and shipped in v1.2.0 (`aggregate`).
 
 ## Storage and durability
 

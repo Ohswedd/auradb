@@ -49,6 +49,9 @@ pub enum ErrorCode {
     LimitExceeded,
     /// An internal invariant was violated. Indicates a bug.
     Internal,
+    /// A read query exceeded its configured or per-request execution deadline and
+    /// was cooperatively cancelled. The connection remains usable.
+    QueryTimeout,
 }
 
 impl ErrorCode {
@@ -72,6 +75,7 @@ impl ErrorCode {
             ErrorCode::Io => "io",
             ErrorCode::LimitExceeded => "limit_exceeded",
             ErrorCode::Internal => "internal",
+            ErrorCode::QueryTimeout => "query_timeout",
         }
     }
 }
@@ -157,6 +161,12 @@ pub enum Error {
     /// An internal invariant was violated.
     #[error("internal error: {0}")]
     Internal(String),
+
+    /// A read query exceeded its execution deadline and was cooperatively
+    /// cancelled before completing. The message names the elapsed/limit budget.
+    /// The session and connection remain usable for subsequent requests.
+    #[error("query timed out: {0}")]
+    QueryTimeout(String),
 }
 
 impl Error {
@@ -187,7 +197,19 @@ impl Error {
             Error::Io(_) => ErrorCode::Io,
             Error::LimitExceeded(_) => ErrorCode::LimitExceeded,
             Error::Internal(_) => ErrorCode::Internal,
+            Error::QueryTimeout(_) => ErrorCode::QueryTimeout,
         }
+    }
+}
+
+impl Error {
+    /// Construct a structured [`Error::QueryTimeout`] describing the budget that
+    /// was exceeded. `elapsed_ms` is the measured execution time and `limit_ms`
+    /// the deadline that was applied.
+    pub fn query_timeout(elapsed_ms: u128, limit_ms: u64) -> Self {
+        Error::QueryTimeout(format!(
+            "execution exceeded the {limit_ms}ms deadline (elapsed ~{elapsed_ms}ms)"
+        ))
     }
 }
 
@@ -241,5 +263,20 @@ mod tests {
         let msg = Error::unsupported("raft consensus").to_string();
         assert!(msg.contains("raft consensus"));
         assert!(msg.contains("does not implement"));
+    }
+
+    #[test]
+    fn query_timeout_has_stable_code_and_shape() {
+        assert_eq!(ErrorCode::QueryTimeout.as_str(), "query_timeout");
+        let err = Error::query_timeout(1234, 1000);
+        assert_eq!(err.code(), ErrorCode::QueryTimeout);
+        let msg = err.to_string();
+        assert!(msg.contains("1000ms"), "names the limit: {msg}");
+        assert!(msg.contains("1234"), "names the elapsed time: {msg}");
+        // The code roundtrips through JSON like every other stable code.
+        let json = serde_json::to_string(&ErrorCode::QueryTimeout).unwrap();
+        assert_eq!(json, "\"query_timeout\"");
+        let back: ErrorCode = serde_json::from_str(&json).unwrap();
+        assert_eq!(back, ErrorCode::QueryTimeout);
     }
 }

@@ -370,3 +370,31 @@ They are captured in `benches/baseline/v1.1.0.json`. The new clauses are additiv
 do not change the existing hot paths, so the carried-over measurements track the v1.0.1
 baseline within run-to-run noise on the same machine and build profile. Comparison is
 warn-only and machine-specific (see `benches/baseline/README.md`).
+
+## Query-ergonomics benchmarks (v1.2.0)
+
+`benches/baseline/v1.2.0.json` adds measurements for the v1.2.0 query features alongside the
+existing ones:
+
+- `aggregate_count` — a `count` aggregation over the collection.
+- `facet_terms` — a terms facet over an equality-indexed (document-path) field.
+- `vector_ann_preview` — the opt-in approximate (HNSW) vector preview, recorded next to
+  `vector_exact_nearest` for comparison.
+- `ranked_pagination_first_page` — the first page of a BM25 ranked search via the `search_page`
+  cursor.
+
+**Honest reading of the ANN vs exact numbers.** The approximate (HNSW) preview adds
+graph-traversal overhead, so on a *small* dataset (the suite uses a few thousand low-dimension
+vectors) it is **slower** than the exact brute-force scan — exact over a few thousand short
+vectors is already trivially fast. HNSW's sub-linear scaling only pays off at large vector
+counts / high dimensionality; the preview's value at this stage is the recall/latency
+*tradeoff* (tunable via `ef_search`), not a speed-up at small scale. Treat the committed
+numbers as same-machine regression signals, not absolute performance claims — never compare
+across machines or build profiles. Generate a baseline with a **release** build; a debug build
+is many times slower and not comparable.
+
+```bash
+cargo run --release -p auradb-cli -- bench --json --output benches/baseline/v1.2.0.json
+cargo run --release -p auradb-cli -- bench compare \
+  --baseline benches/baseline/v1.1.0.json --current benches/baseline/v1.2.0.json
+```

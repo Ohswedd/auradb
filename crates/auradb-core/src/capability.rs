@@ -46,6 +46,17 @@ pub enum Capability {
     FullTextBm25Ranking,
     /// Hybrid text-plus-vector ranked retrieval with score fusion.
     HybridSearch,
+    /// Aggregations (count/min/max) and terms facets over query/search results.
+    AggregationsAndFacets,
+    /// Cooperative per-query and configured execution deadlines (`query_timeout`).
+    QueryTimeouts,
+    /// Stable ranked-search pagination by opaque keyset cursor token
+    /// (`search_page`).
+    RankedPagination,
+    /// Opt-in **approximate** vector search (HNSW) preview. Exact vector search
+    /// remains the default and the correctness baseline; this is not production
+    /// ANN.
+    ApproximateVectorSearchPreview,
 }
 
 impl Capability {
@@ -69,6 +80,10 @@ impl Capability {
             Capability::FullTextSearch,
             Capability::FullTextBm25Ranking,
             Capability::HybridSearch,
+            Capability::AggregationsAndFacets,
+            Capability::QueryTimeouts,
+            Capability::RankedPagination,
+            Capability::ApproximateVectorSearchPreview,
         ]
     }
 }

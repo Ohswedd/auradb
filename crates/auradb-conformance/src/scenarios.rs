@@ -6,8 +6,9 @@ use auradb::core::{
 };
 use auradb::core::{Error, Result};
 use auradb::query::{
-    CompareOp, CountQuery, ExistsQuery, Filter, FindQuery, FusionMode, HybridSearch, HybridWeights,
-    Mutation, TextOperator, TextRank, TextSearch, VectorSearch,
+    AggregateMetric, AggregateOp, AggregateQuery, AnnParams, CompareOp, CountQuery, ExistsQuery,
+    FacetRequest, Filter, FindQuery, FusionMode, HybridSearch, HybridWeights, Mutation,
+    TextOperator, TextRank, TextSearch, VectorSearch,
 };
 
 use crate::client::Client;
@@ -730,6 +731,177 @@ pub async fn run_all(addr: &str) -> Result<ConformanceReport> {
             let plan = client.explain(&q).await?;
             check(plan.used_index.as_deref() == Some("id"), "id index used")?;
             check(plan.plan_tree.is_some(), "plan tree present")
+        }
+        .await,
+    );
+
+    // ----- v1.2.0 query ergonomics -----
+
+    report.record(
+        "aggregate_count_min_max",
+        async {
+            // Derive the expected values from the live collection so the scenario
+            // is robust to whatever earlier scenarios inserted.
+            let rows = client.find_all(&FindQuery::new("Doc")).await?;
+            let views: Vec<i64> = rows
+                .iter()
+                .filter_map(|r| match r.fields.get("views") {
+                    Some(Value::Int(v)) => Some(*v),
+                    _ => None,
+                })
+                .collect();
+            let expect_count = rows.len() as i64;
+            let expect_min = *views.iter().min().unwrap_or(&0);
+            let expect_max = *views.iter().max().unwrap_or(&0);
+
+            let mut q = AggregateQuery::new("Doc");
+            q.metrics = vec![
+                AggregateMetric {
+                    op: AggregateOp::Count,
+                    field: None,
+                },
+                AggregateMetric {
+                    op: AggregateOp::Min,
+                    field: Some("views".into()),
+                },
+                AggregateMetric {
+                    op: AggregateOp::Max,
+                    field: Some("views".into()),
+                },
+            ];
+            let r = client.aggregate(&q).await?;
+            check(r.matched as i64 == expect_count, "count matches find_all")?;
+            check(
+                r.metrics[0].value == Value::Int(expect_count),
+                "count metric",
+            )?;
+            check(r.metrics[1].value == Value::Int(expect_min), "min views")?;
+            check(r.metrics[2].value == Value::Int(expect_max), "max views")
+        }
+        .await,
+    );
+
+    report.record(
+        "terms_facet_index_backed",
+        async {
+            // Expected buckets derived from the live data: count desc, value asc.
+            let rows = client.find_all(&FindQuery::new("Doc")).await?;
+            let mut counts: std::collections::BTreeMap<String, usize> =
+                std::collections::BTreeMap::new();
+            for row in &rows {
+                if let Some(Value::Text(s)) = row.fields.get("status") {
+                    *counts.entry(s.clone()).or_insert(0) += 1;
+                }
+            }
+            let mut expected: Vec<(String, usize)> = counts.into_iter().collect();
+            expected.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(&b.0)));
+
+            let mut q = AggregateQuery::new("Doc");
+            q.facets = vec![FacetRequest {
+                field: "status".into(),
+                limit: None,
+            }];
+            let r = client.aggregate(&q).await?;
+            let facet = &r.facets[0];
+            check(facet.used_index, "status equality index serves the facet")?;
+            let got: Vec<(String, usize)> = facet
+                .buckets
+                .iter()
+                .filter_map(|b| match &b.value {
+                    Value::Text(s) => Some((s.clone(), b.count)),
+                    _ => None,
+                })
+                .collect();
+            check(got == expected, "facet buckets match grouped data, ordered")
+        }
+        .await,
+    );
+
+    report.record(
+        "search_facet_bm25",
+        async {
+            // Facet the "raft" BM25 candidate set (d1, d2) by status.
+            let mut q = AggregateQuery::new("Doc");
+            q.text_search = Some(Box::new(TextSearch {
+                field: "body".into(),
+                query: "raft".into(),
+                operator: TextOperator::Or,
+                rank: TextRank::Bm25,
+                k1: None,
+                b: None,
+            }));
+            q.facets = vec![FacetRequest {
+                field: "status".into(),
+                limit: None,
+            }];
+            let r = client.aggregate(&q).await?;
+            check(r.search_scoped, "scoped to the BM25 candidate set")?;
+            check(r.matched == 2, "two 'raft' docs")
+        }
+        .await,
+    );
+
+    report.record(
+        "vector_ann_preview",
+        async {
+            let mut q = FindQuery::new("Doc");
+            q.vector = Some(VectorSearch {
+                field: "embedding".into(),
+                query: vec![1.0, 0.0, 0.0],
+                k: 2,
+                metric: "cosine".into(),
+            });
+            q.vector_ann = Some(AnnParams::default());
+            let rows = client.find_all(&q).await?;
+            check(rows.len() == 2, "two approximate nearest")?;
+            let plan = client.explain(&q).await?;
+            let v = plan
+                .vector
+                .ok_or_else(|| Error::Internal("missing vector plan".into()))?;
+            check(v.approximate, "EXPLAIN reports the approximate preview")
+        }
+        .await,
+    );
+
+    report.record(
+        "ranked_pagination_search_page",
+        async {
+            // Page a BM25 search over the wire by cursor token; reconstruct the
+            // full ranked order with no duplicates.
+            let mut find = FindQuery::new("Doc");
+            find.text_search = Some(Box::new(TextSearch {
+                field: "body".into(),
+                query: "raft".into(),
+                operator: TextOperator::Or,
+                rank: TextRank::Bm25,
+                k1: None,
+                b: None,
+            }));
+            let reference: Vec<String> = client
+                .find_all(&find)
+                .await?
+                .iter()
+                .filter_map(|r| match r.fields.get("id") {
+                    Some(Value::Text(s)) => Some(s.clone()),
+                    _ => None,
+                })
+                .collect();
+            let mut paged: Vec<String> = Vec::new();
+            let mut cursor: Option<String> = None;
+            loop {
+                let page = client.search_page(&find, 1, cursor.clone()).await?;
+                for row in &page.rows {
+                    if let Some(Value::Text(s)) = row.fields.get("id") {
+                        paged.push(s.clone());
+                    }
+                }
+                match page.next_cursor {
+                    Some(t) => cursor = Some(t),
+                    None => break,
+                }
+            }
+            check(!reference.is_empty(), "BM25 matched some docs")?;
+            check(paged == reference, "paging reconstructs the ranked order")
         }
         .await,
     );

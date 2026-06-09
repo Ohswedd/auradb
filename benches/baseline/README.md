@@ -19,16 +19,19 @@ number from one laptop is not comparable to a number from another.
 The benchmark opens the engine with `sync_on_commit = false` so it measures
 engine work rather than disk-flush latency. See [docs/BENCHMARKS.md](../../docs/BENCHMARKS.md).
 
-The current baseline is `v1.1.0.json`, captured on the v1.1.0 search-and-ranking
-release branch. v1.1.0 adds two new measurements — `full_text_bm25` (BM25 ranked
-full-text search) and `hybrid_search` (fused text+vector ranking) — alongside the
-existing suite. The new search clauses are additive Query IR and do not change the
-existing query, storage, or MVCC hot paths, so the carried-over measurements track
-`v1.0.1.json` within run-to-run noise on the same machine; comparison is **warn-only
-and machine-specific** (no fail threshold), and any per-benchmark delta in the
-single-digit-to-low-tens percent range on a shared developer machine is hardware
-variance — or concurrent load during capture — not a regression. The prior baseline
-is `v1.0.1.json`, before it `v1.0.0.json`, `v0.9.2.json`, `v0.9.1.json` and `v0.9.0.json`, and
+The current baseline is `v1.2.0.json`, captured on the v1.2.0 query-ergonomics
+release branch with a **release** build. v1.2.0 adds four measurements —
+`aggregate_count`, `facet_terms`, `vector_ann_preview` (the opt-in approximate HNSW
+preview, next to `vector_exact_nearest`), and `ranked_pagination_first_page` —
+alongside the existing suite. Note the approximate preview is **slower than exact at
+this small scale** (graph-traversal overhead; HNSW's sub-linear scaling only pays off
+at large vector counts) — see [docs/BENCHMARKS.md](../../docs/BENCHMARKS.md). Always
+capture with a release build (a debug build is many times slower and not comparable),
+and compare only files from the **same machine**: the v1.1.0 baseline was captured on
+different hardware, so cross-version absolute numbers here are not directly comparable
+(`auradb bench compare` warns about this). The prior baseline is `v1.1.0.json`
+(search and ranking: `full_text_bm25`, `hybrid_search`); before it `v1.0.1.json`,
+`v1.0.0.json`, `v0.9.2.json`, `v0.9.1.json` and `v0.9.0.json`, and
 before it `v0.8.1.json` and `v0.8.0.json`
 (v0.7.0 and v0.7.1 were connector-ergonomics releases that did **not** refresh the
 engine baseline). It is the single-node engine suite; multi-node

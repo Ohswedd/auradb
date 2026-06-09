@@ -25,6 +25,9 @@ fn tight_server(dir: &std::path::Path) -> Server {
             max_document_depth: 3,
             max_vector_dimension: 4,
             max_transaction_write_set: 2,
+            // A short read deadline so the timeout tests in this file trip
+            // quickly; normal-sized test queries finish well within it.
+            max_query_time_ms: 5_000,
         },
         ..Config::default()
     })

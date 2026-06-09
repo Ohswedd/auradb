@@ -552,3 +552,22 @@ In-place upgrade from v1.0.x is supported and requires no migration. The storage
 - Full-text and exact vector indexes survive restart, backup/restore, and compaction.
 
 No downgrade-incompatible on-disk change is introduced.
+
+## Upgrading to v1.2.0
+
+In-place upgrade from v1.1.x (and v1.0.x) is supported and requires **no migration or index
+rebuild**. The storage log format (v2) and index file framing are unchanged; the v1.2.0
+aggregate request and the per-query `timeout_ms` are additive Query IR with no on-disk
+footprint.
+
+- Existing data opens unchanged; aggregations and terms facets are computed on demand from
+  existing records and the existing equality/full-text indexes.
+- A `dump` → `restore` round-trip rebuilds the equality and full-text indexes; the
+  aggregate, terms-facet (including the index-backed path), search-facet, and query-timeout
+  paths produce identical results on the restored database (covered by dedicated tests).
+- **New default read deadline.** `[limits] max_query_time_ms` defaults to `30000` (30s) on
+  upgrade. Reads that intentionally run longer should set it higher or to `0` (disabled), or
+  pass a per-query `timeout_ms`. A read that exceeds the deadline returns a structured
+  `query_timeout` error without dropping the connection.
+
+No downgrade-incompatible on-disk change is introduced.

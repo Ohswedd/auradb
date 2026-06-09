@@ -4,7 +4,7 @@ AuraDB **v1.1.0** is the **search and ranking release** on the v1 single-node
 production line, with a multi-node HA candidate preview. It supports production
 single-node deployments configured with authentication, TLS, backups, monitoring,
 and the documented runbooks, and adds BM25 ranked full-text and hybrid text+vector
-search to that production line (exact vector search remains the baseline; no ANN).
+search to that production line (exact vector search remains the baseline; no production ANN).
 It is **not** production HA. **Single-node mode is the recommended production mode.**
 
 The production-support statement is **scoped**, not blanket: single-node mode, run

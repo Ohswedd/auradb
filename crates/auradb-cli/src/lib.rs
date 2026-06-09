@@ -558,15 +558,19 @@ pub fn cmd_compatibility() -> String {
             Capability::FullTextSearch => "full_text_search",
             Capability::FullTextBm25Ranking => "full_text_bm25_ranking",
             Capability::HybridSearch => "hybrid_search",
+            Capability::AggregationsAndFacets => "aggregations_and_facets",
+            Capability::QueryTimeouts => "query_timeouts",
+            Capability::RankedPagination => "ranked_pagination",
+            Capability::ApproximateVectorSearchPreview => "approximate_vector_search_preview",
         })
         .collect();
     format!(
         "AuraDB {ver}\n\
          Aura Wire Protocol: AWP {proto}\n\
          Storage format: v{storage}\n\
-         Aura Connector (tested): 0.5.0\n\
-         Aura Connector (supported): 0.5.x\n\
-         Search features: bm25, hybrid, vector_exact (ann_preview: not implemented)\n\
+         Aura Connector (tested): 0.6.0\n\
+         Aura Connector (supported): 0.5.x, 0.6.x\n\
+         Search features: bm25, hybrid, vector_exact, facets, aggregations, query_timeouts, ranked_pagination (vector_ann: opt-in HNSW preview; exact is the baseline)\n\
          Capabilities: {caps}\n\
          See docs/COMPATIBILITY.md for the full matrix.",
         ver = VERSION,
@@ -2402,6 +2406,8 @@ pub fn run_bench(data_dir: &Path, records: usize, commit: Option<String>) -> Res
     let page = 100usize;
     let pages = records.div_ceil(page).max(1);
     let paging = ops_per_sec(pages, {
+        // Capture the engine by reference so later benchmarks can still use it.
+        let engine = &engine;
         let mut off = 0usize;
         move || {
             let mut q = FindQuery::new("Bench");
@@ -2421,6 +2427,84 @@ pub fn run_bench(data_dir: &Path, records: usize, commit: Option<String>) -> Res
         unit: "ops_per_sec".into(),
         value: paging,
         iterations: pages,
+    });
+
+    // v1.2.0: aggregation (count) over the whole collection.
+    let agg_count = ops_per_sec(probes, || {
+        let mut q = auradb::query::AggregateQuery::new("Bench");
+        q.metrics = vec![auradb::query::AggregateMetric {
+            op: auradb::query::AggregateOp::Count,
+            field: None,
+        }];
+        engine.aggregate(&q)?;
+        Ok(())
+    })?;
+    m.push(BenchMeasurement {
+        name: "aggregate_count".into(),
+        unit: "ops_per_sec".into(),
+        value: agg_count,
+        iterations: probes,
+    });
+
+    // v1.2.0: terms facet over the equality-indexed document-path field.
+    let facet = ops_per_sec(probes, || {
+        let mut q = auradb::query::AggregateQuery::new("Bench");
+        q.facets = vec![auradb::query::FacetRequest {
+            field: "profile.bucket".into(),
+            limit: Some(10),
+        }];
+        engine.aggregate(&q)?;
+        Ok(())
+    })?;
+    m.push(BenchMeasurement {
+        name: "facet_terms".into(),
+        unit: "ops_per_sec".into(),
+        value: facet,
+        iterations: probes,
+    });
+
+    // v1.2.0: approximate (HNSW) vector preview — compare to vector_exact_nearest.
+    // The first call builds the in-memory graph; subsequent calls reuse the cache,
+    // so this measures steady-state approximate query throughput.
+    let ann_iters = probes.clamp(1, 200);
+    let vector_ann = ops_per_sec(ann_iters, || {
+        let mut q = FindQuery::new("Bench");
+        q.vector = Some(VectorSearch {
+            field: "embedding".into(),
+            query: vec![1.0; DIM],
+            k: 10,
+            metric: "cosine".into(),
+        });
+        q.vector_ann = Some(auradb::query::AnnParams::default());
+        engine.find(&q)?;
+        Ok(())
+    })?;
+    m.push(BenchMeasurement {
+        name: "vector_ann_preview".into(),
+        unit: "ops_per_sec".into(),
+        value: vector_ann,
+        iterations: ann_iters,
+    });
+
+    // v1.2.0: ranked pagination — first page of a BM25 search by cursor token.
+    let ranked_page = ops_per_sec(probes, || {
+        let mut q = FindQuery::new("Bench");
+        q.text_search = Some(Box::new(auradb::query::TextSearch {
+            field: "body".into(),
+            query: "alpha delta".into(),
+            operator: auradb::query::TextOperator::Or,
+            rank: auradb::query::TextRank::Bm25,
+            k1: None,
+            b: None,
+        }));
+        engine.search_page(&q, 10, None)?;
+        Ok(())
+    })?;
+    m.push(BenchMeasurement {
+        name: "ranked_pagination_first_page".into(),
+        unit: "ops_per_sec".into(),
+        value: ranked_page,
+        iterations: probes,
     });
 
     // Frame encode/decode round trip.
@@ -3214,10 +3298,23 @@ mod tests {
         assert!(out.contains("full_text_bm25_ranking"));
         assert!(out.contains("hybrid_search"));
         assert!(out.contains("Search features: bm25, hybrid, vector_exact"));
-        // v1.1.0 pairs with Aura Connector v0.5.0 tested, v0.5.x supported,
+        // v1.2.0 additions are advertised, including the opt-in HNSW vector preview.
+        assert!(out.contains("facets"));
+        assert!(out.contains("aggregations"));
+        assert!(out.contains("aggregations_and_facets"));
+        assert!(out.contains("query_timeouts"));
+        assert!(out.contains("ranked_pagination"));
+        assert!(out.contains("approximate_vector_search_preview"));
+        // ANN is now an opt-in preview; exact vector search remains the baseline,
+        // and we never claim production ANN.
+        assert!(out.contains("vector_ann: opt-in HNSW preview"));
+        assert!(out.contains("exact is the baseline"));
+        assert!(!out.contains("production ANN"));
+        // v1.2.0 pairs with Aura Connector v0.6.0 tested; v0.5.x remains
+        // supported for existing features, v0.6.x is the matching line.
         // AWP 1, storage format v2 (both preserved).
-        assert!(out.contains("Aura Connector (tested): 0.5.0"));
-        assert!(out.contains("Aura Connector (supported): 0.5.x"));
+        assert!(out.contains("Aura Connector (tested): 0.6.0"));
+        assert!(out.contains("Aura Connector (supported): 0.5.x, 0.6.x"));
         assert!(!out.contains("0.3.x"));
         assert!(out.contains(&format!("AWP {}", auradb_protocol::PROTOCOL_VERSION)));
         assert!(out.contains(&format!(

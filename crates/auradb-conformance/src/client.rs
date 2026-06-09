@@ -4,8 +4,9 @@
 
 use auradb::core::{CollectionSchema, Document, Error, ErrorCode, Result};
 use auradb::query::{
-    CountQuery, ExistsQuery, ExplainPlan, FindQuery, MigrationEstimate, Mutation, MutationResult,
-    QueryResultPage, ReadRequest, Row,
+    AggregateQuery, AggregateResult, CountQuery, ExistsQuery, ExplainPlan, FindQuery,
+    MigrationEstimate, Mutation, MutationResult, QueryResultPage, RankedPageResult, ReadRequest,
+    Row, SearchPageRequest,
 };
 use auradb_protocol::{
     AuthRequest, AuthResult, CursorCloseRequest, CursorFetchRequest, ErrorPayload, Frame,
@@ -383,6 +384,30 @@ impl Client {
         self.exists_in_txn(0, query).await
     }
 
+    /// Compute aggregations and/or terms facets over a collection (v1.2.0).
+    pub async fn aggregate(&mut self, query: &AggregateQuery) -> Result<AggregateResult> {
+        let frame = self
+            .call_json(Opcode::Query, 0, &ReadRequest::Aggregate(query.clone()))
+            .await?;
+        frame.decode_json()
+    }
+
+    /// Page a ranked search by stable cursor token (v1.2.0).
+    pub async fn search_page(
+        &mut self,
+        find: &FindQuery,
+        page_size: usize,
+        cursor: Option<String>,
+    ) -> Result<RankedPageResult> {
+        let req = ReadRequest::SearchPage(SearchPageRequest {
+            find: find.clone(),
+            page_size,
+            cursor,
+        });
+        let frame = self.call_json(Opcode::Query, 0, &req).await?;
+        frame.decode_json()
+    }
+
     /// Test whether any record matches within a transaction.
     pub async fn exists_in_txn(&mut self, txn_id: u64, query: &ExistsQuery) -> Result<bool> {
         let frame = self
@@ -475,5 +500,6 @@ fn error_from_payload(p: ErrorPayload) -> Error {
         ErrorCode::LimitExceeded => Error::LimitExceeded(p.message),
         ErrorCode::Io => Error::Internal(p.message),
         ErrorCode::Internal => Error::Internal(p.message),
+        ErrorCode::QueryTimeout => Error::QueryTimeout(p.message),
     }
 }

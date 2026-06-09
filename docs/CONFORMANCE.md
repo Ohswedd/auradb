@@ -52,9 +52,22 @@ These run as part of the conformance suite alongside the scenarios above.
 
 These run as part of `run_all` alongside the scenarios above (exercising the additive
 `text_search` and `hybrid` Query IR clauses over AWP 1), and survive the
-`data_survives_server_restart` integration test. Exact vector search remains the
-correctness baseline; there is no approximate-vector scenario because ANN is not
-implemented.
+`data_survives_server_restart` integration test.
+
+### Query-ergonomics scenarios (1.2.0)
+
+- **`aggregate_count_min_max`** - the `aggregate` request returns `count`/`min`/`max`
+  metrics matching the live collection.
+- **`terms_facet_index_backed`** - a terms facet over an equality-indexed field is
+  served from the index (`used_index`) with deterministic count-desc / value-asc buckets.
+- **`search_facet_bm25`** - a facet scoped to a BM25 candidate set (`search_scoped`).
+- **`vector_ann_preview`** - an opt-in approximate (HNSW) vector query returns neighbours
+  and `EXPLAIN` reports `approximate`. Exact vector search remains the correctness baseline.
+- **`ranked_pagination_search_page`** - paging a ranked search by `search_page` cursor
+  token over the wire reconstructs the full ranked order with no duplicates.
+
+These exercise the additive `aggregate` / `search_page` read requests and the
+`vector_ann` option over AWP 1.
 
 The Python connector search harness `tests/conformance/python/run_connector_search.py`
 drives BM25, exact vector, and hybrid search and capability negotiation against a live

@@ -184,6 +184,12 @@ pub struct LimitsConfig {
     pub max_vector_dimension: usize,
     /// Maximum number of writes that may be staged in a single transaction.
     pub max_transaction_write_set: usize,
+    /// Default maximum wall-clock execution time for a single read query, in
+    /// milliseconds. A read that runs past this budget is cooperatively
+    /// cancelled with a structured `query_timeout` error; the connection stays
+    /// usable. A per-query `timeout_ms` may lower (but not raise) this bound.
+    /// `0` disables the default deadline (queries run until they complete).
+    pub max_query_time_ms: u64,
 }
 
 fn default_max_query_limit() -> usize {
@@ -201,6 +207,12 @@ fn default_max_vector_dimension() -> usize {
 fn default_max_transaction_write_set() -> usize {
     100_000
 }
+fn default_max_query_time_ms() -> u64 {
+    // 30 seconds: generous enough that normal reads never trip it, low enough
+    // that a pathological scan cannot pin a worker indefinitely. Operators can
+    // raise it, lower it, or set 0 to disable the default deadline entirely.
+    30_000
+}
 
 impl Default for LimitsConfig {
     fn default() -> Self {
@@ -210,6 +222,7 @@ impl Default for LimitsConfig {
             max_document_depth: default_max_document_depth(),
             max_vector_dimension: default_max_vector_dimension(),
             max_transaction_write_set: default_max_transaction_write_set(),
+            max_query_time_ms: default_max_query_time_ms(),
         }
     }
 }
