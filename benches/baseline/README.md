@@ -20,7 +20,10 @@ The benchmark opens the engine with `sync_on_commit = false` so it measures
 engine work rather than disk-flush latency. See [docs/BENCHMARKS.md](../../docs/BENCHMARKS.md).
 
 The current baseline is `v1.2.0.json`, captured on the v1.2.0 query-ergonomics
-release branch with a **release** build. v1.2.0 adds four measurements —
+release branch with a **release** build. v1.2.1 is a conformance and documentation
+hardening release with no engine or performance changes, so it carries the v1.2.0
+baseline forward unchanged (no new baseline file is added). v1.2.0 adds four
+measurements —
 `aggregate_count`, `facet_terms`, `vector_ann_preview` (the opt-in approximate HNSW
 preview, next to `vector_exact_nearest`), and `ranked_pagination_first_page` —
 alongside the existing suite. Note the approximate preview is **slower than exact at

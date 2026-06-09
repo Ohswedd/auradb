@@ -69,6 +69,50 @@ These run as part of `run_all` alongside the scenarios above (exercising the add
 These exercise the additive `aggregate` / `search_page` read requests and the
 `vector_ann` option over AWP 1.
 
+### Live v1.2 connector conformance (1.2.1)
+
+AuraDB v1.2.1 adds over-the-wire connector-driven harnesses that exercise the v1.2
+query features against a **running server** through the published Aura Connector
+v0.6.1 API (never the in-memory backend). Each prints a `PASS`/`FAIL` line per check
+and exits non-zero on failure:
+
+- **`run_connector_facets.py`** — terms facets (basic, limit, deterministic
+  count-desc / value-asc tie-break), `count`/`min`/`max` aggregations (all and
+  filtered), BM25 search-scoped facets, and a clear capability error on a backend
+  that cannot serve them (≥ 8 checks).
+- **`run_connector_pagination.py`** — ranked pagination by stable cursor token:
+  duplicate-free pages across BM25, hybrid, and exact-vector ranking, cursor-token
+  presence, structured invalid-cursor rejection, and transaction-snapshot stability
+  guidance (≥ 7 checks).
+- **`run_connector_timeouts.py`** — per-query `timeout_ms` acceptance, a real 1ms
+  full-scan that returns a structured `query_timeout` error, that the connection
+  survives a timeout, and the cooperative nature documented honestly (≥ 5 checks).
+
+The non-cluster scripts run in the `Conformance` workflow's `connector` job against a
+live server using the paired connector. They require Aura Connector **v0.6.1**, which
+forwards the per-query `timeout_ms` to the wire so `.timeout(ms)` is enforced by
+AuraDB (v0.6.0 silently dropped it for the AuraDB backend; the timeout harness fails
+on v0.6.0).
+
+**Cluster variants are operator-run, not CI-gated.**
+`run_connector_facets_cluster.py`, `run_connector_pagination_cluster.py`, and
+`run_connector_timeouts_cluster.py` drive the same features against a `--leader` and
+`--follower`, assert leader-only writes (`AuraNotLeaderError`), redirect-preserves-query,
+and feature correctness after a leader change (with `--candidate-addrs`), and record
+follower reads as **eventually consistent, never linearizable**. Their leader-change
+step requires stopping a node and the timeout variant seeds a large replicated dataset,
+so they are run by an operator against a local cluster rather than gated as required CI.
+Launch a loopback cluster (`bash scripts/smoke_cluster_loopback.sh` starts three nodes
+from `examples/cluster/node{1,2,3}.toml`) and run, for example:
+
+```bash
+python tests/conformance/python/run_connector_facets_cluster.py \
+  --leader 127.0.0.1:7171 --follower 127.0.0.1:7181 \
+  --candidate-addrs 127.0.0.1:7171,127.0.0.1:7181,127.0.0.1:7191
+```
+
+Multi-node remains an HA candidate preview, **not production HA**.
+
 The Python connector search harness `tests/conformance/python/run_connector_search.py`
 drives BM25, exact vector, and hybrid search and capability negotiation against a live
 server through Aura Connector v0.5.0. For cluster mode,

@@ -1,11 +1,14 @@
 # AuraDB v1.0 support policy
 
-> **AuraDB v1.1.0 supports production single-node deployments when configured
+> **AuraDB v1.2.1 supports production single-node deployments when configured
 > with auth, TLS, backups, monitoring, and the documented runbooks. Multi-node
-> static clustering remains an HA candidate preview, not production HA. v1.1.0 adds
-> BM25 ranked full-text and hybrid text+vector search to the single-node production
-> line; exact vector search remains the default and correctness baseline (approximate
-> ANN/HNSW vector search is an opt-in preview, not production ANN).**
+> static clustering remains an HA candidate preview, not production HA. The
+> single-node production line carries BM25 ranked full-text and hybrid text+vector
+> search, exact vector search (the default and correctness baseline), aggregations,
+> terms facets, ranked pagination, and cooperative query timeouts; approximate
+> ANN/HNSW vector search is an opt-in preview, not production ANN. v1.2.1 itself is
+> a conformance and documentation hardening release that adds no features over
+> v1.2.0.**
 
 This document is the authoritative statement of what AuraDB v1.0 supports, at what
 level, and for how long. It is written to be precise rather than expansive: a
@@ -21,7 +24,7 @@ compatibility matrix in [COMPATIBILITY.md](COMPATIBILITY.md).
 
 ## Production support statement
 
-AuraDB v1.1.0 supports production **single-node** deployments when configured with
+AuraDB v1.2.1 supports production **single-node** deployments when configured with
 authentication, TLS, scheduled backups with a rehearsed restore, monitoring, and
 the documented runbooks. This is the recommended production deployment mode.
 
@@ -43,6 +46,14 @@ These are validated and supported for production single-node use, run per the
   is available as an **opt-in preview** (v1.2.0) — in-memory/rebuilt, not
   persisted/incremental and **not production ANN**; exact search remains the
   correctness baseline. See [SEARCH_AND_RANKING.md](SEARCH_AND_RANKING.md).
+- **Query ergonomics (v1.2.0)** — aggregations (`count`/`min`/`max`), terms facets
+  (including BM25 search-scoped facets, with deterministic count-desc / value-asc
+  ordering), ranked pagination by stable cursor token, and cooperative per-query
+  timeouts (the per-query `timeout_ms` lowers but never raises the configured
+  maximum; reads poll the deadline and return a structured `query_timeout`). These
+  are additive Query IR over the unchanged AWP 1; v1.2.1 adds live over-the-wire
+  conformance coverage for them. See [QUERY_ENGINE.md](QUERY_ENGINE.md) and
+  [CONFORMANCE.md](CONFORMANCE.md).
 - **Authentication and TLS for network exposure** — enforced static-token auth
   (Argon2id) and server-terminated TLS with optional mutual TLS (rustls), both
   fail-closed. See [SECURITY.md](SECURITY.md).
@@ -51,7 +62,8 @@ These are validated and supported for production single-node use, run per the
   directory, with `auradb check` consistency reporting.
 - **Upgrade** from all documented supported release fixtures (see
   [UPGRADING.md](UPGRADING.md) and `tests/fixtures/`).
-- **Aura Connector v0.5.0** (and compatible 0.5.x).
+- **Aura Connector v0.6.1** (and compatible 0.6.x); 0.6.0 remains supported, and
+  0.5.x remains supported for the pre-1.2 feature set.
 - **Aura Wire Protocol 1 (AWP 1)** compatibility within v1.x, unless a security or
   correctness issue requires a documented change.
 - **Storage format v2** compatibility within v1.x, unless a safety, corruption, or

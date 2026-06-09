@@ -1,9 +1,14 @@
 # AuraDB Compatibility Matrix
 
-This document records what AuraDB v1.2.0 implements and how it interoperates with
-the Aura Connector client library and the Aura Wire Protocol (AWP). AuraDB v1.2.0
+This document records what AuraDB v1.2.1 implements and how it interoperates with
+the Aura Connector client library and the Aura Wire Protocol (AWP). AuraDB v1.2.1 is a
+**conformance and documentation hardening** release: it adds no database or query
+features over v1.2.0 and preserves AWP 1, storage format v2, and the v1.2.0 feature
+set unchanged. It adds live over-the-wire conformance scripts for the v1.2 features
+(facets, aggregations, ranked pagination, cooperative query timeouts) and refreshes
+the support and production documentation. AuraDB v1.2.x
 continues the **v1 single-node production line**: on top of the v1.1.0 search and
-ranking surface it adds aggregations, terms facets, and cooperative query timeouts,
+ranking surface it carries aggregations, terms facets, and cooperative query timeouts,
 while remaining a production single-node deployment configured with auth, TLS,
 backups, monitoring, and the documented runbooks. Multi-node static clustering
 remains an HA candidate preview, **not a production HA guarantee**. The aggregate
@@ -38,7 +43,8 @@ v0.4.x. Single-node mode remains the recommended production mode.
 
 | AuraDB | Aura Connector | Protocol | Status |
 | ------ | -------------- | -------- | ------ |
-| 1.2.0  | 0.6.0          | AWP 1    | Supported, recommended (query ergonomics release: aggregations, terms facets, cooperative query timeouts; single-node production line; multi-node HA candidate preview, not production HA; aggregate request and per-query `timeout_ms` are additive Query IR; AWP 1 and storage format v2 unchanged; exact vector search is the default and correctness baseline, with an opt-in approximate (HNSW) vector preview — in-memory/rebuilt, not production ANN). Connector 0.5.x remains supported for pre-1.2 features. |
+| 1.2.1  | 0.6.1          | AWP 1    | Supported, recommended (conformance and documentation hardening over 1.2.0: adds live over-the-wire conformance scripts for facets, aggregations, ranked pagination, and cooperative query timeouts, and refreshes support/production docs; no new database or query features; AWP 1, storage format v2, and the v1.2.0 feature set unchanged; exact vector search remains the default and correctness baseline, with the opt-in approximate (HNSW) vector preview — in-memory/rebuilt, not production ANN). Connector 0.6.0 remains supported; 0.5.x remains supported for pre-1.2 features. |
+| 1.2.0  | 0.6.0          | AWP 1    | Supported (query ergonomics release: aggregations, terms facets, cooperative query timeouts; single-node production line; multi-node HA candidate preview, not production HA; aggregate request and per-query `timeout_ms` are additive Query IR; AWP 1 and storage format v2 unchanged; exact vector search is the default and correctness baseline, with an opt-in approximate (HNSW) vector preview — in-memory/rebuilt, not production ANN). Connector 0.5.x remains supported for pre-1.2 features. |
 | 1.1.0  | 0.5.0          | AWP 1    | Supported (search and ranking release: BM25 ranked full-text, hybrid text+vector; single-node production line; multi-node HA candidate preview, not production HA; new clauses are additive Query IR/response fields; AWP 1 and storage format v2 unchanged; exact vector search only, no ANN) |
 | 1.0.1  | 0.4.1          | AWP 1    | Supported (first production patch on the v1.0 single-node production line; multi-node HA candidate preview, not production HA; no new config, architecture, or semantics over 1.0.0; connector unchanged; AWP 1 and storage format v2 frozen for v1) |
 | 1.0.0  | 0.4.1          | AWP 1    | Supported (single-node production release; multi-node HA candidate preview, not production HA; no new config, architecture, or semantics over 0.9.2; connector unchanged; AWP 1 and storage format v2 frozen for v1) |

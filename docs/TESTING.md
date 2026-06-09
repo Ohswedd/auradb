@@ -584,3 +584,33 @@ The search and ranking surface is covered at every layer:
 - **Conformance** (`crates/auradb-conformance`): `text_search_bm25`, `hybrid_search`, and
   `search_explain_analyze` scenarios run by `run_all`, plus the Python
   `run_connector_search.py` harness against a live server.
+
+## Live v1.2 connector conformance (v1.2.1)
+
+v1.2.1 is a conformance and documentation hardening release. It adds **no** database or
+query features over v1.2.0 and changes no behavior; it adds over-the-wire harnesses that
+exercise the v1.2 query features against a running server through the published Aura
+Connector v0.6.1 API:
+
+- **`tests/conformance/python/run_connector_facets.py`** — terms facets (basic, limit,
+  deterministic tie-break), `count`/`min`/`max` aggregations (all and filtered), and BM25
+  search-scoped facets (≥ 8 checks).
+- **`tests/conformance/python/run_connector_pagination.py`** — ranked pagination by stable
+  cursor token: duplicate-free pages across BM25/hybrid/exact-vector, cursor-token presence,
+  structured invalid-cursor rejection, and transaction-snapshot stability (≥ 7 checks).
+- **`tests/conformance/python/run_connector_timeouts.py`** — per-query `timeout_ms`
+  acceptance, a real 1ms full-scan returning a structured `query_timeout` error, and
+  connection survival after a timeout (≥ 5 checks). Requires Aura Connector **v0.6.1**, which
+  forwards `timeout_ms` to the wire (v0.6.0 dropped it for the AuraDB backend).
+
+These three run in the `Conformance` workflow's `connector` job against a live server.
+
+**Cluster variants are operator-run, not CI-gated.** `run_connector_facets_cluster.py`,
+`run_connector_pagination_cluster.py`, and `run_connector_timeouts_cluster.py` take
+`--leader`/`--follower` (and optional `--candidate-addrs`), assert leader-only writes,
+redirect-preserves-query, feature correctness after a leader change, and record follower
+reads as eventually consistent (never linearizable). Their leader-change step requires
+stopping a node, and the timeout variant seeds a large replicated dataset, so they are run
+against a local cluster (e.g. `scripts/smoke_cluster_loopback.sh`) rather than gated as
+required CI. Multi-node remains an HA candidate preview, **not production HA**. See
+[CONFORMANCE.md](CONFORMANCE.md).

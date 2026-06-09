@@ -4,6 +4,76 @@ All notable changes to AuraDB are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and the project uses
 [Semantic Versioning](https://semver.org/).
 
+## [1.2.1] - 2026-06-09
+
+**Conformance and documentation hardening — single-node production line, multi-node HA
+candidate preview.** AuraDB v1.2.1 is a hardening release: it adds **no** database or query
+features over v1.2.0 and changes no product behavior. It adds live over-the-wire conformance
+scripts that exercise the v1.2 features (facets, aggregations, ranked pagination, cooperative
+query timeouts) end-to-end through the Aura Connector, wires them into the conformance
+workflow, and refreshes the support and production documentation to enumerate the v1.2
+feature set honestly. **Aura Wire Protocol 1, storage format v2, and the v1.2.0 feature set
+stay unchanged.** Aura Connector **v0.6.1** (compatible 0.6.x; 0.6.0 still supported; 0.5.x
+still supported for existing features) is the paired client. See
+[docs/V1_2_1_RELEASE_NOTES.md](docs/V1_2_1_RELEASE_NOTES.md) and
+[docs/CONFORMANCE.md](docs/CONFORMANCE.md).
+
+### Added
+
+- **Live v1.2 conformance scripts.** New over-the-wire conformance harnesses drive a running
+  server through the Aura Connector: `run_connector_facets.py` (terms facets and
+  count/min/max aggregations, including BM25-scoped facets), `run_connector_pagination.py`
+  (ranked pagination by stable cursor token, duplicate-free pages, structured invalid-cursor
+  rejection), and `run_connector_timeouts.py` (per-query `timeout_ms` acceptance, the
+  `query_timeout` error shape, and connection survival after a timeout). Cluster variants
+  (`run_connector_facets_cluster.py`, `run_connector_pagination_cluster.py`,
+  `run_connector_timeouts_cluster.py`) drive the same features through a leader and document
+  eventually-consistent follower-read behavior.
+- **CI wiring.** The conformance workflow runs the new single-node scripts against a live
+  server using the paired connector; the cluster variants are documented as operator-run
+  (their leader-change steps require stopping a node) in
+  [docs/CONFORMANCE.md](docs/CONFORMANCE.md) and [docs/TESTING.md](docs/TESTING.md).
+
+### Documentation
+
+- `docs/SUPPORT_POLICY.md` and `docs/PRODUCTION_READINESS.md` now enumerate the full v1.2
+  single-node production feature set (BM25/hybrid/exact-vector search, aggregations, terms
+  facets, ranked pagination, cooperative query timeouts, backup/restore, auth/TLS,
+  monitoring, diagnostics) and clearly separate production-supported from preview (opt-in
+  HNSW/ANN, multi-node HA candidate) and explicitly unsupported (production ANN, production
+  HA, dynamic membership, linearizable follower reads, distributed transactions, sharding,
+  multi-region).
+- Compatibility, conformance, and release docs record the 1.2.1 ↔ 0.6.1 pairing and the live
+  conformance coverage.
+
+### Unchanged
+
+- **Aura Wire Protocol 1** and **storage format v2** are frozen; no wire or on-disk changes.
+  v1.2.0, v1.1, and v1.0 data open unchanged with no required rebuild.
+- The v1.2.0 query feature set (aggregations, terms facets, cooperative query timeouts,
+  ranked pagination, opt-in HNSW vector preview) is carried forward byte-for-byte.
+- Single-node production support; multi-node HA candidate preview (not production HA).
+- **Exact vector search remains the correctness baseline.** Approximate (HNSW) vector search
+  is an **opt-in preview**, not production ANN.
+
+### Known limitations
+
+Honest limitations carried by this release (unchanged scope boundaries):
+
+- **Multi-node is an HA candidate preview, not production HA.** No production automatic
+  failover, no linearizable follower reads (follower reads/search are eventually consistent),
+  no distributed transactions, and no dynamic membership, sharding, or multi-region.
+  Single-node remains the recommended production mode.
+- **Approximate (HNSW) vector search is an opt-in preview, not production ANN.** The graph is
+  in-memory and rebuilt from the exact vectors (never persisted; not incremental). Exact
+  vector search remains the default and the correctness baseline.
+- **Query timeouts are cooperative, not preemptive.** Reads poll the deadline on their
+  candidate/scan loop, so cancellation is "soon after" the deadline rather than instantaneous.
+- **Ranked-pagination cursor stability under concurrent writes.** Vector cursors are
+  duplicate-free across concurrent writes; BM25/hybrid ranked pagination is stable only when
+  paged inside a transaction snapshot. The connector iterates cursors internally; resuming a
+  ranked page from an externally held cursor token is not part of the public API.
+
 ## [1.2.0] - 2026-06-09
 
 **Query ergonomics and operational hardening — single-node production line, multi-node HA
