@@ -326,6 +326,21 @@ points at and how to resolve it. v0.6.2 hardens repeated chaos and larger-state
 recovery in the preview but adds no production-HA claim; **single-node mode
 remains the recommended production mode.**
 
+## Query diagnostics (v1.3.0)
+
+For debugging a slow or unexpected query, `EXPLAIN ANALYZE` adds additive query-profile
+fields: a deterministic `plan_id` (the same query shape yields the same id, so repeated slow
+queries correlate), the cooperative `deadline_ms` in effect (or `null`), and a
+`timeout_checked` flag. The query payload is never echoed into the plan. Inspect a query's
+plan without a client with `auradb search explain --input query.json --analyze`.
+
+To evaluate the opt-in approximate (HNSW) preview before relying on it, `auradb vector eval`
+measures recall@k and latency against the exact baseline over a deterministic query set and
+emits JSON. The numbers are dataset- and machine-specific — a same-machine diagnostic for
+tuning `ef_search`, never a universal claim. Exact vector search remains the default and the
+correctness baseline. See [VECTORS.md](VECTORS.md), [OBSERVABILITY.md](OBSERVABILITY.md), and
+[CLI.md](CLI.md).
+
 ## Upgrading
 
 Upgrading is a drop-in binary replacement; the storage format is unchanged at v2.

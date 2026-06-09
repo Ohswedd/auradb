@@ -2,12 +2,33 @@
 
 This document is the connector-focused companion to the
 [Compatibility Matrix](COMPATIBILITY.md). It records which Aura Connector release
-talks to AuraDB 1.2.1, what it can drive, and what it cannot.
+talks to AuraDB 1.3.0, what it can drive, and what it cannot.
 
 > **AuraDB v0.7.x adds connector cluster ergonomics for the controlled multi-node
 > preview. It is _not_ production HA — there is no automatic failover,
 > linearizable follower reads, or distributed transactions. Single-node mode
 > remains the recommended production mode.**
+
+## Connector support (v1.3.0)
+
+AuraDB v1.3.0 uses **Aura Wire Protocol 1**, frozen for the v1.x line. The
+**supported, tested connector is Aura Connector v0.7.0** (and compatible 0.7.x;
+0.6.x remains supported and is **backward compatible with 0.6.1** for the existing
+feature set). It drives the v1.1 search and ranking APIs and the v1.2
+query-ergonomics surface, plus the v1.3.0 additions: **GROUP BY aggregations**
+(additive `group_by`/`group_limit` and the `avg` metric on the existing `aggregate`
+request), the **EXPLAIN ANALYZE query-profile fields** (`plan_id`, `deadline_ms`,
+`timeout_checked`), and the matured opt-in approximate-vector preview — durable
+lifecycle metadata (an additive index-snapshot field; the graph itself is still never
+persisted), the `ann_fallback` policy (`exact` default / `error`), and the `EXPLAIN`
+`vector_mode` field. All of these ride additive Query IR, response fields, and
+index-snapshot fields, so AWP 1, storage format v2, and the index snapshot format
+version (1) are unchanged: a connector that predates them simply omits and ignores
+them. Exact vector search remains the default and correctness baseline; approximate
+(HNSW) vector search is an opt-in preview — never persisted, rebuilt in memory on use,
+not production ANN. The `auradb vector eval` recall/latency harness is an operator CLI
+command, not a connector API. Multi-node leader-redirect ergonomics remain an HA
+candidate preview, not production HA.
 
 ## Connector support (v1.2.1)
 

@@ -162,6 +162,15 @@ payload, then a JSON payload. An `INDEX_MANIFEST.json` tracks the set.
 The persisted kinds are primary key, unique, secondary, document-path,
 full-text, and exact vector. See [INDEXING.md](INDEXING.md).
 
+As of v1.3.0 the snapshot additionally carries, per vector field, the opt-in
+approximate (HNSW) preview's **lifecycle metadata** — the field, its dimension, the
+indexed-vector count, and a generation marker — as an additive field inside the same
+CRC-protected frame. The **index snapshot format version stays at 1** (older readers
+ignore the field; snapshots written before v1.3.0 load with empty metadata). The
+approximate graph itself is **not persisted**: it rebuilds in memory from the exact
+vectors on first use, so storage format v2 and the manifest `format_version` (2) are
+unchanged. See [VECTORS.md](VECTORS.md).
+
 ## Structured consistency report
 
 `auradb check --json` (v0.8.0) surfaces a structured consistency report across the

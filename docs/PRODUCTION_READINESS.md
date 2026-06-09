@@ -1,15 +1,16 @@
 # Production readiness
 
-AuraDB **v1.2.1** is a **conformance and documentation hardening** release on the v1
-single-node production line, with a multi-node HA candidate preview. It supports
-production single-node deployments configured with authentication, TLS, backups,
-monitoring, and the documented runbooks. The production line carries BM25 ranked
-full-text and hybrid text+vector search, exact vector search (the baseline),
-aggregations, terms facets, ranked pagination, and cooperative query timeouts
-(exact vector search remains the correctness baseline; no production ANN). v1.2.1
-adds **no** features over v1.2.0 — it adds live over-the-wire conformance coverage
-for the v1.2 features and refreshes this documentation. It is **not** production HA.
-**Single-node mode is the recommended production mode.**
+AuraDB **v1.3.0** is a **query ergonomics, vector-preview durability, and query
+observability** release on the v1 single-node production line, with a multi-node HA
+candidate preview. It supports production single-node deployments configured with
+authentication, TLS, backups, monitoring, and the documented runbooks. The production
+line carries BM25 ranked full-text and hybrid text+vector search, exact vector search
+(the baseline), aggregations (including GROUP BY), terms facets, ranked pagination,
+and cooperative query timeouts (exact vector search remains the correctness baseline;
+no production ANN). v1.3.0 adds GROUP BY aggregations, EXPLAIN ANALYZE query-profile
+fields, and durable approximate-preview lifecycle metadata with an exact-fallback
+policy — all additive over v1.2. It is **not** production HA. **Single-node mode is
+the recommended production mode.**
 
 The production-support statement is **scoped**, not blanket: single-node mode, run
 with the checklist below (authentication, TLS, scheduled backups with a rehearsed
@@ -20,9 +21,12 @@ controlled static-cluster preview with strong release-candidate evidence, valida
 against a failure matrix — and is **not** production HA: no production automatic
 failover, no linearizable follower reads, no distributed transactions, no dynamic
 membership, no sharding, no multi-region. The v1.2 query features (aggregations,
-terms facets, ranked pagination, cooperative query timeouts) ride additive Query IR
-on the single-node production line, and v1.2.1 changes none of this scope: it keeps
-the AWP 1 and storage format v2 compatibility surfaces, the upgrade guarantee, the
+terms facets, ranked pagination, cooperative query timeouts) and the v1.3.0 additions
+(GROUP BY aggregations, EXPLAIN ANALYZE query-profile fields, and durable
+approximate-preview lifecycle metadata with an exact-fallback policy) ride additive
+Query IR, ANALYZE JSON, and index-snapshot fields on the single-node production line,
+and v1.3.0 keeps this scope: it preserves the AWP 1, storage format v2, and index
+snapshot format version (1) compatibility surfaces, the upgrade guarantee, the
 backup/restore release gate, and the security review unchanged.
 
 The authoritative support boundary is [SUPPORT_POLICY.md](SUPPORT_POLICY.md). The
@@ -31,9 +35,9 @@ requires, the validated failure matrix, and the **strict criteria that must be m
 and documented before AuraDB ever claims production HA** are in
 [HA_RELEASE_CANDIDATE.md](HA_RELEASE_CANDIDATE.md) and the
 [v1.0 decision checklist](V1_0_DECISION_CHECKLIST.md). None of those production-HA
-criteria are met in v1.2.1; multi-node remains an HA candidate preview.
+criteria are met in v1.3.0; multi-node remains an HA candidate preview.
 
-**Frozen for v1.** AuraDB v1.2.1 uses Aura Wire Protocol 1 and storage format v2.
+**Frozen for v1.** AuraDB v1.3.0 uses Aura Wire Protocol 1 and storage format v2.
 AWP 1 is the stable v1 wire protocol and storage format v2 is the stable v1
 single-node storage format; AuraDB v1.x preserves both unless a security,
 correctness, safety, or corruption issue requires a documented change or migration.

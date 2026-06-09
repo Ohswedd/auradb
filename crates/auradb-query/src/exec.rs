@@ -85,8 +85,8 @@ impl Deadline {
 
 use crate::eval;
 use crate::ir::{
-    CountQuery, ExistsQuery, FindQuery, FusionMode, HybridSearch, OrderKey, Row, TextRank,
-    TextSearch, BM25_DEFAULT_B, BM25_DEFAULT_K1,
+    AnnFallback, AnnParams, CountQuery, ExistsQuery, FindQuery, FusionMode, HybridSearch, OrderKey,
+    Row, TextRank, TextSearch, ANN_PREVIEW_MIN_VECTORS, BM25_DEFAULT_B, BM25_DEFAULT_K1,
 };
 use crate::plan::{Access, PlanNode};
 use crate::planner;
@@ -211,6 +211,33 @@ pub struct ExplainAnalysis {
     /// plan is still correct; the cost choice may be suboptimal).
     #[serde(default)]
     pub stale_stats: bool,
+    /// A stable, deterministic identifier for the chosen plan shape (collection,
+    /// strategy, and seed index). The same query shape yields the same id across
+    /// runs, so it can group profiles in dashboards. v1.3.0+.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub plan_id: Option<String>,
+    /// The cooperative execution deadline in effect, in milliseconds, or `None`
+    /// when the query carried no timeout. v1.3.0+.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub deadline_ms: Option<u64>,
+    /// Whether a cooperative deadline was active and polled during execution. The
+    /// timeout remains cooperative (checked at bounded intervals). v1.3.0+.
+    #[serde(default)]
+    pub timeout_checked: bool,
+}
+
+/// A stable, deterministic plan identifier from the plan's shape (not its data).
+fn plan_id_for(plan: &ExplainPlan) -> String {
+    let shape = format!(
+        "{}|{:?}|{:?}",
+        plan.collection, plan.strategy, plan.used_index
+    );
+    let mut h: u64 = 0xcbf2_9ce4_8422_2325;
+    for b in shape.as_bytes() {
+        h ^= *b as u64;
+        h = h.wrapping_mul(0x0000_0100_0000_01b3);
+    }
+    format!("plan-{h:016x}")
 }
 
 /// Vector clause summary in an EXPLAIN plan.
@@ -235,6 +262,15 @@ pub struct VectorPlan {
     /// The HNSW `efSearch` beam width used, when `approximate` is true.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ef_search: Option<usize>,
+    /// The resolved vector execution mode: `exact` (baseline), `ann_preview`
+    /// (approximate preview served the query), or `exact_fallback` (approximate
+    /// was requested but the preview was unavailable, so exact served it). v1.3.0+.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub vector_mode: Option<String>,
+    /// Whether an approximate request fell back to exact search because the
+    /// preview was unavailable for this field. v1.3.0+.
+    #[serde(default)]
+    pub exact_fallback: bool,
 }
 
 /// Ranked full-text clause summary in an EXPLAIN plan.
@@ -356,6 +392,57 @@ struct Selection {
     hybrid: Option<HybridPlan>,
 }
 
+/// The resolved vector execution mode for a query.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum VectorMode {
+    /// Exact search — the default and the correctness baseline.
+    Exact,
+    /// The approximate (HNSW) preview served the query.
+    AnnPreview,
+    /// Approximate was requested but the preview was unavailable, so exact served
+    /// the query under the `ann_fallback = exact` policy.
+    ExactFallback,
+}
+
+impl VectorMode {
+    fn name(self) -> &'static str {
+        match self {
+            VectorMode::Exact => "exact",
+            VectorMode::AnnPreview => "ann_preview",
+            VectorMode::ExactFallback => "exact_fallback",
+        }
+    }
+    /// Whether exact (brute-force) search actually runs for this mode.
+    fn is_exact(self) -> bool {
+        matches!(self, VectorMode::Exact | VectorMode::ExactFallback)
+    }
+}
+
+/// Decide how a vector query executes given its ANN request and the field's
+/// indexed vector count. Errors only when the preview is required
+/// (`ann_fallback = error`) but is unavailable. This is the single source of
+/// truth shared by execution and EXPLAIN so the two never disagree.
+fn resolve_vector_mode(
+    ann: Option<&AnnParams>,
+    field: &str,
+    vector_count: usize,
+) -> Result<VectorMode> {
+    let Some(ann) = ann else {
+        return Ok(VectorMode::Exact);
+    };
+    if vector_count >= ANN_PREVIEW_MIN_VECTORS {
+        return Ok(VectorMode::AnnPreview);
+    }
+    match ann.fallback {
+        AnnFallback::Exact => Ok(VectorMode::ExactFallback),
+        AnnFallback::Error => Err(Error::InvalidRequest(format!(
+            "approximate vector preview unavailable on field `{field}`: \
+             {vector_count} indexed vectors is below the minimum of \
+             {ANN_PREVIEW_MIN_VECTORS}; use exact search or set ann_fallback to \"exact\""
+        ))),
+    }
+}
+
 /// Resolve candidates (and any scores) for the planner's chosen access path.
 fn select_candidates(
     ds: &dyn DataSource,
@@ -370,9 +457,16 @@ fn select_candidates(
                 .as_ref()
                 .expect("vector access only chosen for a vector query");
             let metric = Metric::parse(&vs.metric)?;
-            // Opt-in approximate (HNSW) preview when `vector_ann` is set; exact
-            // search (the correctness baseline) otherwise.
-            let neighbors = if let Some(ann) = &query.vector_ann {
+            // Opt-in approximate (HNSW) preview when `vector_ann` is set and the
+            // field clears the minimum-dataset threshold; otherwise exact search
+            // (the correctness baseline), either by default or as the fallback.
+            let vector_count = indexes.vector_len(&vs.field).unwrap_or(0);
+            let mode = resolve_vector_mode(query.vector_ann.as_ref(), &vs.field, vector_count)?;
+            let neighbors = if mode == VectorMode::AnnPreview {
+                let ann = query
+                    .vector_ann
+                    .as_ref()
+                    .expect("ann preview implies params");
                 let params = HnswParams {
                     m: ann.m.unwrap_or(DEFAULT_ANN_M),
                     ef_construction: ann.ef_construction.unwrap_or(DEFAULT_ANN_EF_CONSTRUCTION),
@@ -599,7 +693,13 @@ fn run_find(
         estimated_candidates: scanned,
         filter_present: query.filter.is_some(),
         vector: query.vector.as_ref().map(|v| {
-            let approximate = query.vector_ann.is_some();
+            let vector_count = indexes.vector_len(&v.field).unwrap_or(0);
+            // The same resolver used by execution, so EXPLAIN never disagrees with
+            // what actually runs. An `ann_fallback = error` request that would
+            // fail surfaces as exact here (EXPLAIN does not execute).
+            let mode = resolve_vector_mode(query.vector_ann.as_ref(), &v.field, vector_count)
+                .unwrap_or(VectorMode::Exact);
+            let approximate = mode == VectorMode::AnnPreview;
             VectorPlan {
                 field: v.field.clone(),
                 k: v.k,
@@ -607,19 +707,25 @@ fn run_find(
                 // For exact search this is the brute-force scan size; for the
                 // approximate preview the graph visits far fewer, so it is not a
                 // meaningful "scanned" count and is omitted.
-                vectors_scored: if approximate {
-                    None
-                } else {
+                vectors_scored: if mode.is_exact() {
                     indexes
                         .vector_field_stats()
                         .find(|(f, _, _)| *f == v.field)
                         .map(|(_, _, count)| count)
+                } else {
+                    None
                 },
                 approximate,
-                ef_search: query
-                    .vector_ann
-                    .as_ref()
-                    .map(|a| a.ef_search.unwrap_or(DEFAULT_ANN_EF_SEARCH).max(v.k)),
+                ef_search: if approximate {
+                    query
+                        .vector_ann
+                        .as_ref()
+                        .map(|a| a.ef_search.unwrap_or(DEFAULT_ANN_EF_SEARCH).max(v.k))
+                } else {
+                    None
+                },
+                vector_mode: Some(mode.name().to_string()),
+                exact_fallback: mode == VectorMode::ExactFallback,
             }
         }),
         text_search: selection.text_search,
@@ -994,6 +1100,7 @@ pub fn explain_analyze(
             "planner statistics are unavailable or stale; access path chosen from defaults".into(),
         );
     }
+    let plan_id = Some(plan_id_for(&plan));
     plan.analysis = Some(ExplainAnalysis {
         scanned_rows: counts.scanned,
         matched_rows: counts.matched,
@@ -1005,6 +1112,9 @@ pub fn explain_analyze(
         planner_stats_version: stats_version,
         selected_index_reason,
         stale_stats,
+        plan_id,
+        deadline_ms: query.timeout_ms,
+        timeout_checked: deadline.is_enabled(),
     });
     Ok(plan)
 }

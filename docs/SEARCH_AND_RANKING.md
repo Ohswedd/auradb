@@ -54,8 +54,12 @@ containing every query term and ranks by summed term frequency.
 
 The `vector` clause is exact nearest-neighbour search and remains the default and correctness
 baseline. v1.2.0 adds an **opt-in approximate (HNSW) preview** (the `vector_ann` option) —
-in-memory/rebuilt, re-ranked by exact similarity, and **not production ANN**. See
-[VECTORS.md](VECTORS.md).
+in-memory/rebuilt, re-ranked by exact similarity, and **not production ANN**. v1.3.0 adds
+durable lifecycle metadata for the preview (the graph itself is still never persisted), an
+`ann_fallback` policy (`exact` default / `error`) for when the preview is unavailable, the
+`ANN_PREVIEW_MIN_VECTORS = 16` minimum-dataset threshold, a `vector_mode` field in EXPLAIN
+(`exact`, `ann_preview`, `exact_fallback`), and the `auradb vector eval` recall/latency
+harness. See [VECTORS.md](VECTORS.md).
 
 ## Hybrid search
 
@@ -95,12 +99,26 @@ Ranked rows carry a `score` (relevance/similarity, or the fused score for hybrid
 rows also carry `text_score` and `vector_score` components, and all ranked rows carry a
 1-based `rank`. These are additive response fields; non-ranked queries omit them.
 
+## GROUP BY aggregations (v1.3.0)
+
+The `aggregate` request's matched set — a filtered scan, or, with a `text_search` clause, the
+BM25 candidate set (a *search facet*) — can be bucketed by a single scalar field with the
+additive `group_by` clause, with per-group `count`, `min`, `max`, and `avg`. Because grouping
+rides the same matched set as facets and metrics, it inherits **search-candidate scoping** for
+free: `group_by` over a `text_search` aggregate buckets only the BM25 candidates. Groups are
+ordered by descending count then ascending key, truncated to `group_limit` (default 1000) with
+the full `group_count_total` reported; null/missing group keys are excluded. See
+[QUERY_ENGINE.md](QUERY_ENGINE.md) for the full semantics.
+
 ## EXPLAIN and EXPLAIN ANALYZE
 
 `EXPLAIN` reports the chosen strategy (`full_text_bm25`, `hybrid`, `vector_exact_scan`), the
 indexed field(s), ranking mode and operator, and for hybrid the fusion mode, weights, and
-candidate sources. `EXPLAIN ANALYZE` additionally reports scanned/matched/returned rows,
-candidate counts per signal, and timing. See [QUERY_ENGINE.md](QUERY_ENGINE.md).
+candidate sources. For a vector query it also reports the resolved `vector_mode` (`exact`,
+`ann_preview`, or `exact_fallback`). `EXPLAIN ANALYZE` additionally reports
+scanned/matched/returned rows, candidate counts per signal, and timing, and (v1.3.0) the
+additive query-profile fields `plan_id`, `deadline_ms`, and `timeout_checked`. See
+[QUERY_ENGINE.md](QUERY_ENGINE.md).
 
 ## Operations
 

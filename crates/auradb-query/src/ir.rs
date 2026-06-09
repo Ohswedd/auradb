@@ -89,6 +89,30 @@ pub struct OrderKey {
     pub desc: bool,
 }
 
+/// The minimum number of indexed vectors a field needs for the approximate
+/// (HNSW) preview to be meaningful. Below this, the navigable graph degenerates
+/// toward full connectivity and offers no benefit over the exact scan (which is
+/// also cheaper and is the correctness baseline), so the preview is treated as
+/// unavailable and the [`AnnParams::fallback`] policy applies.
+pub const ANN_PREVIEW_MIN_VECTORS: usize = 16;
+
+/// What to do when the opt-in HNSW preview is unavailable for a query (for
+/// example, the field has fewer than [`ANN_PREVIEW_MIN_VECTORS`] vectors). Exact
+/// search is always available and always correct, so the default is to fall back
+/// to it; callers that specifically require approximate semantics can ask for a
+/// structured error instead.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum AnnFallback {
+    /// Use exact search when the preview is unavailable (the default). The result
+    /// is the exact top-k; the plan reports `exact_fallback = true`.
+    #[default]
+    Exact,
+    /// Return a structured error when the preview is unavailable rather than
+    /// silently using exact search.
+    Error,
+}
+
 /// Opt-in approximate (HNSW) vector-search **preview** parameters. Present on a
 /// query only when it explicitly requests approximate search; absent means exact
 /// search — the default and the correctness baseline. All fields are optional and
@@ -104,6 +128,10 @@ pub struct AnnParams {
     /// HNSW `efSearch` (query beam width; higher = more recall, more cost).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ef_search: Option<usize>,
+    /// What to do when the preview is unavailable for this query. Additive:
+    /// older connectors omit it and get the default (`exact`).
+    #[serde(default)]
+    pub fallback: AnnFallback,
 }
 
 /// An exact vector nearest-neighbour clause.
@@ -371,20 +399,25 @@ pub enum AggregateOp {
     Min,
     /// Maximum of a numeric/orderable field over the matched set.
     Max,
+    /// Arithmetic mean of a numeric field over the matched set. Only `Int`/`Float`
+    /// values contribute; null, missing, and non-numeric values are skipped. The
+    /// result is a `Float`, or null when the matched set carried no numeric value.
+    Avg,
 }
 
 impl AggregateOp {
     /// Whether this operator requires a `field`.
     pub fn needs_field(self) -> bool {
-        matches!(self, AggregateOp::Min | AggregateOp::Max)
+        matches!(self, AggregateOp::Min | AggregateOp::Max | AggregateOp::Avg)
     }
 
-    /// The stable string name (`count`, `min`, `max`).
+    /// The stable string name (`count`, `min`, `max`, `avg`).
     pub fn name(self) -> &'static str {
         match self {
             AggregateOp::Count => "count",
             AggregateOp::Min => "min",
             AggregateOp::Max => "max",
+            AggregateOp::Avg => "avg",
         }
     }
 }
@@ -401,6 +434,12 @@ pub struct AggregateMetric {
 
 /// The default number of facet buckets returned when a facet omits `limit`.
 pub const DEFAULT_FACET_LIMIT: usize = 10;
+
+/// The default cap on returned groups when a grouped aggregate omits
+/// `group_limit`. Groups are ordered by descending count, then ascending key, so
+/// the truncation is deterministic; the full distinct-group count is reported
+/// separately so a truncated result is never silently mistaken for complete.
+pub const DEFAULT_GROUP_LIMIT: usize = 1000;
 
 /// A request for a terms facet over a scalar field: the distinct values of the
 /// field within the matched set, with per-value counts.
@@ -445,6 +484,20 @@ pub struct AggregateQuery {
     /// Aggregation metrics to compute.
     #[serde(default)]
     pub metrics: Vec<AggregateMetric>,
+    /// Optional GROUP BY over a single scalar field. When set, the result carries
+    /// a `groups` list: one bucket per distinct value of this field within the
+    /// matched set (after the residual filter and/or BM25 candidate scoping),
+    /// each carrying the requested `metrics` recomputed over that group's records.
+    /// Records whose group field is null or missing are excluded from grouping.
+    /// Additive: older connectors never send it; older servers reject the unknown
+    /// `query` tag.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub group_by: Option<String>,
+    /// Optional cap on the number of returned groups (defaults to
+    /// [`DEFAULT_GROUP_LIMIT`]). Groups are ordered by descending count then
+    /// ascending key before truncation. Ignored unless `group_by` is set.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub group_limit: Option<usize>,
     /// Optional per-query execution deadline in milliseconds (see
     /// [`FindQuery::timeout_ms`]).
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -460,15 +513,37 @@ impl AggregateQuery {
             text_search: None,
             facets: Vec::new(),
             metrics: Vec::new(),
+            group_by: None,
+            group_limit: None,
             timeout_ms: None,
         }
+    }
+
+    /// The effective group cap (defaults to [`DEFAULT_GROUP_LIMIT`]).
+    pub fn effective_group_limit(&self) -> usize {
+        self.group_limit.unwrap_or(DEFAULT_GROUP_LIMIT)
     }
 
     /// Validate metric/facet shapes: `min`/`max` require a field, `count` must
     /// not carry one, and facet/metric fields must be non-empty.
     pub fn validate(&self) -> Result<(), String> {
-        if self.facets.is_empty() && self.metrics.is_empty() {
-            return Err("an aggregate query must request at least one facet or metric".into());
+        if self.facets.is_empty() && self.metrics.is_empty() && self.group_by.is_none() {
+            return Err(
+                "an aggregate query must request at least one facet, metric, or group_by".into(),
+            );
+        }
+        if let Some(field) = &self.group_by {
+            if field.is_empty() {
+                return Err("group_by field must not be empty".into());
+            }
+        }
+        if let Some(limit) = self.group_limit {
+            if limit == 0 {
+                return Err("group_limit must be >= 1".into());
+            }
+            if self.group_by.is_none() {
+                return Err("group_limit requires group_by".into());
+            }
         }
         for m in &self.metrics {
             match (m.op.needs_field(), &m.field) {

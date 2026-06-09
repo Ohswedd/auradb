@@ -166,7 +166,9 @@ pub struct TextIndexInfo {
     pub warning: Option<String>,
 }
 
-/// Search-index summary for one vector field.
+/// Search-index summary for one vector field, including opt-in HNSW/ANN
+/// **preview** lifecycle status. Exact search is always available and is the
+/// correctness baseline; these fields describe only the optional preview.
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct VectorIndexInfo {
     /// The indexed field name.
@@ -175,6 +177,17 @@ pub struct VectorIndexInfo {
     pub dim: usize,
     /// Number of indexed vectors.
     pub vectors: usize,
+    /// Whether the field has enough vectors for the approximate preview to be
+    /// meaningful (at or above the minimum-dataset threshold). When false, an
+    /// approximate request uses exact search per the query's `ann_fallback`.
+    pub ann_preview_eligible: bool,
+    /// Human-readable preview status: `ready_on_use` (eligible; the graph builds
+    /// in memory on first preview query), or `exact_only_below_threshold`.
+    pub ann_preview_status: String,
+    /// The durable ANN preview generation marker loaded from the last index
+    /// snapshot, if any. `None` when the indexes were rebuilt from storage rather
+    /// than loaded (the graph is always rebuildable from the exact vectors).
+    pub ann_generation: Option<u64>,
 }
 
 /// Per-collection search-index report (full-text BM25 and exact vector indexes).
@@ -589,12 +602,26 @@ impl Engine {
                 }
             }
             text_fields.sort_by(|a, b| a.field.cmp(&b.field));
+            let loaded_meta = indexes.loaded_ann_metadata();
             let mut vector_fields: Vec<VectorIndexInfo> = indexes
                 .vector_field_stats()
-                .map(|(field, dim, count)| VectorIndexInfo {
-                    field: field.to_string(),
-                    dim,
-                    vectors: count,
+                .map(|(field, dim, count)| {
+                    let eligible = count >= query::ANN_PREVIEW_MIN_VECTORS;
+                    VectorIndexInfo {
+                        field: field.to_string(),
+                        dim,
+                        vectors: count,
+                        ann_preview_eligible: eligible,
+                        ann_preview_status: if eligible {
+                            "ready_on_use".to_string()
+                        } else {
+                            "exact_only_below_threshold".to_string()
+                        },
+                        ann_generation: loaded_meta
+                            .iter()
+                            .find(|m| m.field == field)
+                            .map(|m| m.generation),
+                    }
                 })
                 .collect();
             vector_fields.sort_by(|a, b| a.field.cmp(&b.field));

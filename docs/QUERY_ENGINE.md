@@ -49,6 +49,46 @@ The result is `{collection, matched, scanned, filter_present, search_scoped,
 metrics: [{op, field?, value}], facets: [{field, used_index, buckets: [{value,
 count}]}]}`.
 
+## GROUP BY aggregations (v1.3.0)
+
+The `aggregate` request gains an additive `group_by` clause: a single scalar field that
+buckets the matched set, with the requested metrics recomputed per group. The metric set adds
+`avg` (alongside `count`, `min`, `max`).
+
+```json
+{
+  "query": "aggregate",
+  "collection": "products",
+  "filter": {"type": "compare", "field": "in_stock", "op": "eq", "value": true},
+  "group_by": "category",
+  "group_limit": 50,
+  "metrics": [{"op": "count"}, {"op": "min", "field": "price"}, {"op": "max", "field": "price"}, {"op": "avg", "field": "price"}]
+}
+```
+
+- **Same matched set.** Groups are computed over the same matched set as facets and metrics,
+  so GROUP BY composes for free with filters and — when a `text_search` clause is present —
+  the BM25 candidate set (the search-facet scope). The top-level `matched`/`scanned` counts
+  are unchanged by grouping.
+- **Null/missing policy.** Records whose group key is null or missing are **excluded** from
+  grouping (they still count toward the top-level `matched`).
+- **`avg` semantics.** `avg` considers only `Int` and `Float` values and yields null for a
+  group with no numeric value — never an error. `count` is the group's record count;
+  `min`/`max` use the field's natural order over the group.
+- **Deterministic order and limit.** Groups are ordered by **descending count, then ascending
+  key**, then truncated to the effective `group_limit` (default 1000). The full distinct-group
+  count is reported as `group_count_total`, so truncation is always visible.
+- **Validation.** A non-scalar (vector) or unknown group field, an empty `group_by`, or a
+  `group_limit` of 0 (or `group_limit` without `group_by`) is rejected with `invalid_request`.
+
+The grouped result is an additive `groups` object on the aggregate response:
+`{field, groups: [{key, count, metrics: [{op, field?, value}]}], group_count_total,
+group_limit}`. It is omitted from the wire when `group_by` is absent, so older connectors are
+unaffected. The aggregate result is itself the diagnostic surface for a grouped query — it
+reports the matched/scanned sizes, the scoping flags, and the group plan (field, distinct-group
+total, applied limit) honestly. Filter values are never echoed verbatim into the serialized
+result. See [SEARCH_AND_RANKING.md](SEARCH_AND_RANKING.md).
+
 ## Query timeouts (v1.2.0)
 
 Every read is bounded by a cooperative deadline. The server default is `[limits]
@@ -189,6 +229,25 @@ It is requested as an optional `"analyze": true` sibling key in the raw Query IR
 sent to the existing `Explain` opcode — there is **no new opcode and no protocol
 break**, so existing connectors reach it through the raw IR. See
 [AURA_CONNECTOR_COMPATIBILITY.md](AURA_CONNECTOR_COMPATIBILITY.md).
+
+### Query-profile fields (v1.3.0)
+
+`EXPLAIN ANALYZE` adds three additive profile fields to the `ExplainAnalysis` object for
+debugging, alongside the existing measured counts and timings:
+
+- `plan_id` — a stable, deterministic identifier derived from the plan's **shape**
+  (collection, strategy, seed index), not its data. The same query shape yields the same id
+  across runs (prefixed `plan-`), so profiles group cleanly in dashboards.
+- `deadline_ms` — the cooperative execution deadline in effect, in milliseconds, or `null`
+  when the query carried no timeout.
+- `timeout_checked` — whether a cooperative deadline was active and polled during execution.
+  The timeout remains cooperative (checked at bounded intervals), not preemptive.
+
+All three are additive and optional, so an older connector continues to deserialize the prior
+ANALYZE shape. The query payload (filter values, query vectors) is never echoed into the plan.
+
+For a vector query, the `VectorPlan` reports the resolved `vector_mode` (`exact`,
+`ann_preview`, or `exact_fallback`) and an `exact_fallback` flag — see [VECTORS.md](VECTORS.md).
 
 ## Migration estimate
 

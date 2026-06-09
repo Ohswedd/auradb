@@ -398,3 +398,23 @@ cargo run --release -p auradb-cli -- bench --json --output benches/baseline/v1.2
 cargo run --release -p auradb-cli -- bench compare \
   --baseline benches/baseline/v1.1.0.json --current benches/baseline/v1.2.0.json
 ```
+
+## ANN-preview recall/latency harness (v1.3.0)
+
+Separately from the `auradb bench` regression suite, `auradb vector eval` measures the opt-in
+approximate (HNSW) preview's **recall@k and latency against the exact baseline** over a
+deterministic query set, emitting JSON:
+
+```bash
+auradb vector eval --data-dir .local/auradb --collection Doc --field embedding \
+  --queries queries.jsonl --k 10 --metric cosine --ef-search 64 --json
+```
+
+The query file holds one JSON array of floats per line. The report carries `collection`,
+`field`, `metric`, `queries`, `k`, `ef_search`, `mean_recall_at_k`, `min_recall_at_k`,
+`exact_latency_ms_p50`, and `ann_latency_ms_p50`; the query vectors are never echoed. As with
+every benchmark here, the numbers are **machine- and dataset-specific and warn-only** — a
+same-machine diagnostic for tuning `ef_search` against the recall/latency tradeoff, never a
+universal recall or performance claim, and never a release gate. A per-query candidate-count
+average is not emitted in this release. Run it with a **release** build; a debug build is many
+times slower and not comparable. See [VECTORS.md](VECTORS.md) and [CLI.md](CLI.md).

@@ -1,13 +1,15 @@
 # Release guide
 
 This guide describes how a maintainer cuts an AuraDB release. The current release
-is `1.2.1` — a **conformance and documentation hardening** release on the v1
-single-node production line, paired with Aura Connector v0.6.1. It adds no features
-over v1.2.0 (which added aggregations, terms facets, ranked pagination, and
-cooperative query timeouts); it adds live over-the-wire conformance scripts for the
-v1.2 features and refreshes documentation. Single-node mode is the recommended
+is `1.3.0` — a **query ergonomics, vector-preview durability, and query
+observability** release on the v1 single-node production line, paired with Aura
+Connector v0.7.0. It adds GROUP BY aggregations and EXPLAIN ANALYZE query-profile
+fields, and matures the opt-in approximate-vector preview with durable lifecycle
+metadata and an exact-fallback policy. Single-node mode is the recommended
 production mode; multi-node static clustering remains an HA candidate preview,
-**not** production HA. AWP 1 and storage format v2 are **frozen for v1**. See
+**not** production HA. AWP 1, storage format v2, and the index snapshot format
+version (1) are **frozen for v1**. See
+[V1_3_RELEASE_NOTES.md](V1_3_RELEASE_NOTES.md),
 [V1_2_1_RELEASE_NOTES.md](V1_2_1_RELEASE_NOTES.md),
 [V1_1_RELEASE_NOTES.md](V1_1_RELEASE_NOTES.md),
 [SEARCH_AND_RANKING.md](SEARCH_AND_RANKING.md), [SUPPORT_POLICY.md](SUPPORT_POLICY.md),

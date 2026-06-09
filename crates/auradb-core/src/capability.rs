@@ -57,6 +57,21 @@ pub enum Capability {
     /// remains the default and the correctness baseline; this is not production
     /// ANN.
     ApproximateVectorSearchPreview,
+    /// Single-field GROUP BY aggregations (count/min/max/avg per group) over a
+    /// query/search matched set (v1.3.0). The connect-time negotiation name used
+    /// by Aura Connector v0.7+.
+    GroupByAggregation,
+    /// Best-effort EXPLAIN ANALYZE query profile fields (plan id, timings, row
+    /// counts, deadline) for production debugging (v1.3.0).
+    QueryProfile,
+    /// Public ranked-search cursor resume from an externally-held opaque token
+    /// (`search_page`), negotiated by Aura Connector v0.7+ (v1.3.0).
+    RankedSearchCursor,
+    /// The v1.3.0 connect-time negotiation name for the opt-in approximate
+    /// (HNSW) vector preview, alongside [`Capability::ApproximateVectorSearchPreview`].
+    /// Exact vector search remains the default and correctness baseline; this is
+    /// not production ANN.
+    ApproximateVectorSearch,
 }
 
 impl Capability {
@@ -84,6 +99,10 @@ impl Capability {
             Capability::QueryTimeouts,
             Capability::RankedPagination,
             Capability::ApproximateVectorSearchPreview,
+            Capability::GroupByAggregation,
+            Capability::QueryProfile,
+            Capability::RankedSearchCursor,
+            Capability::ApproximateVectorSearch,
         ]
     }
 }

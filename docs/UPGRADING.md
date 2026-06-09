@@ -26,6 +26,37 @@ backup first and run `auradb check` before and after upgrade.
   representative v2 storage fixture for that range (see
   [`tests/fixtures/README.md`](../tests/fixtures/README.md)).
 
+## From v1.2.x to v1.3.0
+
+> **AuraDB v1.3.0 continues the v1 single-node production line. It is not production
+> HA; single-node mode is the recommended production mode.**
+
+v1.3.0 is a **drop-in** binary replacement over v1.2.x (and any earlier v2-format
+release). There is **no storage migration** (format stays at v2, **frozen for v1**),
+the wire protocol is unchanged (AWP 1, **frozen for v1**), and the **index snapshot
+format version stays at 1**. The v1.3.0 additions are additive: GROUP BY reads existing
+records and indexes, and the opt-in approximate (HNSW) preview gains durable per-field
+**lifecycle metadata** as an additive field inside the existing CRC-protected index
+snapshot frame (the approximate graph itself is **still never persisted** — it rebuilds
+in memory from the exact vectors on first use). v1.2, v1.1, and v1.0 data directories
+open unchanged with **no required index rebuild**; the lifecycle metadata is written at
+the next checkpoint (flush, compaction, graceful shutdown, or `auradb index rebuild`),
+and a snapshot written before v1.3.0 loads with empty metadata.
+
+```bash
+auradb dump --data-dir /var/lib/auradb --output backup-before-1.3.0.jsonl
+auradb backup verify --input backup-before-1.3.0.jsonl --json
+auradb check --data-dir /var/lib/auradb --json
+# Stop the old binary, swap in the v1.3.0 binary, start it, then:
+auradb check --data-dir /var/lib/auradb --json
+```
+
+**Rollback plan.** v1.2.x and v1.3.0 share the same on-disk (storage v2, index snapshot
+format 1) and wire (AWP 1) formats. The additive index-snapshot lifecycle metadata is
+ignored by an older reader, so a v1.3.0 data directory can be reopened by a v1.2.x binary
+(which simply rebuilds the approximate graph in memory on use, as before). Keep the
+pre-upgrade backup until the upgrade is verified in production.
+
 ## From v1.0.0 to v1.0.1
 
 > **AuraDB v1.0.1 is the first production patch on the v1.0 single-node production

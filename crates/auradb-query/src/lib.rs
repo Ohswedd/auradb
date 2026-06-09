@@ -22,7 +22,10 @@ pub mod plan;
 pub mod planner;
 pub mod stats;
 
-pub use aggregate::{execute_aggregate, AggregateResult, FacetBucket, FacetValues, MetricValue};
+pub use aggregate::{
+    execute_aggregate, AggregateResult, FacetBucket, FacetValues, GroupBucket, GroupByResult,
+    MetricValue,
+};
 pub use cursor::{paginate_ranked, RankedPage};
 pub use exec::{
     execute_count, execute_exists, execute_find, execute_find_within, explain, explain_analyze,
@@ -30,11 +33,14 @@ pub use exec::{
     PlannedFind, Scored, Strategy, TextSearchPlan, VectorPlan,
 };
 pub use ir::{
-    AggregateMetric, AggregateOp, AggregateQuery, AnnParams, CompareOp, CountQuery, ExistsQuery,
+    AggregateMetric, AggregateOp, AggregateQuery, AnnFallback, AnnParams, CompareOp, CountQuery,
+    ExistsQuery, ANN_PREVIEW_MIN_VECTORS,
+};
+pub use ir::{
     FacetRequest, Filter, FindQuery, FusionMode, HybridSearch, HybridWeights, Mutation,
     MutationResult, OrderKey, QueryResultPage, RankedPageResult, ReadRequest, Row,
     SearchPageRequest, TextOperator, TextRank, TextSearch, VectorSearch, BM25_DEFAULT_B,
-    BM25_DEFAULT_K1, DEFAULT_FACET_LIMIT,
+    BM25_DEFAULT_K1, DEFAULT_FACET_LIMIT, DEFAULT_GROUP_LIMIT,
 };
 pub use migrate::{estimate as estimate_migration, MigrationEstimate};
 pub use plan::{Access, Plan, PlanNode};

@@ -95,8 +95,19 @@ validate and preserve indexes.
 Vector search is exact by default: the index scans stored vectors and ranks by the
 chosen metric, and this exact path is the correctness baseline. The `VectorIndex`
 trait also backs an opt-in approximate (HNSW) index, shipped as a preview in v1.2.0
-without changing the query engine — it is in-memory/rebuilt, not persisted or
-incremental, and **not production ANN**. Exact search remains the default.
+without changing the query engine — the graph is never persisted; it rebuilds in memory
+from the exact vectors on first use, and it is **not production ANN**. Exact search
+remains the default.
+
+As of v1.3.0 the index snapshot additionally records, per vector field, the preview's
+**lifecycle metadata** (field, dimension, vector count, generation marker) as an
+additive field inside the existing snapshot frame. This is purely additive: the **index
+snapshot format version stays at 1**, snapshots written before v1.3.0 load with empty
+metadata, and the approximate graph itself is still **not persisted** — it rebuilds in
+memory on open/first use. `auradb index check` (and the engine's search-index report)
+surfaces each vector field's preview status — `ready_on_use` when it clears the
+`ANN_PREVIEW_MIN_VECTORS = 16` threshold, or `exact_only_below_threshold` below it. See
+[VECTORS.md](VECTORS.md).
 
 ## Tests
 

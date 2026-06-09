@@ -194,3 +194,21 @@ Added in v1.2.0 (each wired to a real event, never a placeholder):
 - `auradb_aggregation_queries_total` — aggregate requests executed.
 
 These are additive to the existing metrics surface.
+
+## Query profiling and ANN-preview evaluation (v1.3.0)
+
+For debugging individual queries rather than aggregate counters:
+
+- **EXPLAIN ANALYZE query-profile fields.** The ANALYZE output adds `plan_id` (a deterministic
+  identifier for the plan shape — the same query shape yields the same id across runs, so
+  profiles group cleanly), `deadline_ms` (the cooperative execution deadline in effect, or
+  `null`), and `timeout_checked` (whether a deadline was active and polled). These are
+  additive JSON on the existing ANALYZE object and never echo the query payload. Use `plan_id`
+  to correlate repeated slow queries and `deadline_ms`/`timeout_checked` to confirm whether a
+  cooperative timeout was in play. See [QUERY_ENGINE.md](QUERY_ENGINE.md).
+- **`auradb vector eval`** measures the opt-in approximate (HNSW) preview's recall@k and
+  latency against the exact baseline over a deterministic query set, emitting JSON
+  (`mean_recall_at_k`, `min_recall_at_k`, `exact_latency_ms_p50`, `ann_latency_ms_p50`, and
+  the run parameters). The numbers are dataset- and machine-specific — a same-machine
+  diagnostic for tuning `ef_search`, never a universal claim. See [BENCHMARKS.md](BENCHMARKS.md)
+  and [VECTORS.md](VECTORS.md).
