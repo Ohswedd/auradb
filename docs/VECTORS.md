@@ -56,3 +56,30 @@ correctness baseline. v1.1.0 adds hybrid retrieval that fuses BM25 text relevanc
 vector similarity — see [SEARCH_AND_RANKING.md](SEARCH_AND_RANKING.md). The `VectorIndex`
 trait still leaves room for a future approximate implementation without changing the query
 engine.
+
+## v1.2.0: opt-in approximate (HNSW) preview
+
+v1.2.0 adds a real **approximate** nearest-neighbour index (HNSW — a layered proximity graph,
+Malkov & Yashunin) as an **opt-in preview**. **Exact search remains the default and the
+correctness baseline; this is not production ANN.**
+
+- **Opt-in per query.** Set the `vector_ann` option alongside a vector clause. Absent → exact
+  search (unchanged). Parameters: `m` (graph degree), `ef_construction` (build beam width),
+  `ef_search` (query beam width — higher trades cost for recall). All are optional with sane
+  defaults (`m=16`, `ef_construction=200`, `ef_search=64`), and validated (out-of-range
+  values are rejected with a structured error).
+- **Recall / latency tradeoff.** The preview returns approximate top-k, re-ranked by exact
+  similarity so a perfect-recall result is identical to exact. Recall is tunable via
+  `ef_search`; the recall tests assert ≥ 0.90 (algorithm) and ≥ 0.85 (end-to-end) against the
+  exact baseline.
+- **Built from the exact vectors, never persisted.** The graph is a derived in-memory query
+  accelerator, rebuilt from the authoritative exact vectors and cleared whenever they change,
+  so it is never stale and **storage format v2 is unchanged**. The graph is currently rebuilt
+  per index instance (on first ANN query after a write); persistent/incremental graphs and
+  ANN-specific `index check` / `stats analyze` are future work as the preview matures.
+- **Diagnostics.** `EXPLAIN` reports `approximate: true` and the `ef_search` used; the server
+  advertises the `approximate_vector_search_preview` capability and increments
+  `auradb_ann_preview_queries_total`. Dimension-mismatch errors never echo the query vector.
+
+The connector exposes the preview via `search_vector(..., approximate=...)` — see the Aura
+Connector `SEARCH_AND_RANKING.md`.

@@ -1,15 +1,17 @@
 # AuraDB Compatibility Matrix
 
-This document records what AuraDB v1.1.0 implements and how it interoperates with
-the Aura Connector client library and the Aura Wire Protocol (AWP). AuraDB v1.1.0
-is the **first larger post-1.0 release on the v1 single-node production line**: it
-adds BM25 ranked full-text search, hybrid text+vector ranking, and connector-native
-support, while remaining a production single-node deployment configured with auth,
-TLS, backups, monitoring, and the documented runbooks. Multi-node static clustering
-remains an HA candidate preview, **not a production HA guarantee**. The new search
-clauses are additive Query IR and response fields, so AWP 1 and storage format v2 are
-unchanged. Exact vector search remains the correctness baseline; approximate (ANN)
-vector search is not implemented. See [SEARCH_AND_RANKING.md](SEARCH_AND_RANKING.md),
+This document records what AuraDB v1.2.0 implements and how it interoperates with
+the Aura Connector client library and the Aura Wire Protocol (AWP). AuraDB v1.2.0
+continues the **v1 single-node production line**: on top of the v1.1.0 search and
+ranking surface it adds aggregations, terms facets, and cooperative query timeouts,
+while remaining a production single-node deployment configured with auth, TLS,
+backups, monitoring, and the documented runbooks. Multi-node static clustering
+remains an HA candidate preview, **not a production HA guarantee**. The aggregate
+request and the per-query `timeout_ms` are additive Query IR, so AWP 1 and storage
+format v2 are unchanged. Exact vector search remains the default and the correctness
+baseline; approximate (HNSW) vector search is available as an **opt-in preview**
+(in-memory/rebuilt, not persisted/incremental), **not production ANN**.
+See [SEARCH_AND_RANKING.md](SEARCH_AND_RANKING.md),
 [SUPPORT_POLICY.md](SUPPORT_POLICY.md),
 [HA_RELEASE_CANDIDATE.md](HA_RELEASE_CANDIDATE.md), and the
 [v1.0 decision checklist](V1_0_DECISION_CHECKLIST.md).
@@ -36,7 +38,8 @@ v0.4.x. Single-node mode remains the recommended production mode.
 
 | AuraDB | Aura Connector | Protocol | Status |
 | ------ | -------------- | -------- | ------ |
-| 1.1.0  | 0.5.0          | AWP 1    | Supported, recommended (search and ranking release: BM25 ranked full-text, hybrid text+vector; single-node production line; multi-node HA candidate preview, not production HA; new clauses are additive Query IR/response fields; AWP 1 and storage format v2 unchanged; exact vector search only, no ANN) |
+| 1.2.0  | 0.6.0          | AWP 1    | Supported, recommended (query ergonomics release: aggregations, terms facets, cooperative query timeouts; single-node production line; multi-node HA candidate preview, not production HA; aggregate request and per-query `timeout_ms` are additive Query IR; AWP 1 and storage format v2 unchanged; exact vector search is the default and correctness baseline, with an opt-in approximate (HNSW) vector preview — in-memory/rebuilt, not production ANN). Connector 0.5.x remains supported for pre-1.2 features. |
+| 1.1.0  | 0.5.0          | AWP 1    | Supported (search and ranking release: BM25 ranked full-text, hybrid text+vector; single-node production line; multi-node HA candidate preview, not production HA; new clauses are additive Query IR/response fields; AWP 1 and storage format v2 unchanged; exact vector search only, no ANN) |
 | 1.0.1  | 0.4.1          | AWP 1    | Supported (first production patch on the v1.0 single-node production line; multi-node HA candidate preview, not production HA; no new config, architecture, or semantics over 1.0.0; connector unchanged; AWP 1 and storage format v2 frozen for v1) |
 | 1.0.0  | 0.4.1          | AWP 1    | Supported (single-node production release; multi-node HA candidate preview, not production HA; no new config, architecture, or semantics over 0.9.2; connector unchanged; AWP 1 and storage format v2 frozen for v1) |
 | 0.9.2  | 0.4.1          | AWP 1    | Supported, recommended (final HA candidate stabilization; no new config, architecture, or semantics over 0.9.1; connector unchanged; wire payload, storage format (v2), and semantics identical to 0.9.1) |
@@ -113,7 +116,8 @@ authoritative policy is [SUPPORT_POLICY.md](SUPPORT_POLICY.md).
 | Aura Connector 0.5.x | Stable | Yes | **Yes** | v0.5.0 recommended; 0.4.x connects for non-search operations |
 | AWP 1 | Frozen for v1 | Yes | **Yes** | Preserved across v1.x unless security/correctness break |
 | Storage format v2 | Frozen for v1 | Yes | **Yes** | Preserved across v1.x unless safety/corruption/security migration |
-| Exact vector search | Stable | Yes | **Yes** | `cosine` / `euclidean` / `dot_product`; not ANN/HNSW |
+| Exact vector search | Stable | Yes | **Yes** | `cosine` / `euclidean` / `dot_product`; default and correctness baseline |
+| Approximate (HNSW) vector search | Preview | Preview only | No | Opt-in (v1.2.0); in-memory/rebuilt, not persisted/incremental; not production ANN |
 | Tokenized full-text search | Stable | Yes | **Yes** | Boolean `contains_text`; term-frequency ranking |
 | BM25 ranked full-text search | Stable | Yes (new in v1.1.0) | **Yes** | `text_search` clause; Okapi BM25 |
 | Hybrid text + vector search | Stable | Yes (new in v1.1.0) | **Yes** | `hybrid` clause; weighted-sum / RRF fusion |
@@ -156,9 +160,12 @@ authoritative policy is [SUPPORT_POLICY.md](SUPPORT_POLICY.md).
 
 ## Supported vector operations
 
-- Exact nearest-neighbour search over a fixed-dimension vector field.
+- Exact nearest-neighbour search over a fixed-dimension vector field (the default
+  and the correctness baseline).
 - Metrics: `cosine`, `euclidean`, `dot_product`.
-- Not supported: approximate nearest neighbour (ANN), HNSW.
+- Approximate nearest neighbour (HNSW) is available as an **opt-in preview** (v1.2.0):
+  in-memory/rebuilt, not persisted/incremental, and **not production ANN**. Exact
+  search remains the correctness baseline.
 
 ## Supported document operations
 
@@ -192,7 +199,9 @@ authoritative policy is [SUPPORT_POLICY.md](SUPPORT_POLICY.md).
 - AuraDB implements single-node snapshot isolation with optimistic write
   conflict detection. It is not serializable isolation (it does not prevent
   write-skew).
-- Vector search is exact; there is no ANN/HNSW index.
+- Vector search is exact by default (the correctness baseline). An opt-in
+  approximate (HNSW) preview is available — in-memory/rebuilt, not
+  persisted/incremental, and not production ANN.
 - The legacy `contains_text` predicate is tokenized boolean-AND matching with
   term-frequency ranking. BM25 ranked full-text (`text_search`) and hybrid
   text+vector (`hybrid`) search are implemented as of v1.1.0; see

@@ -117,6 +117,7 @@ max_full_text_query_tokens = 64       # max tokens in a contains_text query
 max_document_depth = 64               # max nesting depth of a document value
 max_vector_dimension = 4096           # max declared/queried vector dimension
 max_transaction_write_set = 100000    # max staged writes in one transaction
+max_query_time_ms = 30000             # default read deadline; 0 disables (v1.2.0)
 ```
 
 | Key | Default | Bound |
@@ -126,6 +127,14 @@ max_transaction_write_set = 100000    # max staged writes in one transaction
 | `max_document_depth` | `64` | Maximum nesting depth of a document value |
 | `max_vector_dimension` | `4096` | Maximum declared or queried vector dimension |
 | `max_transaction_write_set` | `100000` | Maximum staged writes in a single transaction |
+| `max_query_time_ms` | `30000` | Default per-read execution deadline in ms; `0` disables it (v1.2.0) |
+
+`max_query_time_ms` is the cooperative default deadline for every read (find,
+count, exists, aggregate/facet). A request may carry a per-query `timeout_ms` that
+**lowers** this bound but never raises it; a read that exceeds the effective
+deadline returns a structured `query_timeout` error without tearing down the
+connection. Set `0` to disable the default for workloads with intentionally long
+reads.
 
 Each bound is **inclusive** (a request exactly at the limit is accepted; one past
 it is refused) and carries **no upper cap** — these are operator policy, not

@@ -15,15 +15,27 @@
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]
 
+pub mod hnsw;
 mod metric;
 pub mod persist;
 
 use std::collections::{HashMap, HashSet};
+use std::sync::{Arc, Mutex};
 
 use auradb_core::{CollectionSchema, Error, FieldType, Record, RecordId, Result, Value};
 
+pub use hnsw::{Hnsw, HnswParams};
 pub use metric::{metric_json, Metric};
 pub use persist::{IndexManifest, IndexSnapshot, INDEX_FORMAT_VERSION};
+
+/// Cache key for a per-field approximate (HNSW) graph: field name, metric name,
+/// and the construction parameters. A graph is rebuilt when any of these — or the
+/// underlying vectors — change.
+type AnnCacheKey = (String, &'static str, usize, usize);
+
+/// A fixed seed for the approximate-index graph so a given vector set + params
+/// builds a reproducible graph (the preview is deterministic).
+const ANN_GRAPH_SEED: u64 = 0x4155_5241_4442_5631; // "AURADBV1"
 
 /// Compute a content fingerprint of a collection from its records.
 ///
@@ -304,6 +316,45 @@ impl ExactVectorIndex {
     }
 }
 
+/// Rank ordering for neighbours: better neighbours sort first (`Ordering::Less`).
+/// The key is `score` descending, ties broken by `id` ascending, with the same
+/// NaN handling (`partial_cmp(...).unwrap_or(Equal)`) the full sort used. Ids are
+/// unique within an index, so this is a total order with no ties.
+fn rank_cmp(a: &Neighbor, b: &Neighbor) -> std::cmp::Ordering {
+    b.score
+        .partial_cmp(&a.score)
+        .unwrap_or(std::cmp::Ordering::Equal)
+        .then(a.id.cmp(&b.id))
+}
+
+/// Whether `a` is strictly a better neighbour than `b` under [`rank_cmp`].
+fn better(a: &Neighbor, b: &Neighbor) -> bool {
+    rank_cmp(a, b) == std::cmp::Ordering::Less
+}
+
+/// A neighbour wrapper whose `Ord` makes the **worst** neighbour the greatest, so
+/// a [`std::collections::BinaryHeap`] (a max-heap) keeps the worst at its root for
+/// O(1) eviction during bounded top-k selection.
+struct Worst(Neighbor);
+
+impl PartialEq for Worst {
+    fn eq(&self, other: &Self) -> bool {
+        rank_cmp(&self.0, &other.0) == std::cmp::Ordering::Equal
+    }
+}
+impl Eq for Worst {}
+impl PartialOrd for Worst {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+impl Ord for Worst {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        // Greater == worse, so the heap root is the worst kept neighbour.
+        rank_cmp(&self.0, &other.0)
+    }
+}
+
 impl VectorIndex for ExactVectorIndex {
     fn insert(&mut self, id: RecordId, vector: Vec<f32>) {
         self.entries.insert(id, vector);
@@ -314,24 +365,41 @@ impl VectorIndex for ExactVectorIndex {
     }
 
     fn nearest(&self, query: &[f32], k: usize, metric: Metric) -> Vec<Neighbor> {
-        let mut scored: Vec<Neighbor> = self
-            .entries
-            .iter()
-            .filter(|(_, v)| v.len() == query.len())
-            .map(|(id, v)| Neighbor {
+        if k == 0 {
+            return Vec::new();
+        }
+        // Bounded top-k selection: keep at most `k` candidates in a max-heap whose
+        // *root is the worst kept neighbour* (lowest score, ties broken by highest
+        // id). A new candidate that beats the current worst evicts it. This is
+        // O(n log k) instead of sorting all n candidates (O(n log k)), and produces
+        // the **identical** ordered top-k as the previous full sort — the ranking
+        // key (`score` desc, then `id` asc) and its NaN handling are unchanged.
+        let mut heap: std::collections::BinaryHeap<Worst> =
+            std::collections::BinaryHeap::with_capacity(k + 1);
+        for (id, v) in self.entries.iter() {
+            if v.len() != query.len() {
+                continue;
+            }
+            let cand = Neighbor {
                 id: *id,
                 score: metric.similarity(query, v),
                 distance: metric.distance(query, v),
-            })
-            .collect();
-        scored.sort_by(|a, b| {
+            };
+            if heap.len() < k {
+                heap.push(Worst(cand));
+            } else if better(&cand, &heap.peek().expect("heap is non-empty when full").0) {
+                heap.pop();
+                heap.push(Worst(cand));
+            }
+        }
+        let mut out: Vec<Neighbor> = heap.into_iter().map(|w| w.0).collect();
+        out.sort_by(|a, b| {
             b.score
                 .partial_cmp(&a.score)
                 .unwrap_or(std::cmp::Ordering::Equal)
                 .then(a.id.cmp(&b.id))
         });
-        scored.truncate(k);
-        scored
+        out
     }
 
     fn len(&self) -> usize {
@@ -354,6 +422,11 @@ pub struct CollectionIndexes {
     text_maps: HashMap<String, TextIndex>,
     /// field name -> exact vector index.
     vector_maps: HashMap<String, ExactVectorIndex>,
+    /// Lazily-built approximate (HNSW) graphs for the opt-in ANN preview, keyed by
+    /// field + metric + params. Derived from `vector_maps` (never persisted) and
+    /// cleared whenever the vectors change, so exact search stays the source of
+    /// truth and storage format v2 is unchanged.
+    ann_cache: Mutex<HashMap<AnnCacheKey, Arc<Hnsw>>>,
 }
 
 impl CollectionIndexes {
@@ -405,7 +478,14 @@ impl CollectionIndexes {
             doc_path_maps,
             text_maps,
             vector_maps,
+            ann_cache: Mutex::new(HashMap::new()),
         }
+    }
+
+    /// Drop any cached approximate (HNSW) graphs; called whenever vectors change
+    /// so the preview never serves stale results.
+    fn invalidate_ann_cache(&mut self) {
+        self.ann_cache.get_mut().unwrap().clear();
     }
 
     /// Whether an equality index exists for `field` (a field name or a dotted
@@ -446,6 +526,7 @@ impl CollectionIndexes {
     /// Insert `record` into all indexes. Call [`check_unique`](Self::check_unique)
     /// first; this method assumes constraints are satisfied.
     pub fn insert(&mut self, record: &Record) {
+        self.invalidate_ann_cache();
         for (field, map) in self.unique_maps.iter_mut() {
             if let Some(value) = record.fields.get(field) {
                 if !value.is_null() {
@@ -481,6 +562,7 @@ impl CollectionIndexes {
 
     /// Remove `record` from all indexes.
     pub fn remove(&mut self, record: &Record) {
+        self.invalidate_ann_cache();
         for (field, map) in self.unique_maps.iter_mut() {
             if let Some(value) = record.fields.get(field) {
                 let key = index_key(value);
@@ -525,6 +607,36 @@ impl CollectionIndexes {
         }
         if let Some(map) = self.doc_path_maps.get(field) {
             return Some(map.get(&key).cloned().unwrap_or_default());
+        }
+        None
+    }
+
+    /// Distinct indexed values for an equality-indexed `field`, each as a
+    /// representative record id (to recover the typed value) and the number of
+    /// records posted under that value. Returns `None` when `field` has no
+    /// equality index, so the caller can fall back to a scan.
+    ///
+    /// This backs index-accelerated terms facets: the per-value counts come
+    /// straight from posting-list lengths, with no record scan. Iteration order
+    /// is unspecified (hash map) — callers re-sort buckets deterministically.
+    pub fn facet_postings(&self, field: &str) -> Option<Vec<(RecordId, usize)>> {
+        if let Some(map) = self.unique_maps.get(field) {
+            // A unique index posts exactly one record per value.
+            return Some(map.values().map(|id| (*id, 1)).collect());
+        }
+        if let Some(map) = self.secondary_maps.get(field) {
+            return Some(
+                map.values()
+                    .filter_map(|ids| ids.first().map(|rep| (*rep, ids.len())))
+                    .collect(),
+            );
+        }
+        if let Some(map) = self.doc_path_maps.get(field) {
+            return Some(
+                map.values()
+                    .filter_map(|ids| ids.first().map(|rep| (*rep, ids.len())))
+                    .collect(),
+            );
         }
         None
     }
@@ -617,6 +729,60 @@ impl CollectionIndexes {
             )));
         }
         Ok(idx.nearest(query, k, metric))
+    }
+
+    /// Approximate nearest-neighbour search — the opt-in HNSW **preview**.
+    ///
+    /// Builds (and caches) a navigable graph from the field's exact vectors and
+    /// queries it with beam width `ef_search`. Exact search ([`vector_nearest`])
+    /// remains the correctness baseline; this trades a small, tunable amount of
+    /// recall for sub-linear query cost. The graph is derived in memory and is
+    /// cleared whenever the field's vectors change, so it is never stale and never
+    /// persisted (storage format v2 is unchanged). Returns a structured error for
+    /// an unknown field, a dimension mismatch (no vector payload is echoed), or
+    /// invalid parameters.
+    ///
+    /// [`vector_nearest`]: Self::vector_nearest
+    pub fn vector_ann_nearest(
+        &self,
+        field: &str,
+        query: &[f32],
+        k: usize,
+        metric: Metric,
+        params: HnswParams,
+        ef_search: usize,
+    ) -> Result<Vec<Neighbor>> {
+        let idx = self
+            .vector_maps
+            .get(field)
+            .ok_or_else(|| Error::InvalidRequest(format!("no vector index on field {field}")))?;
+        if query.len() != idx.dim() {
+            return Err(Error::InvalidRequest(format!(
+                "query vector dimension {} does not match field dimension {}",
+                query.len(),
+                idx.dim()
+            )));
+        }
+        params.validate().map_err(Error::InvalidRequest)?;
+
+        let key: AnnCacheKey = (
+            field.to_string(),
+            metric.name(),
+            params.m,
+            params.ef_construction,
+        );
+        let graph = {
+            let mut cache = self.ann_cache.lock().unwrap();
+            if let Some(g) = cache.get(&key) {
+                Arc::clone(g)
+            } else {
+                let entries = idx.entries.iter().map(|(id, v)| (*id, v.clone()));
+                let g = Arc::new(Hnsw::build(entries, metric, params, ANN_GRAPH_SEED));
+                cache.insert(key, Arc::clone(&g));
+                g
+            }
+        };
+        Ok(graph.nearest(query, k, ef_search))
     }
 
     /// Produce a serializable snapshot of these indexes for persistence.
@@ -773,6 +939,7 @@ impl CollectionIndexes {
 
     /// Rebuild all indexes from a fresh set of records (used on open / rebuild).
     pub fn rebuild<'a>(&mut self, records: impl Iterator<Item = &'a Record>) -> Result<()> {
+        self.invalidate_ann_cache();
         for map in self.unique_maps.values_mut() {
             map.clear();
         }
@@ -861,6 +1028,71 @@ impl CollectionIndexes {
 mod tests {
     use super::*;
     use auradb_core::{CollectionId, Document, FieldDef, FieldType};
+
+    /// Deterministic pseudo-random vector from a seed (no RNG dependency).
+    fn gen_vec(seed: u64, dim: usize) -> Vec<f32> {
+        let mut s = seed.wrapping_mul(0x9e37_79b9_7f4a_7c15).wrapping_add(1);
+        (0..dim)
+            .map(|_| {
+                s ^= s << 13;
+                s ^= s >> 7;
+                s ^= s << 17;
+                ((s % 2000) as f32) / 1000.0 - 1.0
+            })
+            .collect()
+    }
+
+    /// The bounded top-k heap must return exactly what a full sort + truncate
+    /// would, for every `k` from 0 through n, across metrics. This is the
+    /// correctness guard for the O(n log k) selection optimization.
+    #[test]
+    fn nearest_top_k_matches_full_sort_reference() {
+        let dim = 12;
+        let n = 500;
+        let mut idx = ExactVectorIndex::new(dim);
+        for i in 0..n {
+            idx.insert(
+                RecordId::from_u128(i as u128 + 1),
+                gen_vec(i as u64 + 1, dim),
+            );
+        }
+        let query = gen_vec(987_654, dim);
+
+        for metric in [Metric::Cosine, Metric::Euclidean, Metric::DotProduct] {
+            // Reference: score every entry, then full-sort by (score desc, id asc).
+            let mut reference: Vec<Neighbor> = idx
+                .entries
+                .iter()
+                .map(|(id, v)| Neighbor {
+                    id: *id,
+                    score: metric.similarity(&query, v),
+                    distance: metric.distance(&query, v),
+                })
+                .collect();
+            reference.sort_by(|a, b| {
+                b.score
+                    .partial_cmp(&a.score)
+                    .unwrap_or(std::cmp::Ordering::Equal)
+                    .then(a.id.cmp(&b.id))
+            });
+
+            for k in [0usize, 1, 7, 50, n, n + 10] {
+                let got = idx.nearest(&query, k, metric);
+                let want: Vec<RecordId> = reference.iter().take(k).map(|nb| nb.id).collect();
+                let got_ids: Vec<RecordId> = got.iter().map(|nb| nb.id).collect();
+                assert_eq!(
+                    got_ids, want,
+                    "metric={metric:?} k={k}: heap top-k must match full sort"
+                );
+                // Scores must be identical too, not just the id ordering.
+                for nb in &got {
+                    let r = reference.iter().find(|x| x.id == nb.id).unwrap();
+                    assert_eq!(nb.score, r.score);
+                    assert_eq!(nb.distance, r.distance);
+                }
+            }
+        }
+    }
 
     fn schema() -> CollectionSchema {
         CollectionSchema::new("Doc")

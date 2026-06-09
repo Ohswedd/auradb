@@ -4,6 +4,99 @@ All notable changes to AuraDB are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and the project uses
 [Semantic Versioning](https://semver.org/).
 
+## [1.2.0] - 2026-06-09
+
+**Query ergonomics and operational hardening — single-node production line, multi-node HA
+candidate preview.** AuraDB v1.2.0 adds aggregations, terms facets, and cooperative query
+timeouts to the single-node production line without changing the production support claim.
+Single-node remains the recommended production mode; multi-node static clustering remains an
+HA candidate preview — not production HA. **Aura Wire Protocol 1 and storage format v2 stay
+frozen**: the aggregate request and the per-query `timeout_ms` are additive Query IR, and no
+on-disk format changes (aggregations/facets read the existing records and indexes). Aura
+Connector **v0.6.0** (compatible 0.6.x; 0.5.x still supported for existing features) is the
+paired client. See [docs/V1_2_RELEASE_NOTES.md](docs/V1_2_RELEASE_NOTES.md) and
+[docs/QUERY_ENGINE.md](docs/QUERY_ENGINE.md).
+
+### Added
+
+- **Aggregations and terms facets.** A new `aggregate` read request computes `count`/`min`/
+  `max` metrics and terms facets over a collection. Facets and metrics share one matched set
+  (a filtered scan, or the BM25 candidate set when a `text_search` clause is present). A
+  terms facet over an equality-indexed field with no residual filter is served from index
+  posting-list lengths; other shapes fall back to an honest scan, reported per-facet as
+  `used_index`. Buckets order deterministically by descending count then ascending value.
+- **Cooperative query timeouts.** A configurable default deadline (`[limits]
+  max_query_time_ms`, default 30000ms; `0` disables) bounds every read; a per-query
+  `timeout_ms` may lower but not raise it. Scan, BM25, hybrid, exact-vector, and
+  aggregate/facet reads poll the deadline and return a structured `query_timeout` error when
+  exceeded. The session and connection remain usable after a timeout.
+- **Approximate vector search (HNSW) preview — opt-in.** A real HNSW approximate index is
+  available per query via the additive `vector_ann` option (`m`/`ef_construction`/`ef_search`)
+  on a vector clause. Exact search remains the default and correctness baseline; the graph is
+  built in memory from the exact vectors (never persisted; storage format v2 unchanged) and
+  rebuilt when vectors change. Validated by recall tests against the exact baseline,
+  determinism, EXPLAIN (`approximate`/`ef_search`), and parameter / dimension-mismatch
+  rejection (payload not echoed). Advertised as `approximate_vector_search_preview` with an
+  `ann_preview_queries_total` metric. **Not production ANN.**
+- **Exact vector search optimization.** Exact nearest-neighbour selection uses a bounded
+  top-k heap (`O(n log k)`) instead of a full sort, with provably identical results (ranking
+  key and NaN handling unchanged; verified by a full-sort reference test).
+- **Stable ranked pagination.** The additive `search_page` read request (and
+  `Engine::search_page`) pages ranked search (BM25/hybrid/vector) by opaque, bounded keyset
+  cursor tokens that carry no query payload or secrets and reject replay against a different
+  query. Vector cursors are duplicate-free across concurrent writes; BM25/hybrid are stable
+  when paged inside a transaction snapshot. Advertised as the `ranked_pagination` capability
+  and surfaced in the connector as `QueryBuilder.search_pages(page_size=...)`.
+- **Capabilities:** `aggregations_and_facets` and `query_timeouts` are advertised by
+  `auradb compatibility`, which also lists `facets`, `aggregations`, and `query_timeouts`
+  under search features.
+- **Observability:** `query_timeouts_total`, `facets_queries_total`,
+  `aggregation_queries_total`, and `ann_preview_queries_total` counters.
+- **Benchmarks:** `benches/baseline/v1.2.0.json` adds `aggregate_count`, `facet_terms`,
+  `vector_ann_preview` (next to `vector_exact_nearest`), and `ranked_pagination_first_page`.
+  The numbers are same-machine, release-build regression signals — the approximate preview is
+  honestly slower than exact at small scale (see [docs/BENCHMARKS.md](docs/BENCHMARKS.md)).
+- **Conformance:** five v1.2.0 scenarios in the over-the-wire suite — `aggregate_count_min_max`,
+  `terms_facet_index_backed`, `search_facet_bm25`, `vector_ann_preview`, and
+  `ranked_pagination_search_page` (34/34 scenarios pass in-process).
+
+### Unchanged
+
+- **Aura Wire Protocol 1** and **storage format v2** are frozen; all additions are additive
+  Query IR / response fields with no on-disk format change. v1.1 and v1.0 data open
+  unchanged with no required rebuild.
+- Single-node production support; multi-node HA candidate preview (not production HA).
+- **Exact vector search remains the correctness baseline.** Approximate (HNSW) vector search
+  is an **opt-in preview**, not production ANN.
+
+### Not implemented in this release
+
+Honest scope — these v1.2.0 theme items were **not** built and are **not** claimed anywhere:
+search/vector operational checks beyond the v1.1 validations; production-grade ANN
+(persisted/incremental HNSW graphs and ANN-specific `index check` / `stats analyze` — the
+ANN preview rebuilds its in-memory graph from the exact vectors). Aggregations, terms facets,
+query timeouts, ranked pagination, and the opt-in HNSW vector preview all landed end-to-end
+(server + connector), and the query features are covered by multi-node preview tests on a
+follower after replication, after a leader change, after a follower restart, and after a
+snapshot install. See [docs/ROADMAP.md](docs/ROADMAP.md).
+
+### Known limitations
+
+Honest limitations carried by this release (unchanged scope boundaries):
+
+- **Multi-node is an HA candidate preview, not production HA.** No production automatic
+  failover, no linearizable follower reads (follower reads/search are eventually consistent),
+  no distributed transactions, and no dynamic membership, sharding, or multi-region.
+  Single-node remains the recommended production mode.
+- **Approximate (HNSW) vector search is an opt-in preview, not production ANN.** The graph is
+  in-memory and rebuilt from the exact vectors (never persisted; not incremental). Exact
+  vector search remains the default and the correctness baseline.
+- **Query timeouts are cooperative, not preemptive.** Reads poll the deadline on their
+  candidate/scan loop, so cancellation is "soon after" the deadline rather than instantaneous.
+- **Ranked-pagination cursor stability under concurrent writes.** Vector cursors are
+  duplicate-free across concurrent writes; BM25/hybrid ranked pagination is stable only when
+  paged inside a transaction snapshot.
+
 ## [1.1.0] - 2026-06-08
 
 **Search and ranking — single-node production line, multi-node HA candidate preview.**

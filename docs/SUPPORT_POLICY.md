@@ -4,7 +4,8 @@
 > with auth, TLS, backups, monitoring, and the documented runbooks. Multi-node
 > static clustering remains an HA candidate preview, not production HA. v1.1.0 adds
 > BM25 ranked full-text and hybrid text+vector search to the single-node production
-> line; exact vector search remains the correctness baseline (no ANN).**
+> line; exact vector search remains the default and correctness baseline (approximate
+> ANN/HNSW vector search is an opt-in preview, not production ANN).**
 
 This document is the authoritative statement of what AuraDB v1.0 supports, at what
 level, and for how long. It is written to be precise rather than expansive: a
@@ -38,8 +39,10 @@ These are validated and supported for production single-node use, run per the
   snapshot isolation, version GC, and a cost-based query planner.
 - **Search and ranking (v1.1.0)** — BM25 ranked full-text search, exact vector
   search (the correctness baseline), and hybrid text+vector ranking, with planner
-  awareness and EXPLAIN/EXPLAIN ANALYZE support. Approximate (ANN/HNSW) vector
-  search is **not** implemented. See [SEARCH_AND_RANKING.md](SEARCH_AND_RANKING.md).
+  awareness and EXPLAIN/EXPLAIN ANALYZE support. Approximate (HNSW) vector search
+  is available as an **opt-in preview** (v1.2.0) — in-memory/rebuilt, not
+  persisted/incremental and **not production ANN**; exact search remains the
+  correctness baseline. See [SEARCH_AND_RANKING.md](SEARCH_AND_RANKING.md).
 - **Authentication and TLS for network exposure** — enforced static-token auth
   (Argon2id) and server-terminated TLS with optional mutual TLS (rustls), both
   fail-closed. See [SECURITY.md](SECURITY.md).
@@ -104,9 +107,10 @@ AuraDB v1.0 does **not** provide, and **must not** be relied on for, any of:
 - sharding;
 - multi-region deployment;
 - serializable isolation (single-node isolation is snapshot isolation);
-- approximate nearest-neighbour vector search (ANN / HNSW) — exact vector search is
-  the correctness baseline (BM25 ranking and hybrid lexical-vector fusion are
-  supported as of v1.1.0);
+- production approximate nearest-neighbour vector search (ANN / HNSW) — an opt-in
+  HNSW preview ships in v1.2.0 (in-memory/rebuilt, not persisted/incremental, not
+  production ANN); exact vector search remains the correctness baseline (BM25
+  ranking and hybrid lexical-vector fusion are supported as of v1.1.0);
 - a Kubernetes operator;
 - a managed cloud service;
 - official SDKs beyond the current Aura Connector scope.

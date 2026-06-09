@@ -89,6 +89,23 @@ pub struct OrderKey {
     pub desc: bool,
 }
 
+/// Opt-in approximate (HNSW) vector-search **preview** parameters. Present on a
+/// query only when it explicitly requests approximate search; absent means exact
+/// search — the default and the correctness baseline. All fields are optional and
+/// fall back to engine defaults.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, Default)]
+pub struct AnnParams {
+    /// HNSW graph degree `M` (graph build parameter).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub m: Option<usize>,
+    /// HNSW `efConstruction` (graph build beam width).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ef_construction: Option<usize>,
+    /// HNSW `efSearch` (query beam width; higher = more recall, more cost).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ef_search: Option<usize>,
+}
+
 /// An exact vector nearest-neighbour clause.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct VectorSearch {
@@ -244,6 +261,12 @@ pub struct FindQuery {
     /// Optional vector nearest-neighbour clause (applied before ordering).
     #[serde(default)]
     pub vector: Option<VectorSearch>,
+    /// Opt-in approximate (HNSW) vector-search preview. When present **and** a
+    /// `vector` clause is set, the engine uses the approximate index for that
+    /// clause; absent means exact search (the default). Additive and defaulted so
+    /// older connectors are unaffected, and exact remains the correctness baseline.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub vector_ann: Option<AnnParams>,
     /// Optional ranked full-text (BM25) clause. Mutually exclusive with `vector`
     /// and `hybrid`; orders results by relevance score. Boxed to keep the
     /// `ReadRequest` enum compact.
@@ -270,6 +293,13 @@ pub struct FindQuery {
     /// Relationship field names to hydrate into each row.
     #[serde(default)]
     pub includes: Vec<String>,
+    /// Optional per-query execution deadline in milliseconds. When set (and
+    /// non-zero), execution is cooperatively cancelled with a structured
+    /// `query_timeout` error once the budget is exceeded. The server clamps this
+    /// against its configured maximum; omitting it falls back to that maximum.
+    /// Additive and defaulted so older connectors that omit it are unaffected.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub timeout_ms: Option<u64>,
 }
 
 impl FindQuery {
@@ -279,6 +309,7 @@ impl FindQuery {
             collection: collection.into(),
             filter: None,
             vector: None,
+            vector_ann: None,
             text_search: None,
             hybrid: None,
             order_by: Vec::new(),
@@ -286,6 +317,7 @@ impl FindQuery {
             offset: None,
             projection: None,
             includes: Vec::new(),
+            timeout_ms: None,
         }
     }
 
@@ -329,6 +361,163 @@ pub struct ExistsQuery {
     pub filter: Option<Filter>,
 }
 
+/// An aggregation metric operator.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AggregateOp {
+    /// Count of matched records (ignores `field`).
+    Count,
+    /// Minimum of a numeric/orderable field over the matched set.
+    Min,
+    /// Maximum of a numeric/orderable field over the matched set.
+    Max,
+}
+
+impl AggregateOp {
+    /// Whether this operator requires a `field`.
+    pub fn needs_field(self) -> bool {
+        matches!(self, AggregateOp::Min | AggregateOp::Max)
+    }
+
+    /// The stable string name (`count`, `min`, `max`).
+    pub fn name(self) -> &'static str {
+        match self {
+            AggregateOp::Count => "count",
+            AggregateOp::Min => "min",
+            AggregateOp::Max => "max",
+        }
+    }
+}
+
+/// A single aggregation metric: an operator over an optional field.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct AggregateMetric {
+    /// The aggregation operator.
+    pub op: AggregateOp,
+    /// The target field (required for `min`/`max`, ignored for `count`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub field: Option<String>,
+}
+
+/// The default number of facet buckets returned when a facet omits `limit`.
+pub const DEFAULT_FACET_LIMIT: usize = 10;
+
+/// A request for a terms facet over a scalar field: the distinct values of the
+/// field within the matched set, with per-value counts.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct FacetRequest {
+    /// The scalar field (dotted document path supported).
+    pub field: String,
+    /// The maximum number of buckets to return (defaults to
+    /// [`DEFAULT_FACET_LIMIT`]). Buckets are ordered by descending count, then
+    /// ascending value, so the truncation is deterministic.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub limit: Option<usize>,
+}
+
+impl FacetRequest {
+    /// The effective bucket limit.
+    pub fn effective_limit(&self) -> usize {
+        self.limit.unwrap_or(DEFAULT_FACET_LIMIT)
+    }
+}
+
+/// An aggregation/faceting query over a collection. Aggregations and facets are
+/// computed over the same matched set (filter, or an optional ranked-text
+/// candidate set for search facets). Additive to the read surface: older
+/// connectors never send it, and a server that predates it rejects the unknown
+/// `query` tag.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct AggregateQuery {
+    /// The collection to aggregate over.
+    pub collection: String,
+    /// Optional filter applied before aggregation.
+    #[serde(default)]
+    pub filter: Option<Filter>,
+    /// Optional ranked full-text clause: when present, facets and metrics are
+    /// computed over the BM25 candidate set (a "search facet"). The filter, if
+    /// any, is still applied as a residual.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub text_search: Option<Box<TextSearch>>,
+    /// Terms facets to compute.
+    #[serde(default)]
+    pub facets: Vec<FacetRequest>,
+    /// Aggregation metrics to compute.
+    #[serde(default)]
+    pub metrics: Vec<AggregateMetric>,
+    /// Optional per-query execution deadline in milliseconds (see
+    /// [`FindQuery::timeout_ms`]).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub timeout_ms: Option<u64>,
+}
+
+impl AggregateQuery {
+    /// Construct a minimal aggregate over a collection.
+    pub fn new(collection: impl Into<String>) -> Self {
+        AggregateQuery {
+            collection: collection.into(),
+            filter: None,
+            text_search: None,
+            facets: Vec::new(),
+            metrics: Vec::new(),
+            timeout_ms: None,
+        }
+    }
+
+    /// Validate metric/facet shapes: `min`/`max` require a field, `count` must
+    /// not carry one, and facet/metric fields must be non-empty.
+    pub fn validate(&self) -> Result<(), String> {
+        if self.facets.is_empty() && self.metrics.is_empty() {
+            return Err("an aggregate query must request at least one facet or metric".into());
+        }
+        for m in &self.metrics {
+            match (m.op.needs_field(), &m.field) {
+                (true, None) => {
+                    return Err(format!("aggregation `{}` requires a field", m.op.name()))
+                }
+                (true, Some(f)) | (false, Some(f)) if f.is_empty() => {
+                    return Err("aggregation field must not be empty".into());
+                }
+                _ => {}
+            }
+        }
+        for f in &self.facets {
+            if f.field.is_empty() {
+                return Err("facet field must not be empty".into());
+            }
+        }
+        Ok(())
+    }
+}
+
+/// A ranked-pagination request: page a ranked search (`vector` / `text_search` /
+/// `hybrid`) by stable opaque cursor token. Additive to the read surface; older
+/// servers reject the unknown `query` tag.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SearchPageRequest {
+    /// The ranked query. Must carry exactly one ranked clause (`vector`,
+    /// `text_search`, or `hybrid`); its own `limit`/`offset` are ignored for
+    /// cursor paging, while a `hybrid` `top_k` or `vector` `k` still bounds the
+    /// result set.
+    pub find: FindQuery,
+    /// Maximum rows to return for this page (>= 1).
+    pub page_size: usize,
+    /// The opaque cursor token returned by a previous page, or `None` for the
+    /// first page.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cursor: Option<String>,
+}
+
+/// A page of ranked rows plus the token to fetch the next page.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct RankedPageResult {
+    /// The ranked rows in this page (with stable cross-page `rank`).
+    pub rows: Vec<Row>,
+    /// The opaque token for the next page, or `None` when this is the last page.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub next_cursor: Option<String>,
+}
+
 /// A read request opcode payload (`Opcode::Query`).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "query", rename_all = "snake_case")]
@@ -339,6 +528,10 @@ pub enum ReadRequest {
     Count(CountQuery),
     /// Test whether any row matches.
     Exists(ExistsQuery),
+    /// Compute aggregations and/or terms facets over a collection.
+    Aggregate(AggregateQuery),
+    /// Page a ranked search by stable cursor token.
+    SearchPage(SearchPageRequest),
 }
 
 /// A mutation request payload (`Opcode::Mutate`).
@@ -482,6 +675,7 @@ mod tests {
                 ],
             }),
             vector: None,
+            vector_ann: None,
             text_search: None,
             hybrid: None,
             order_by: vec![OrderKey {
@@ -492,6 +686,7 @@ mod tests {
             offset: Some(5),
             projection: Some(vec!["id".into(), "title".into()]),
             includes: vec!["owner".into()],
+            timeout_ms: None,
         };
         let json = serde_json::to_string(&q).unwrap();
         let back: FindQuery = serde_json::from_str(&json).unwrap();

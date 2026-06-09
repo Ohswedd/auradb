@@ -92,10 +92,11 @@ validate and preserve indexes.
 
 ## Vector indexes
 
-Vector search is exact: the index scans stored vectors and ranks by the chosen
-metric. The `VectorIndex` trait leaves room for an approximate (ANN) index such
-as HNSW as future work without changing the query engine. ANN is **not** claimed
-in this release.
+Vector search is exact by default: the index scans stored vectors and ranks by the
+chosen metric, and this exact path is the correctness baseline. The `VectorIndex`
+trait also backs an opt-in approximate (HNSW) index, shipped as a preview in v1.2.0
+without changing the query engine — it is in-memory/rebuilt, not persisted or
+incremental, and **not production ANN**. Exact search remains the default.
 
 ## Tests
 

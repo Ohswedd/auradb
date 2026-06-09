@@ -2,9 +2,86 @@
 //! relationship hydration, and EXPLAIN planning.
 
 use std::cmp::Ordering;
+use std::time::{Duration, Instant};
 
 use auradb_core::{Cardinality, CollectionSchema, Error, Record, RecordId, Result, Value};
-use auradb_index::{CollectionIndexes, Metric};
+use auradb_index::{CollectionIndexes, HnswParams, Metric};
+
+/// Default HNSW `efSearch` for the approximate vector preview when a query does
+/// not specify one (clamped up to at least `k` at the call site).
+const DEFAULT_ANN_EF_SEARCH: usize = 64;
+/// Default HNSW graph degree `M`.
+const DEFAULT_ANN_M: usize = 16;
+/// Default HNSW `efConstruction`.
+const DEFAULT_ANN_EF_CONSTRUCTION: usize = 200;
+
+/// A cooperative execution deadline. Long-running read paths poll [`check`] at
+/// bounded intervals; when the elapsed wall-clock time exceeds the budget the
+/// poll returns a structured [`Error::QueryTimeout`] so the in-flight query is
+/// abandoned cleanly without tearing down the session.
+///
+/// A deadline of `0` milliseconds (or [`Deadline::none`]) disables the check, so
+/// the default behaviour for callers that pass no timeout is unchanged.
+///
+/// [`check`]: Deadline::check
+#[derive(Debug, Clone, Copy)]
+pub struct Deadline {
+    start: Instant,
+    limit: Option<Duration>,
+    limit_ms: u64,
+}
+
+/// Poll the deadline at least this often while iterating a candidate set, so the
+/// timeout-check overhead stays negligible on the hot path while still bounding
+/// how long an over-budget scan can run past its deadline.
+const DEADLINE_POLL_INTERVAL: usize = 1024;
+
+impl Deadline {
+    /// A deadline that never fires.
+    pub fn none() -> Self {
+        Deadline {
+            start: Instant::now(),
+            limit: None,
+            limit_ms: 0,
+        }
+    }
+
+    /// A deadline `limit_ms` milliseconds from now. `0` disables the deadline.
+    pub fn after_ms(limit_ms: u64) -> Self {
+        Deadline {
+            start: Instant::now(),
+            limit: (limit_ms > 0).then(|| Duration::from_millis(limit_ms)),
+            limit_ms,
+        }
+    }
+
+    /// Whether this deadline can ever fire.
+    pub fn is_enabled(&self) -> bool {
+        self.limit.is_some()
+    }
+
+    /// Return a [`Error::QueryTimeout`] if the budget has already been exceeded.
+    pub fn check(&self) -> Result<()> {
+        if let Some(limit) = self.limit {
+            let elapsed = self.start.elapsed();
+            if elapsed > limit {
+                return Err(Error::query_timeout(elapsed.as_millis(), self.limit_ms));
+            }
+        }
+        Ok(())
+    }
+
+    /// Poll the deadline only every [`DEADLINE_POLL_INTERVAL`] iterations,
+    /// keeping the per-iteration cost off the hot path. `i` is the 0-based
+    /// iteration index.
+    #[inline]
+    pub(crate) fn check_at(&self, i: usize) -> Result<()> {
+        if self.limit.is_some() && i % DEADLINE_POLL_INTERVAL == 0 {
+            self.check()?;
+        }
+        Ok(())
+    }
+}
 
 use crate::eval;
 use crate::ir::{
@@ -151,6 +228,13 @@ pub struct VectorPlan {
     /// is no approximate/ANN index in v1.1.0).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub vectors_scored: Option<usize>,
+    /// Whether the opt-in approximate (HNSW) **preview** index served this query.
+    /// `false` (the default) means exact search — the correctness baseline.
+    #[serde(default)]
+    pub approximate: bool,
+    /// The HNSW `efSearch` beam width used, when `approximate` is true.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ef_search: Option<usize>,
 }
 
 /// Ranked full-text clause summary in an EXPLAIN plan.
@@ -286,7 +370,18 @@ fn select_candidates(
                 .as_ref()
                 .expect("vector access only chosen for a vector query");
             let metric = Metric::parse(&vs.metric)?;
-            let neighbors = indexes.vector_nearest(&vs.field, &vs.query, vs.k, metric)?;
+            // Opt-in approximate (HNSW) preview when `vector_ann` is set; exact
+            // search (the correctness baseline) otherwise.
+            let neighbors = if let Some(ann) = &query.vector_ann {
+                let params = HnswParams {
+                    m: ann.m.unwrap_or(DEFAULT_ANN_M),
+                    ef_construction: ann.ef_construction.unwrap_or(DEFAULT_ANN_EF_CONSTRUCTION),
+                };
+                let ef_search = ann.ef_search.unwrap_or(DEFAULT_ANN_EF_SEARCH).max(vs.k);
+                indexes.vector_ann_nearest(&vs.field, &vs.query, vs.k, metric, params, ef_search)?
+            } else {
+                indexes.vector_nearest(&vs.field, &vs.query, vs.k, metric)?
+            };
             let candidates = neighbors
                 .into_iter()
                 .map(|n| Scored::ranked(n.id, n.score))
@@ -413,7 +508,16 @@ fn strategy_for(access: &Access) -> Strategy {
 /// Core find execution shared by [`execute_find`] and `EXPLAIN ANALYZE`: plans,
 /// selects candidates, filters, orders, and applies offset/limit. Returns the
 /// ordered ids, the plan, and execution counts.
-fn run_find(ds: &dyn DataSource, query: &FindQuery) -> Result<(PlannedFind, ExecCounts)> {
+///
+/// `deadline` cooperatively bounds execution: candidate selection and the filter
+/// loop poll it, and a query that runs past its budget returns a structured
+/// [`Error::QueryTimeout`]. A [`Deadline::none`] (the default for callers that do
+/// not set a timeout) never fires.
+fn run_find(
+    ds: &dyn DataSource,
+    query: &FindQuery,
+    deadline: &Deadline,
+) -> Result<(PlannedFind, ExecCounts)> {
     query
         .validate_search_clauses()
         .map_err(Error::InvalidRequest)?;
@@ -433,17 +537,23 @@ fn run_find(ds: &dyn DataSource, query: &FindQuery) -> Result<(PlannedFind, Exec
     let plan = planner::plan_find(query, schema, indexes, stats, live_row_count);
     let planning = plan_start.elapsed();
 
-    // 2. Candidate selection per the chosen access path.
+    // 2. Candidate selection per the chosen access path. Index-backed ranked
+    // retrieval (BM25/vector/hybrid) runs inside the index; bound it by checking
+    // the deadline immediately before and after selection.
+    deadline.check()?;
     let selection = select_candidates(ds, indexes, query, &plan.access)?;
+    deadline.check()?;
     let scanned = selection.candidates.len();
     if matches!(plan.access, Access::Scan) && scanned > 10_000 {
         warnings.push(format!("full scan of {scanned} records; consider an index"));
     }
     let score_ordered = selection.score_ordered;
 
-    // 3. Filter candidates (always re-applied, even after an index seed).
+    // 3. Filter candidates (always re-applied, even after an index seed). The
+    // filter loop is the dominant cost on a full scan, so it polls the deadline.
     let mut matched: Vec<Scored> = Vec::new();
-    for cand in selection.candidates {
+    for (i, cand) in selection.candidates.into_iter().enumerate() {
+        deadline.check_at(i)?;
         let record = match ds.get(&query.collection, cand.id) {
             Some(r) => r,
             None => continue,
@@ -457,7 +567,8 @@ fn run_find(ds: &dyn DataSource, query: &FindQuery) -> Result<(PlannedFind, Exec
     }
     let matched_count = matched.len();
 
-    // 4. Ordering.
+    // 4. Ordering. A large sort can dominate a scan, so re-check before it.
+    deadline.check()?;
     if score_ordered {
         matched.sort_by(|a, b| {
             b.score
@@ -487,15 +598,29 @@ fn run_find(ds: &dyn DataSource, query: &FindQuery) -> Result<(PlannedFind, Exec
         used_index: plan.used_index.clone(),
         estimated_candidates: scanned,
         filter_present: query.filter.is_some(),
-        vector: query.vector.as_ref().map(|v| VectorPlan {
-            field: v.field.clone(),
-            k: v.k,
-            metric: v.metric.clone(),
-            // The exact scan compares every indexed vector for the field.
-            vectors_scored: indexes
-                .vector_field_stats()
-                .find(|(f, _, _)| *f == v.field)
-                .map(|(_, _, count)| count),
+        vector: query.vector.as_ref().map(|v| {
+            let approximate = query.vector_ann.is_some();
+            VectorPlan {
+                field: v.field.clone(),
+                k: v.k,
+                metric: v.metric.clone(),
+                // For exact search this is the brute-force scan size; for the
+                // approximate preview the graph visits far fewer, so it is not a
+                // meaningful "scanned" count and is omitted.
+                vectors_scored: if approximate {
+                    None
+                } else {
+                    indexes
+                        .vector_field_stats()
+                        .find(|(f, _, _)| *f == v.field)
+                        .map(|(_, _, count)| count)
+                },
+                approximate,
+                ef_search: query
+                    .vector_ann
+                    .as_ref()
+                    .map(|a| a.ef_search.unwrap_or(DEFAULT_ANN_EF_SEARCH).max(v.k)),
+            }
         }),
         text_search: selection.text_search,
         hybrid: selection.hybrid,
@@ -522,8 +647,23 @@ fn run_find(ds: &dyn DataSource, query: &FindQuery) -> Result<(PlannedFind, Exec
 }
 
 /// Plan and run a find, returning ordered ids/scores and the EXPLAIN plan.
+///
+/// The query's [`FindQuery::timeout_ms`] bounds execution cooperatively; the
+/// server clamps that field against its configured maximum before calling, so an
+/// omitted timeout means "use the server default" (which may be unbounded).
 pub fn execute_find(ds: &dyn DataSource, query: &FindQuery) -> Result<PlannedFind> {
-    Ok(run_find(ds, query)?.0)
+    let deadline = Deadline::after_ms(query.timeout_ms.unwrap_or(0));
+    Ok(run_find(ds, query, &deadline)?.0)
+}
+
+/// Plan and run a find under an explicit [`Deadline`], overriding the query's own
+/// `timeout_ms`. Used by paths that resolve the effective budget separately.
+pub fn execute_find_within(
+    ds: &dyn DataSource,
+    query: &FindQuery,
+    deadline: &Deadline,
+) -> Result<PlannedFind> {
+    Ok(run_find(ds, query, deadline)?.0)
 }
 
 /// Resolve BM25-ranked text candidates for a `text_search` clause.
@@ -835,7 +975,8 @@ pub fn explain_analyze(
     snapshot_ts: Option<u64>,
 ) -> Result<ExplainPlan> {
     let started = std::time::Instant::now();
-    let (planned, counts) = run_find(ds, query)?;
+    let deadline = Deadline::after_ms(query.timeout_ms.unwrap_or(0));
+    let (planned, counts) = run_find(ds, query, &deadline)?;
     let execution_micros = started.elapsed().as_micros();
     let stats_version = ds.stats_version();
     // Statistics look stale or absent when there are none, or when rows exist but
@@ -890,5 +1031,44 @@ fn selection_reason(plan: &ExplainPlan) -> String {
             "no usable index for the filter; full collection scan".to_string()
         }
         (strategy, _) => format!("{strategy:?} access path"),
+    }
+}
+
+#[cfg(test)]
+mod deadline_tests {
+    use super::*;
+    use auradb_core::ErrorCode;
+
+    #[test]
+    fn none_and_zero_never_fire() {
+        assert!(!Deadline::none().is_enabled());
+        assert!(!Deadline::after_ms(0).is_enabled());
+        // Polling at many indices must stay Ok for a disabled deadline.
+        let d = Deadline::none();
+        for i in 0..10_000 {
+            d.check_at(i).expect("disabled deadline never fires");
+        }
+        d.check().expect("disabled deadline never fires");
+    }
+
+    #[test]
+    fn enabled_deadline_reports_query_timeout_after_budget() {
+        // Start a 1ms budget, then sleep well past it. Because the deadline's
+        // clock started before the sleep, the check is deterministic regardless
+        // of host speed.
+        let d = Deadline::after_ms(1);
+        assert!(d.is_enabled());
+        std::thread::sleep(Duration::from_millis(8));
+        let err = d.check().expect_err("expired deadline must fire");
+        assert_eq!(err.code(), ErrorCode::QueryTimeout);
+        let msg = err.to_string();
+        assert!(msg.contains("deadline"), "message names the budget: {msg}");
+    }
+
+    #[test]
+    fn fresh_deadline_within_budget_does_not_fire() {
+        // A generous budget must not trip for an instantaneous check.
+        let d = Deadline::after_ms(60_000);
+        d.check().expect("a fresh, generous deadline does not fire");
     }
 }

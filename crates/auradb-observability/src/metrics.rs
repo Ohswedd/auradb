@@ -80,6 +80,16 @@ pub struct Metrics {
     pub search_hybrid_queries_total: AtomicU64,
     /// Total exact vector nearest-neighbour search queries executed (counter).
     pub search_vector_queries_total: AtomicU64,
+    /// Total approximate (HNSW) vector-search preview queries executed (counter).
+    pub ann_preview_queries_total: AtomicU64,
+    /// Total read queries cooperatively cancelled for exceeding their execution
+    /// deadline (counter).
+    pub query_timeouts_total: AtomicU64,
+    /// Total faceted queries executed (a query carrying one or more facets)
+    /// (counter).
+    pub facets_queries_total: AtomicU64,
+    /// Total aggregation queries executed (counter).
+    pub aggregation_queries_total: AtomicU64,
     /// Total failed authentication attempts (invalid or missing credentials).
     pub auth_failures_total: AtomicU64,
     /// Bytes read from the wire.
@@ -322,6 +332,10 @@ impl Metrics {
             search_text_queries_total: self.search_text_queries_total.load(Ordering::Relaxed),
             search_hybrid_queries_total: self.search_hybrid_queries_total.load(Ordering::Relaxed),
             search_vector_queries_total: self.search_vector_queries_total.load(Ordering::Relaxed),
+            ann_preview_queries_total: self.ann_preview_queries_total.load(Ordering::Relaxed),
+            query_timeouts_total: self.query_timeouts_total.load(Ordering::Relaxed),
+            facets_queries_total: self.facets_queries_total.load(Ordering::Relaxed),
+            aggregation_queries_total: self.aggregation_queries_total.load(Ordering::Relaxed),
             auth_failures_total: self.auth_failures_total.load(Ordering::Relaxed),
             bytes_read: self.bytes_read.load(Ordering::Relaxed),
             bytes_written: self.bytes_written.load(Ordering::Relaxed),
@@ -415,6 +429,14 @@ pub struct MetricsSnapshot {
     pub search_hybrid_queries_total: u64,
     /// Total exact vector nearest-neighbour search queries.
     pub search_vector_queries_total: u64,
+    /// Total approximate (HNSW) vector-search preview queries.
+    pub ann_preview_queries_total: u64,
+    /// Total read queries cancelled for exceeding their execution deadline.
+    pub query_timeouts_total: u64,
+    /// Total faceted queries executed.
+    pub facets_queries_total: u64,
+    /// Total aggregation queries executed.
+    pub aggregation_queries_total: u64,
     /// Total failed authentication attempts.
     pub auth_failures_total: u64,
     /// Bytes read.
@@ -531,6 +553,16 @@ impl MetricsSnapshot {
         counter(
             "auradb_search_vector_queries_total",
             self.search_vector_queries_total,
+        );
+        counter(
+            "auradb_ann_preview_queries_total",
+            self.ann_preview_queries_total,
+        );
+        counter("auradb_query_timeouts_total", self.query_timeouts_total);
+        counter("auradb_facets_queries_total", self.facets_queries_total);
+        counter(
+            "auradb_aggregation_queries_total",
+            self.aggregation_queries_total,
         );
         counter("auradb_auth_failures_total", self.auth_failures_total);
         counter("auradb_bytes_read_total", self.bytes_read);

@@ -19,8 +19,9 @@ capability negotiation. The new search clauses are additive Query IR and respons
 fields, so AWP 1 is unchanged: older connectors (0.4.x) remain wire-compatible for
 non-search operations but do not surface the ranked-search APIs. Connector
 conformance against v0.5.0 is a release requirement (see
-[CONFORMANCE.md](CONFORMANCE.md)). Exact vector search remains the correctness
-baseline; approximate (ANN) vector search is not implemented. Multi-node
+[CONFORMANCE.md](CONFORMANCE.md)). Exact vector search remains the default and
+correctness baseline; approximate (HNSW) vector search is an opt-in preview
+(v1.2.0) — in-memory/rebuilt, not production ANN. Multi-node
 leader-redirect ergonomics remain an HA candidate preview, not production HA.
 
 ## Final HA candidate stabilization (v0.9.2)

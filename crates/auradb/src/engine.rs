@@ -617,6 +617,18 @@ impl Engine {
         query::execute_find(&*inner, q)
     }
 
+    /// Plan a find under an explicit cooperative [`query::Deadline`], overriding
+    /// the query's own `timeout_ms`. A query that runs past the deadline returns
+    /// a structured `query_timeout` error; the engine and session stay usable.
+    pub fn plan_find_within(
+        &self,
+        q: &FindQuery,
+        deadline: &query::Deadline,
+    ) -> Result<query::PlannedFind> {
+        let inner = self.lock();
+        query::execute_find_within(&*inner, q, deadline)
+    }
+
     /// Materialize specific rows of a find (used for cursor paging).
     pub fn materialize(&self, q: &FindQuery, page: &[Scored]) -> Result<Vec<Row>> {
         let inner = self.lock();
@@ -658,6 +670,27 @@ impl Engine {
     pub fn explain(&self, q: &FindQuery) -> Result<ExplainPlan> {
         let inner = self.lock();
         query::explain(&*inner, q)
+    }
+
+    /// Compute aggregations and/or terms facets over a collection. The query's
+    /// `timeout_ms` bounds execution cooperatively (the server clamps it against
+    /// the configured maximum before calling).
+    pub fn aggregate(&self, q: &query::AggregateQuery) -> Result<query::AggregateResult> {
+        let inner = self.lock();
+        let deadline = query::Deadline::after_ms(q.timeout_ms.unwrap_or(0));
+        query::execute_aggregate(&*inner, q, &deadline)
+    }
+
+    /// Compute aggregations/facets under an explicit cooperative deadline,
+    /// overriding the query's own `timeout_ms`. A query that runs past the
+    /// deadline returns a structured `query_timeout` error.
+    pub fn aggregate_within(
+        &self,
+        q: &query::AggregateQuery,
+        deadline: &query::Deadline,
+    ) -> Result<query::AggregateResult> {
+        let inner = self.lock();
+        query::execute_aggregate(&*inner, q, deadline)
     }
 
     // ----- auto-commit mutations -----
@@ -858,6 +891,56 @@ impl Engine {
         inner.touch_txn(txn.id().get())?;
         let view = inner.txn_view(txn, &q.collection)?;
         query::execute_exists(&view, q)
+    }
+
+    /// Page a ranked search (vector / text_search / hybrid) by stable keyset
+    /// cursor token. `cursor` is `None` for the first page or a token from a
+    /// previous call. Returns the page's rows (with stable cross-page ranks) and
+    /// the next-page token (`None` on the last page). The query's `timeout_ms`
+    /// bounds each page's evaluation.
+    pub fn search_page(
+        &self,
+        q: &FindQuery,
+        page_size: usize,
+        cursor: Option<&str>,
+    ) -> Result<(Vec<Row>, Option<String>)> {
+        let inner = self.lock();
+        let deadline = query::Deadline::after_ms(q.timeout_ms.unwrap_or(0));
+        let page = query::paginate_ranked(&*inner, q, page_size, cursor, &deadline)?;
+        let rows = query::materialize_page(&*inner, q, &page.rows, page.start_rank)?;
+        Ok((rows, page.next_cursor))
+    }
+
+    /// Page a ranked search within a transaction view. Paging inside a
+    /// transaction fixes the snapshot (and thus the corpus statistics), so
+    /// BM25/hybrid cursors are duplicate-stable across concurrent writes.
+    pub fn txn_search_page(
+        &self,
+        txn: &Transaction,
+        q: &FindQuery,
+        page_size: usize,
+        cursor: Option<&str>,
+    ) -> Result<(Vec<Row>, Option<String>)> {
+        let mut inner = self.lock();
+        inner.touch_txn(txn.id().get())?;
+        let view = inner.txn_view(txn, &q.collection)?;
+        let deadline = query::Deadline::after_ms(q.timeout_ms.unwrap_or(0));
+        let page = query::paginate_ranked(&view, q, page_size, cursor, &deadline)?;
+        let rows = query::materialize_page(&view, q, &page.rows, page.start_rank)?;
+        Ok((rows, page.next_cursor))
+    }
+
+    /// Compute aggregations/facets within a transaction view.
+    pub fn txn_aggregate(
+        &self,
+        txn: &Transaction,
+        q: &query::AggregateQuery,
+    ) -> Result<query::AggregateResult> {
+        let mut inner = self.lock();
+        inner.touch_txn(txn.id().get())?;
+        let view = inner.txn_view(txn, &q.collection)?;
+        let deadline = query::Deadline::after_ms(q.timeout_ms.unwrap_or(0));
+        query::execute_aggregate(&view, q, &deadline)
     }
 
     /// Produce an EXPLAIN plan for a find within a transaction.

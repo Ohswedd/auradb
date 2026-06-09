@@ -1,4 +1,4 @@
-//! Exact vector search remains the correctness baseline in v1.1.0 (no ANN/HNSW).
+//! Exact vector search remains the correctness baseline (no production ANN).
 //! These tests strengthen that baseline: a larger-dataset correctness regression
 //! against a brute-force reference, EXPLAIN ANALYZE shape, restart round-trip,
 //! and dimension-error redaction (the error must not echo the query vector).

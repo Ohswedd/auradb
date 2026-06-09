@@ -5,7 +5,8 @@ use std::sync::Arc;
 
 use auradb::core::{CollectionSchema, Document, FieldType, Value};
 use auradb::query::{
-    CountQuery, ExistsQuery, Filter, FindQuery, Mutation, QueryResultPage, ReadRequest,
+    CountQuery, ExistsQuery, Filter, FindQuery, Mutation, QueryResultPage, RankedPageResult,
+    ReadRequest,
 };
 use auradb::{Engine, Transaction};
 use auradb_core::{Error, Result, ServerCapabilities};
@@ -388,6 +389,21 @@ fn enforce_pagination_limits(
     Ok(())
 }
 
+/// Resolve the effective read deadline in milliseconds from the server maximum
+/// and an optional per-query request. A per-query timeout may only *lower* the
+/// configured maximum, never raise it, so a client cannot opt out of the
+/// server's protection. `0` for either side means "no bound from that side";
+/// the result is `0` only when both are unbounded.
+fn effective_query_timeout_ms(server_max_ms: u64, per_query_ms: Option<u64>) -> u64 {
+    match (server_max_ms, per_query_ms) {
+        (0, None) => 0,
+        (0, Some(0)) => 0,
+        (0, Some(pq)) => pq,
+        (max, None) | (max, Some(0)) => max,
+        (max, Some(pq)) => max.min(pq),
+    }
+}
+
 /// Apply pagination and full-text bounds to a read request.
 fn enforce_read_limits(limits: &LimitsConfig, req: &ReadRequest) -> Result<()> {
     match req {
@@ -401,6 +417,20 @@ fn enforce_read_limits(limits: &LimitsConfig, req: &ReadRequest) -> Result<()> {
         ReadRequest::Count(CountQuery { filter, .. })
         | ReadRequest::Exists(ExistsQuery { filter, .. }) => {
             if let Some(f) = filter {
+                enforce_filter_limits(limits, f)?;
+            }
+            Ok(())
+        }
+        ReadRequest::Aggregate(q) => {
+            if let Some(f) = &q.filter {
+                enforce_filter_limits(limits, f)?;
+            }
+            Ok(())
+        }
+        ReadRequest::SearchPage(req) => {
+            // The page size is bounded by the same ceiling as a query `limit`.
+            enforce_pagination_limits(limits, Some(req.page_size), None)?;
+            if let Some(f) = &req.find.filter {
                 enforce_filter_limits(limits, f)?;
             }
             Ok(())
@@ -422,6 +452,9 @@ pub fn respond(ctx: &ServerContext, session: &mut Session, frame: Frame) -> Fram
                 }
                 auradb_core::ErrorCode::TransactionTimeout => {
                     Metrics::incr(&ctx.metrics.mvcc_transaction_timeouts_total)
+                }
+                auradb_core::ErrorCode::QueryTimeout => {
+                    Metrics::incr(&ctx.metrics.query_timeouts_total)
                 }
                 _ => {}
             }
@@ -563,8 +596,43 @@ fn handle(ctx: &ServerContext, session: &mut Session, frame: &Frame) -> Result<F
         }
         Opcode::Query => {
             Metrics::incr(&ctx.metrics.queries_total);
-            let req: ReadRequest = frame.decode_json()?;
+            let mut req: ReadRequest = frame.decode_json()?;
             enforce_read_limits(&ctx.config.limits, &req)?;
+            // Apply the server's read deadline: a Find's per-query `timeout_ms`
+            // may lower the configured maximum but never raise it. The resolved
+            // budget is written back into the request so the engine enforces it
+            // cooperatively (see `auradb_query::exec::Deadline`).
+            match &mut req {
+                ReadRequest::Find(q) => {
+                    let effective = effective_query_timeout_ms(
+                        ctx.config.limits.max_query_time_ms,
+                        q.timeout_ms,
+                    );
+                    q.timeout_ms = (effective > 0).then_some(effective);
+                }
+                ReadRequest::Aggregate(q) => {
+                    let effective = effective_query_timeout_ms(
+                        ctx.config.limits.max_query_time_ms,
+                        q.timeout_ms,
+                    );
+                    q.timeout_ms = (effective > 0).then_some(effective);
+                }
+                ReadRequest::SearchPage(req) => {
+                    let effective = effective_query_timeout_ms(
+                        ctx.config.limits.max_query_time_ms,
+                        req.find.timeout_ms,
+                    );
+                    req.find.timeout_ms = (effective > 0).then_some(effective);
+                }
+                _ => {}
+            }
+            // Count aggregation/facet queries by shape for observability.
+            if let ReadRequest::Aggregate(q) = &req {
+                Metrics::incr(&ctx.metrics.aggregation_queries_total);
+                if !q.facets.is_empty() {
+                    Metrics::incr(&ctx.metrics.facets_queries_total);
+                }
+            }
             // Count ranked-retrieval queries by shape for observability.
             if let ReadRequest::Find(q) = &req {
                 if q.hybrid.is_some() {
@@ -573,6 +641,9 @@ fn handle(ctx: &ServerContext, session: &mut Session, frame: &Frame) -> Result<F
                     Metrics::incr(&ctx.metrics.search_text_queries_total);
                 } else if q.vector.is_some() {
                     Metrics::incr(&ctx.metrics.search_vector_queries_total);
+                    if q.vector_ann.is_some() {
+                        Metrics::incr(&ctx.metrics.ann_preview_queries_total);
+                    }
                 }
                 let ranked = q.hybrid.is_some() || q.text_search.is_some() || q.vector.is_some();
                 if ranked {
@@ -583,6 +654,23 @@ fn handle(ctx: &ServerContext, session: &mut Session, frame: &Frame) -> Result<F
                         .record_us(started.elapsed().as_micros() as u64);
                     return result;
                 }
+            }
+            // A ranked-pagination page is a ranked retrieval too: count it by
+            // clause shape and record its latency.
+            if let ReadRequest::SearchPage(p) = &req {
+                if p.find.hybrid.is_some() {
+                    Metrics::incr(&ctx.metrics.search_hybrid_queries_total);
+                } else if p.find.text_search.is_some() {
+                    Metrics::incr(&ctx.metrics.search_text_queries_total);
+                } else if p.find.vector.is_some() {
+                    Metrics::incr(&ctx.metrics.search_vector_queries_total);
+                }
+                let started = std::time::Instant::now();
+                let result = handle_query(ctx, session, frame, req);
+                ctx.metrics
+                    .ranking_latency
+                    .record_us(started.elapsed().as_micros() as u64);
+                return result;
             }
             handle_query(ctx, session, frame, req)
         }
@@ -793,6 +881,33 @@ fn handle_query(
                 frame.txn_id,
                 &serde_json::json!({ "exists": exists }),
             )
+        }
+        ReadRequest::Aggregate(query) => {
+            let result = if frame.txn_id != 0 {
+                let txn = session
+                    .transactions
+                    .get(&frame.txn_id)
+                    .ok_or_else(|| Error::NotFound(format!("transaction {}", frame.txn_id)))?;
+                ctx.engine.txn_aggregate(txn, &query)?
+            } else {
+                ctx.engine.aggregate(&query)?
+            };
+            Frame::json(Opcode::QueryResult, frame.request_id, frame.txn_id, &result)
+        }
+        ReadRequest::SearchPage(req) => {
+            let (rows, next_cursor) = if frame.txn_id != 0 {
+                let txn = session
+                    .transactions
+                    .get(&frame.txn_id)
+                    .ok_or_else(|| Error::NotFound(format!("transaction {}", frame.txn_id)))?;
+                ctx.engine
+                    .txn_search_page(txn, &req.find, req.page_size, req.cursor.as_deref())?
+            } else {
+                ctx.engine
+                    .search_page(&req.find, req.page_size, req.cursor.as_deref())?
+            };
+            let result = RankedPageResult { rows, next_cursor };
+            Frame::json(Opcode::QueryResult, frame.request_id, frame.txn_id, &result)
         }
     }
 }

@@ -7,7 +7,7 @@
 [![CI](https://github.com/Ohswedd/auradb/actions/workflows/ci.yml/badge.svg)](https://github.com/Ohswedd/auradb/actions/workflows/ci.yml)
 [![Security](https://github.com/Ohswedd/auradb/actions/workflows/security.yml/badge.svg)](https://github.com/Ohswedd/auradb/actions/workflows/security.yml)
 [![Docker](https://github.com/Ohswedd/auradb/actions/workflows/docker.yml/badge.svg)](https://github.com/Ohswedd/auradb/actions/workflows/docker.yml)
-[![Release](https://img.shields.io/badge/release-v1.1.0-green.svg)](CHANGELOG.md)
+[![Release](https://img.shields.io/badge/release-v1.2.0-green.svg)](CHANGELOG.md)
 [![Rust](https://img.shields.io/badge/rust-1.85%2B-orange.svg)](https://www.rust-lang.org)
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
 
@@ -21,10 +21,10 @@ systems. It speaks the Aura Wire Protocol over TCP, persists and recovers data l
 and ships with auth, TLS, backups, observability, and operator runbooks.
 
 The matching client is [**Aura Connector**](https://github.com/Ohswedd/aura-connector), a
-typed async Python connector. AuraDB v1.1.0 pairs with Aura Connector v0.5.x.
+typed async Python connector. AuraDB v1.2.0 pairs with Aura Connector v0.6.x.
 
 ```bash
-docker run --rm -p 7171:7171 -v auradb-data:/data ghcr.io/ohswedd/auradb:1.1.0
+docker run --rm -p 7171:7171 -v auradb-data:/data ghcr.io/ohswedd/auradb:1.2.0
 ```
 
 ## Support status
@@ -35,9 +35,10 @@ docker run --rm -p 7171:7171 -v auradb-data:/data ghcr.io/ohswedd/auradb:1.1.0
 | Backup / restore, upgrade from v0.x | Stable | **Yes** |
 | Exact vector search, tokenized full-text | Stable | **Yes** |
 | BM25 ranked full-text, hybrid text+vector search | Stable | **Yes** |
-| Aura Connector 0.5.x, AWP 1, storage format v2 | Stable / frozen for v1 | **Yes** |
+| Aggregations, terms facets, cooperative query timeouts | Stable (v1.2.0) | **Yes** |
+| Aura Connector 0.6.x, AWP 1, storage format v2 | Stable / frozen for v1 | **Yes** |
 | Static multi-node cluster (Raft) | HA candidate preview | **No** (not production HA) |
-| Approximate (ANN/HNSW) vector search | Not implemented | — |
+| Approximate (HNSW) vector search | Opt-in preview (v1.2.0) | **No** (not production ANN) |
 
 **Single-node mode is the recommended production mode.** Multi-node static clustering is an
 HA *candidate preview* with strong release-candidate evidence — it is **not** production HA,
@@ -50,7 +51,7 @@ are in [`docs/SUPPORT_POLICY.md`](docs/SUPPORT_POLICY.md),
 
 ```bash
 # Docker (development image; binds all interfaces with --allow-insecure-bind).
-docker run --rm -p 7171:7171 -v auradb-data:/data ghcr.io/ohswedd/auradb:1.1.0
+docker run --rm -p 7171:7171 -v auradb-data:/data ghcr.io/ohswedd/auradb:1.2.0
 
 # From source (stable Rust 1.85+). The server and CLI is one binary: target/release/auradb.
 git clone https://github.com/Ohswedd/auradb.git && cd auradb
@@ -71,8 +72,9 @@ docker compose -f docker-compose.secure.yml config   # validate the secure stack
 
 ## Connect
 
-Aura Connector talks to AuraDB over AWP 1, including auth and TLS. AuraDB v1.1.0 is paired
-with Aura Connector v0.5.x (search and ranking); v0.4.x connects for non-search operations.
+Aura Connector talks to AuraDB over AWP 1, including auth and TLS. AuraDB v1.2.0 is paired
+with Aura Connector v0.6.x (query ergonomics: aggregations, facets, query timeouts); v0.5.x
+remains supported for the pre-1.2 feature set.
 
 ```bash
 python -m pip install "aura-connector>=0.5,<0.6"
@@ -127,7 +129,9 @@ Search and ranking ([`docs/SEARCH_AND_RANKING.md`](docs/SEARCH_AND_RANKING.md)) 
 - **BM25 ranked full-text** (`text_search`) — Okapi BM25 over a full-text indexed field, with
   tunable `k1`/`b`.
 - **Exact vector search** (`vector`) — exact nearest-neighbour by `cosine`, `euclidean`, or
-  `dot_product`. This is the correctness baseline; ANN/HNSW is not implemented.
+  `dot_product`. This is the default and the correctness baseline. Approximate (HNSW)
+  vector search is available as an opt-in preview in v1.2.0 — in-memory and rebuilt, not
+  production ANN.
 - **Hybrid text + vector** (`hybrid`) — BM25 and vector signals fused by weighted sum or
   reciprocal-rank fusion.
 
@@ -206,7 +210,8 @@ evidence required before any production HA claim is tracked in
 AuraDB is deliberately honest about its boundaries. The following are **not** implemented and
 **not** claimed: production HA, production automatic failover, production cluster readiness,
 dynamic membership, distributed transactions, linearizable follower reads, sharding,
-multi-region; approximate (ANN/HNSW) vector search; serializable isolation; RBAC, field-level
+multi-region; production approximate (ANN/HNSW) vector search (an opt-in HNSW preview ships in
+v1.2.0 — in-memory/rebuilt, not persisted/incremental and not production ANN); serializable isolation; RBAC, field-level
 encryption, encryption at rest, and audit logging. Planned directions are in
 [`docs/ROADMAP.md`](docs/ROADMAP.md).
 

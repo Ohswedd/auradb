@@ -186,4 +186,11 @@ Ranked-retrieval queries are counted by shape and timed:
 - `auradb_search_vector_queries_total` — exact vector nearest-neighbour queries.
 - `auradb_ranking_latency_us` — execution-latency summary for ranked queries.
 
+Added in v1.2.0 (each wired to a real event, never a placeholder):
+
+- `auradb_query_timeouts_total` — reads cooperatively cancelled for exceeding the
+  configured or per-query execution deadline (`query_timeout`).
+- `auradb_facets_queries_total` — aggregate requests that carried one or more facets.
+- `auradb_aggregation_queries_total` — aggregate requests executed.
+
 These are additive to the existing metrics surface.

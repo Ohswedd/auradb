@@ -13,7 +13,7 @@ on-disk or wire format change.
 | Ranked full-text (BM25) | `text_search` | Okapi BM25                             | new in v1.1.0                   |
 | Exact vector search     | `vector`      | similarity (cosine/euclidean/dot)      | correctness baseline            |
 | Hybrid text + vector    | `hybrid`      | fused BM25 + vector                    | new in v1.1.0                   |
-| Approximate vector (ANN)| —             | —                                      | **not implemented in v1.1.0**   |
+| Approximate vector (HNSW)| `vector` + `vector_ann` | exact re-rank of approx top-k | **opt-in preview (v1.2.0); not production ANN** |
 
 A query may carry at most one of `vector`, `text_search`, or `hybrid`; setting more than one
 is rejected with a structured error.
@@ -52,8 +52,9 @@ containing every query term and ranks by summed term frequency.
 
 ## Exact vector search
 
-The `vector` clause is exact nearest-neighbour search and remains the correctness baseline.
-**Vector search remains exact in v1.1.0; ANN/HNSW remains unsupported.** See
+The `vector` clause is exact nearest-neighbour search and remains the default and correctness
+baseline. v1.2.0 adds an **opt-in approximate (HNSW) preview** (the `vector_ann` option) —
+in-memory/rebuilt, re-ranked by exact similarity, and **not production ANN**. See
 [VECTORS.md](VECTORS.md).
 
 ## Hybrid search
@@ -127,6 +128,12 @@ linearizable reads, no distributed transactions). Search behaves honestly in clu
   leader's replicated writes and rebuilds its own BM25 and vector indexes, so once a write
   has replicated the follower can rank it (validated by
   `crates/auradb-replication/tests/multi_node.rs::cluster_search_bm25_and_hybrid_after_replication`).
+  The v1.2.0 query features ride the same path: aggregations/terms facets (including a BM25
+  search facet) and ranked `search_page` pagination are validated on a follower after
+  replication, after a leader change, after a follower restart, and after a snapshot install
+  (`cluster_aggregate_and_facets_after_replication`, `cluster_search_page_after_replication`,
+  `cluster_aggregate_after_leader_change`, `cluster_aggregate_after_follower_restart`,
+  `cluster_aggregate_after_snapshot_install`).
 - **Follower reads are eventually consistent, not linearizable.** In the preview, a follower
   serves reads (including search) from its locally replicated state; these may be briefly
   stale relative to the leader and are **not** a production read-consistency guarantee. For
