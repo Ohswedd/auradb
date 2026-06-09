@@ -4,6 +4,63 @@ All notable changes to AuraDB are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and the project uses
 [Semantic Versioning](https://semver.org/).
 
+## [1.3.1] - 2026-06-09
+
+**Release-smoke correctness — single-node production line, multi-node HA candidate preview.**
+AuraDB v1.3.1 is a patch release that fixes the cluster search-analytics release smoke
+(`scripts/smoke_cluster_search_analytics.sh`) and changes **no** engine, protocol, storage,
+query, or connector behavior. The smoke previously resolved the cluster leader by grepping the
+first `127.0.0.1:<port>` token, which could match the queried seed's own address and biased the
+hardcoded `7171`/node1 port, so the run could fail whenever node2 or node3 won the Compose
+election; its failover drill could also accept a stale stopped leader. The fixed smoke resolves
+the leader by each node's **self-reported role** and **waits for a genuine leader change**
+(excluding the stopped port) during the drill. The engine and image were already correct — this
+was a smoke/test-harness bug only. **Aura Wire Protocol 1, storage format v2, the index snapshot
+format version (1), and the entire v1.3.0 feature set stay unchanged.** Aura Connector **v0.7.0**
+(compatible 0.7.x; 0.6.x still supported for existing features; backward compatible with 0.6.1)
+remains the paired client. The v1.3.0 tag is **not** moved. See
+[docs/V1_3_1_RELEASE_NOTES.md](docs/V1_3_1_RELEASE_NOTES.md) and
+[docs/COMPATIBILITY.md](docs/COMPATIBILITY.md).
+
+### Fixed
+
+- **Cluster search-analytics release smoke leader resolution.** `find_leader_addr` now polls
+  each node's own `cluster status` and selects the host port whose node reports `role=Leader`,
+  rather than grepping a `leader_client_addr` token that could match the queried seed. The
+  bounded leader-change drill stops the current leader, waits until a different reachable node
+  reports `role=Leader` (excluding the stopped port so a stale survivor pointing at the dead
+  node is rejected), re-runs the search/facet/pagination/group-by checks under the new leader,
+  and restores quorum after rejoin. Plain `case` port↔service lookups replace any associative
+  arrays, so the script runs on stock macOS bash 3.2. The script header still states it is the
+  experimental multi-node preview and an HA *candidate* drill — **not production HA proof**.
+
+### Unchanged
+
+- **Aura Wire Protocol 1**, **storage format v2**, and the **index snapshot format version
+  (1)** are frozen; no wire or on-disk format change. v1.3.0, v1.2, v1.1, and v1.0 data open
+  unchanged with no required rebuild.
+- The entire v1.3.0 feature set (GROUP BY aggregations, EXPLAIN ANALYZE query-profile fields,
+  durable approximate-vector preview metadata with an `ann_fallback` policy, the `auradb vector
+  eval` harness, and all earlier v1.x query features) is carried forward byte-for-byte. No
+  engine, query, storage, replication, or connector behavior changes.
+- Single-node production support; multi-node HA candidate preview (not production HA).
+- **Exact vector search remains the correctness baseline.** Approximate (HNSW) vector search
+  is an **opt-in preview**, not production ANN.
+
+### Known limitations
+
+Honest limitations carried by this release (unchanged scope boundaries):
+
+- **Multi-node is an HA candidate preview, not production HA.** No production automatic
+  failover, no linearizable follower reads (follower reads/search are eventually consistent),
+  no distributed transactions, and no dynamic membership, sharding, or multi-region.
+  Single-node remains the recommended production mode.
+- **Approximate (HNSW) vector search is an opt-in preview, not production ANN.** The graph is
+  in-memory and rebuilt from the exact vectors (never persisted; not incremental). Exact
+  vector search remains the default and the correctness baseline.
+- **The cluster search-analytics smoke is a controlled single-host preview drill.** It
+  exercises a static three-node Compose cluster on one host and is **not** production HA proof.
+
 ## [1.3.0] - 2026-06-09
 
 **Query ergonomics, vector-preview durability, and query observability — single-node

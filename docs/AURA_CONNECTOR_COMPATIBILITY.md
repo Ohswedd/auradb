@@ -2,16 +2,16 @@
 
 This document is the connector-focused companion to the
 [Compatibility Matrix](COMPATIBILITY.md). It records which Aura Connector release
-talks to AuraDB 1.3.0, what it can drive, and what it cannot.
+talks to AuraDB 1.3.1, what it can drive, and what it cannot.
 
 > **AuraDB v0.7.x adds connector cluster ergonomics for the controlled multi-node
 > preview. It is _not_ production HA — there is no automatic failover,
 > linearizable follower reads, or distributed transactions. Single-node mode
 > remains the recommended production mode.**
 
-## Connector support (v1.3.0)
+## Connector support (v1.3.1)
 
-AuraDB v1.3.0 uses **Aura Wire Protocol 1**, frozen for the v1.x line. The
+AuraDB v1.3.1 uses **Aura Wire Protocol 1**, frozen for the v1.x line. The
 **supported, tested connector is Aura Connector v0.7.0** (and compatible 0.7.x;
 0.6.x remains supported and is **backward compatible with 0.6.1** for the existing
 feature set). It drives the v1.1 search and ranking APIs and the v1.2
