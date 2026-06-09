@@ -80,6 +80,23 @@ query timeouts, ranked pagination, and the opt-in HNSW vector preview all landed
 follower after replication, after a leader change, after a follower restart, and after a
 snapshot install. See [docs/ROADMAP.md](docs/ROADMAP.md).
 
+### Known limitations
+
+Honest limitations carried by this release (unchanged scope boundaries):
+
+- **Multi-node is an HA candidate preview, not production HA.** No production automatic
+  failover, no linearizable follower reads (follower reads/search are eventually consistent),
+  no distributed transactions, and no dynamic membership, sharding, or multi-region.
+  Single-node remains the recommended production mode.
+- **Approximate (HNSW) vector search is an opt-in preview, not production ANN.** The graph is
+  in-memory and rebuilt from the exact vectors (never persisted; not incremental). Exact
+  vector search remains the default and the correctness baseline.
+- **Query timeouts are cooperative, not preemptive.** Reads poll the deadline on their
+  candidate/scan loop, so cancellation is "soon after" the deadline rather than instantaneous.
+- **Ranked-pagination cursor stability under concurrent writes.** Vector cursors are
+  duplicate-free across concurrent writes; BM25/hybrid ranked pagination is stable only when
+  paged inside a transaction snapshot.
+
 ## [1.1.0] - 2026-06-08
 
 **Search and ranking — single-node production line, multi-node HA candidate preview.**
