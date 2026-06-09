@@ -5,6 +5,16 @@ not a delivery commitment, and it is **not a changelog**. Completed release
 history lives in [CHANGELOG.md](../CHANGELOG.md) and the per-release notes under
 `docs/`.
 
+## Current stable baseline
+
+The roadmap is written against the latest shipped release.
+
+- **AuraDB v1.3.1** is the current stable release; single-node remains the
+  production-supported deployment mode.
+- **Aura Connector v0.7.0** is the tested paired client line.
+- **AWP 1**, **storage format v2**, and **index snapshot format version 1** are the
+  frozen v1.x compatibility baseline — see [COMPATIBILITY.md](COMPATIBILITY.md).
+
 ## Current product stance
 
 This stance is the baseline the roadmap builds on; it is context, not a list of
@@ -18,8 +28,10 @@ deliverables.
 - **Search and ranking** (BM25 full-text and hybrid text+vector) are part of the
   single-node production line — see [SEARCH_AND_RANKING.md](SEARCH_AND_RANKING.md).
 - **Exact vector search is the correctness baseline.** Approximate
-  (HNSW) vector search is available as an **opt-in preview** (v1.2.0), not
-  production ANN.
+  (HNSW) vector search is available as an **opt-in preview** (v1.2.0, with durable
+  lifecycle metadata and an `ann_fallback` policy added in v1.3.0), not production
+  ANN. The graph is still rebuilt in memory from the exact vectors and is never
+  persisted.
 
 For what is and is not supported today, see [SUPPORT_POLICY.md](SUPPORT_POLICY.md).
 
@@ -31,6 +43,35 @@ For what is and is not supported today, see [SUPPORT_POLICY.md](SUPPORT_POLICY.m
 
 Items are actionable work, not promises. Where the path is uncertain we say so
 ("investigate", "evaluate", "candidate", "future work", "not yet committed").
+
+## Target: AuraDB v1.4.0 — Production operability and search quality
+
+The next big release strengthens the **production-supported single-node path**,
+improves **search and vector quality evidence**, and raises **operator confidence**.
+It is deliberately *not* a production-HA, production-ANN, sharding, multi-region, or
+distributed-database release; those remain future work (see "Later / not v1.4.0 by
+default" and "Not currently planned for immediate work"). It pairs with **Aura
+Connector v0.8.0**.
+
+Planned scope (detailed per category in the sections below):
+
+- **Production single-node drills:** disk-full drill, I/O-error drill,
+  backup/restore rehearsal on larger state, more upgrade fixtures across released
+  versions, and a restore/rollback rehearsal.
+- **Search quality:** a relevance dataset format, search regression fixtures, BM25
+  (k1 / b) tuning guidance, a hybrid ranking calibration harness, and
+  analyzer/tokenizer planning (or a first safe implementation if scoped).
+- **Vector evidence:** larger exact-vs-ANN evaluation datasets, recall/latency
+  report examples, ANN health/reporting improvements, and exact-fallback evidence —
+  with **no production ANN claim**.
+- **Operator confidence:** SLO templates, incident runbook templates,
+  doctor/check/report improvements where needed, and published-image smoke
+  expansion.
+- **Release engineering:** SBOM/signing investigation (or a first implementation if
+  feasible), a release rollback drill, and artifact-verification improvements.
+
+The category sections below carry the per-item tracking; this section is the
+v1.4.0 lens over them.
 
 ## Production single-node hardening
 
@@ -58,7 +99,8 @@ operability of search, not the existence of search.
 - [x] Search pagination stability under concurrent writes — stable ranked-cursor
   *tokens* (keyset pagination) shipped in v1.2.0 end-to-end: `Engine::search_page`,
   the `search_page` AWP request (`ranked_pagination` capability), and the connector
-  `QueryBuilder.search_pages()` helper.
+  `QueryBuilder.search_pages()` helper. The server advertises a `cursor_resume`
+  capability so an opaque resume token can be persisted and resumed across processes.
 - [ ] Query-time analyzers / tokenizers.
 - [ ] Synonyms or custom analyzers.
 - [ ] Hybrid ranking calibration tooling.
@@ -70,11 +112,20 @@ opt-in preview in v1.2.0 and is hardening toward production-grade.
 
 - [x] ANN / HNSW prototype behind the `VectorIndex` seam — shipped in v1.2.0 as an
   opt-in, recall-tested preview (`vector_ann`); exact remains the default/baseline.
+- [x] HNSW preview durable lifecycle metadata and exact-fallback policy — shipped in
+  v1.3.0: the index snapshot records additive per-field lifecycle metadata (field,
+  dimension, vector count, generation marker) so the preview's status survives
+  restarts, and an `ann_fallback` policy (`exact` default / `error`) governs queries
+  when the preview is unavailable. The graph itself is still **rebuilt in memory from
+  the exact vectors on first use and never persisted** — this is not production ANN.
+- [x] Recall / latency evaluation harness for ANN vs exact — shipped in v1.3.0 as the
+  `auradb vector eval` operator command (recall@k and latency over a deterministic
+  query set; dataset- and machine-specific numbers, never a universal claim).
 - [ ] **Persistent / incremental HNSW graphs** — the preview rebuilds the in-memory
   graph from the exact vectors; persistence and incremental maintenance are the next
-  step toward production ANN.
+  step toward production ANN (not v1.4.0 by default).
 - [ ] ANN-specific `index check` / `stats analyze` (graph health, recall sampling).
-- [~] Recall and latency benchmark harness for ANN vs exact.
+- [ ] Larger exact-vs-ANN evaluation datasets and recall/latency report examples.
 - [ ] Exact-vs-ANN comparison tooling.
 - [~] Vector quantization / memory-planning research for large embedding sets.
 - [ ] Larger vector dataset tests.
@@ -87,12 +138,18 @@ operator control.
 - [ ] Better cardinality estimates.
 - [ ] Histograms or richer column statistics.
 - [ ] Multi-field index planning.
+- [x] `EXPLAIN ANALYZE` query-profile fields — shipped in v1.3.0 (additive `plan_id`,
+  `deadline_ms`, and `timeout_checked` alongside the measured counts and timings; the
+  query payload is never echoed). More diagnostics remain open below.
 - [ ] More `EXPLAIN ANALYZE` diagnostics.
 - [x] Query timeout / cancellation controls — shipped in v1.2.0 as a cooperative
   deadline (`[limits] max_query_time_ms` default + per-query `timeout_ms`,
   structured `query_timeout`). Preemptive mid-operation cancellation remains out
   of scope; the check is cooperative.
 - [x] Aggregations — Query IR shape settled and shipped in v1.2.0 (`aggregate`).
+- [x] GROUP BY analytics — shipped in v1.3.0 as an additive `group_by` clause on the
+  `aggregate` request (single scalar group key; per-group `count`/`min`/`max`/`avg`;
+  deterministic ordering; `group_limit` / `group_count_total`).
 
 ## Storage and durability
 
@@ -145,10 +202,30 @@ preview" and any future production-HA decision; the full criteria live in
 
 ## Release engineering
 
+- [x] Cluster search-analytics release smoke — shipped in v1.3.0 and corrected in
+  v1.3.1 (the smoke now resolves the leader by each node's self-reported role and
+  waits for a genuine leader change during the failover drill). It is a controlled
+  single-host preview drill, **not production HA proof**.
 - [ ] Reproducible build improvements.
-- [ ] SBOM / signing improvements.
+- [ ] SBOM / signing investigation, then a first implementation if feasible.
 - [ ] More published-image smoke coverage.
 - [ ] Release rollback drills.
+- [ ] Artifact-verification improvements.
+
+## Later / not v1.4.0 by default
+
+These are real future directions, but they are explicitly **out of v1.4.0 scope**
+unless intentionally re-scoped. They do not weaken the v1.4.0 production-single-node
+and search-quality focus.
+
+- Production-HA decision gate for multi-node.
+- Cross-host multi-node chaos soak (beyond loopback).
+- Dynamic membership.
+- Linearizable follower reads.
+- Production ANN.
+- Persisted / incremental HNSW graph.
+- Sharding.
+- Multi-region.
 
 ## Not currently planned for immediate work
 
