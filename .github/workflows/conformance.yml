@@ -85,15 +85,18 @@ jobs:
       - name: Build server
         run: cargo build --release -p auradb-cli
 
-      - name: Install Aura Connector (>= 0.5, < 0.6)
+      - name: Install Aura Connector (>= 0.6.1, < 0.7)
         run: |
-          # Aura Connector 0.5.x is the matching client for AuraDB 1.1.0 (search and
-          # ranking APIs over the unchanged AWP 1). Coordinated releases publish the
-          # connector first, so this install is required and must succeed; a failure
-          # fails the job. For a pre-release run, install the local wheel instead:
+          # Aura Connector 0.6.x is the matching client for AuraDB 1.2.x (query
+          # ergonomics: aggregations, terms facets, ranked pagination, cooperative
+          # query timeouts). The live facets/pagination/timeouts conformance below
+          # requires v0.6.1, which forwards the per-query `timeout_ms` to the wire.
+          # Coordinated releases publish the connector first, so this install is
+          # required and must succeed; a failure fails the job. For a pre-release run
+          # (before 0.6.1 is on PyPI), install the local wheel instead:
           #   python -m pip install ../aura-connector
-          python -m pip install --upgrade "aura-connector>=0.5,<0.6"
-          python -c "import aura; assert aura.__version__ >= '0.5.0', aura.__version__"
+          python -m pip install --upgrade "aura-connector>=0.6.1,<0.7"
+          python -c "import aura; assert aura.__version__ >= '0.6.1', aura.__version__"
 
       - name: Connector smoke (auth disabled)
         run: |
@@ -129,3 +132,33 @@ jobs:
           sleep 2
           python tests/conformance/python/run_connector_search.py --addr 127.0.0.1:7184
           kill $SRV
+
+      - name: Connector facets conformance (v1.2 facets and aggregations)
+        run: |
+          ./target/release/auradb server --data-dir .local/facets --bind 127.0.0.1 --port 7185 &
+          SRV=$!
+          sleep 2
+          python tests/conformance/python/run_connector_facets.py --addr 127.0.0.1:7185
+          kill $SRV
+
+      - name: Connector pagination conformance (v1.2 ranked pagination)
+        run: |
+          ./target/release/auradb server --data-dir .local/pagination --bind 127.0.0.1 --port 7186 &
+          SRV=$!
+          sleep 2
+          python tests/conformance/python/run_connector_pagination.py --addr 127.0.0.1:7186
+          kill $SRV
+
+      - name: Connector timeout conformance (v1.2 cooperative query timeouts)
+        run: |
+          ./target/release/auradb server --data-dir .local/timeouts --bind 127.0.0.1 --port 7187 &
+          SRV=$!
+          sleep 2
+          python tests/conformance/python/run_connector_timeouts.py --addr 127.0.0.1:7187
+          kill $SRV
+
+      # NOTE: the cluster variants (run_connector_facets_cluster.py,
+      # run_connector_pagination_cluster.py, run_connector_timeouts_cluster.py) are
+      # operator-run, not gated here: their leader-change step requires stopping a
+      # node, and they seed a large replicated dataset. See docs/CONFORMANCE.md and
+      # docs/TESTING.md for how to run them against a local cluster.

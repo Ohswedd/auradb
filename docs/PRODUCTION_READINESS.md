@@ -1,11 +1,15 @@
 # Production readiness
 
-AuraDB **v1.1.0** is the **search and ranking release** on the v1 single-node
-production line, with a multi-node HA candidate preview. It supports production
-single-node deployments configured with authentication, TLS, backups, monitoring,
-and the documented runbooks, and adds BM25 ranked full-text and hybrid text+vector
-search to that production line (exact vector search remains the baseline; no production ANN).
-It is **not** production HA. **Single-node mode is the recommended production mode.**
+AuraDB **v1.2.1** is a **conformance and documentation hardening** release on the v1
+single-node production line, with a multi-node HA candidate preview. It supports
+production single-node deployments configured with authentication, TLS, backups,
+monitoring, and the documented runbooks. The production line carries BM25 ranked
+full-text and hybrid text+vector search, exact vector search (the baseline),
+aggregations, terms facets, ranked pagination, and cooperative query timeouts
+(exact vector search remains the correctness baseline; no production ANN). v1.2.1
+adds **no** features over v1.2.0 — it adds live over-the-wire conformance coverage
+for the v1.2 features and refreshes this documentation. It is **not** production HA.
+**Single-node mode is the recommended production mode.**
 
 The production-support statement is **scoped**, not blanket: single-node mode, run
 with the checklist below (authentication, TLS, scheduled backups with a rehearsed
@@ -15,11 +19,11 @@ production configuration. The multi-node cluster is an **HA candidate preview** 
 controlled static-cluster preview with strong release-candidate evidence, validated
 against a failure matrix — and is **not** production HA: no production automatic
 failover, no linearizable follower reads, no distributed transactions, no dynamic
-membership, no sharding, no multi-region. v1.1.0 adds search and ranking features
-to the single-node production line via additive Query IR clauses, and changes none
-of this scope: it keeps the AWP 1 and storage format v2 compatibility surfaces, the
-upgrade guarantee, the backup/restore release gate, and the security review
-unchanged.
+membership, no sharding, no multi-region. The v1.2 query features (aggregations,
+terms facets, ranked pagination, cooperative query timeouts) ride additive Query IR
+on the single-node production line, and v1.2.1 changes none of this scope: it keeps
+the AWP 1 and storage format v2 compatibility surfaces, the upgrade guarantee, the
+backup/restore release gate, and the security review unchanged.
 
 The authoritative support boundary is [SUPPORT_POLICY.md](SUPPORT_POLICY.md). The
 exact support level for each mode, the operator assumptions the static cluster
@@ -27,9 +31,9 @@ requires, the validated failure matrix, and the **strict criteria that must be m
 and documented before AuraDB ever claims production HA** are in
 [HA_RELEASE_CANDIDATE.md](HA_RELEASE_CANDIDATE.md) and the
 [v1.0 decision checklist](V1_0_DECISION_CHECKLIST.md). None of those production-HA
-criteria are met in v1.1.0; multi-node remains an HA candidate preview.
+criteria are met in v1.2.1; multi-node remains an HA candidate preview.
 
-**Frozen for v1.** AuraDB v1.1.0 uses Aura Wire Protocol 1 and storage format v2.
+**Frozen for v1.** AuraDB v1.2.1 uses Aura Wire Protocol 1 and storage format v2.
 AWP 1 is the stable v1 wire protocol and storage format v2 is the stable v1
 single-node storage format; AuraDB v1.x preserves both unless a security,
 correctness, safety, or corruption issue requires a documented change or migration.
@@ -45,7 +49,12 @@ step-by-step procedures see [RUNBOOKS.md](RUNBOOKS.md).
 
 - **Single-node mode** with authentication and TLS enabled, scheduled backups,
   monitoring, and the upgrade runbook. This is the recommended way to run AuraDB
-  in production, and the supported production deployment mode in v1.0.
+  in production, and the supported production deployment mode on the v1 line.
+- **Search, ranking, and query ergonomics on single-node** — BM25 ranked full-text,
+  exact vector search (the correctness baseline), hybrid text+vector fusion,
+  aggregations (`count`/`min`/`max`), terms facets (including BM25 search-scoped
+  facets), ranked pagination by stable cursor token, and cooperative per-query
+  timeouts. These run on the single-node production line over the unchanged AWP 1.
 
 ### HA candidate preview (not for production)
 
@@ -63,19 +72,30 @@ step-by-step procedures see [RUNBOOKS.md](RUNBOOKS.md).
 - distributed transactions;
 - sharding;
 - multi-region replication;
-- linearizable follower reads (followers reject client reads);
-- approximate vector search (ANN / HNSW);
-- BM25 / hybrid lexical-vector fusion.
+- linearizable follower reads (in the preview, followers serve only
+  eventually-consistent, non-linearizable reads; the supported path is leader-served
+  reads);
+- production approximate vector search (ANN / HNSW) — an opt-in HNSW preview ships
+  (in-memory/rebuilt, not persisted/incremental), but exact vector search remains
+  the default and correctness baseline.
 
 ## Known limitations (by design)
 
 - **Snapshot isolation, not serializable.** Transactions read from a snapshot
   pinned at `begin` with optimistic write-conflict detection. This is single-node
   snapshot isolation, not serializable isolation.
-- **Exact vector search.** Nearest-neighbour search is exact (brute-force over the
-  collection), not approximate. It is correct but scales linearly.
-- **Tokenized full-text, not BM25.** Full-text search matches on tokens; there is
-  no BM25 ranking or hybrid lexical-vector fusion.
+- **Exact vector search is the baseline.** Nearest-neighbour search is exact
+  (brute-force over the collection) by default; it is correct but scales linearly.
+  An opt-in approximate (HNSW) index is available as a preview (in-memory/rebuilt,
+  not persisted/incremental, not production ANN); exact search remains the
+  correctness baseline.
+- **Cooperative query timeouts.** Per-query `timeout_ms` is enforced cooperatively
+  (reads poll the deadline), not preemptively, so cancellation is "soon after" the
+  deadline rather than instantaneous. It can lower but never raise the configured
+  `[limits] max_query_time_ms`.
+- **Ranked-pagination cursor stability.** Vector cursors are duplicate-free across
+  concurrent writes; BM25/hybrid ranked pagination is stable only when paged inside
+  a transaction snapshot.
 - **Cluster preview caveats.** See the experimental-preview note above and
   [CLUSTERING.md](CLUSTERING.md).
 

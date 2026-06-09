@@ -2,27 +2,32 @@
 
 This document is the connector-focused companion to the
 [Compatibility Matrix](COMPATIBILITY.md). It records which Aura Connector release
-talks to AuraDB 1.1.0, what it can drive, and what it cannot.
+talks to AuraDB 1.2.1, what it can drive, and what it cannot.
 
 > **AuraDB v0.7.x adds connector cluster ergonomics for the controlled multi-node
 > preview. It is _not_ production HA — there is no automatic failover,
 > linearizable follower reads, or distributed transactions. Single-node mode
 > remains the recommended production mode.**
 
-## Connector support (v1.1.0)
+## Connector support (v1.2.1)
 
-AuraDB v1.1.0 uses **Aura Wire Protocol 1**, frozen for the v1.x line. The
-**supported, tested connector is Aura Connector v0.5.0** (and compatible 0.5.x); it
-is the recommended client and adds first-class search and ranking APIs
-(`search_text` BM25, `search_vector`, `search_hybrid`), typed result scores, and
-capability negotiation. The new search clauses are additive Query IR and response
-fields, so AWP 1 is unchanged: older connectors (0.4.x) remain wire-compatible for
-non-search operations but do not surface the ranked-search APIs. Connector
-conformance against v0.5.0 is a release requirement (see
-[CONFORMANCE.md](CONFORMANCE.md)). Exact vector search remains the default and
-correctness baseline; approximate (HNSW) vector search is an opt-in preview
-(v1.2.0) — in-memory/rebuilt, not production ANN. Multi-node
-leader-redirect ergonomics remain an HA candidate preview, not production HA.
+AuraDB v1.2.1 uses **Aura Wire Protocol 1**, frozen for the v1.x line. The
+**supported, tested connector is Aura Connector v0.6.1** (and compatible 0.6.x;
+0.6.0 remains supported); it is the recommended client and drives the v1.1 search
+and ranking APIs (`search_text` BM25, `search_vector`, `search_hybrid`) plus the
+v1.2 query-ergonomics surface — aggregations (`count`/`min`/`max`), terms facets
+(`facet`/`aggregate`), ranked pagination (`search_pages`), and cooperative query
+timeouts (`timeout(ms)`). All of these ride additive Query IR and response fields,
+so AWP 1 is unchanged: older connectors (0.5.x) remain wire-compatible and supported
+for the pre-1.2 feature set but do not surface the v1.2 APIs. Connector conformance
+against v0.6.1 is a release requirement, and v1.2.1 adds live over-the-wire
+conformance scripts for facets, pagination, and timeouts (see
+[CONFORMANCE.md](CONFORMANCE.md)). v0.6.1 forwards the per-query `timeout_ms` to the
+wire so `.timeout(ms)` is enforced by AuraDB (v0.6.0 dropped it for the AuraDB
+backend). Exact vector search remains the default and correctness baseline;
+approximate (HNSW) vector search is an opt-in preview (v1.2.0) — in-memory/rebuilt,
+not production ANN. Multi-node leader-redirect ergonomics remain an HA candidate
+preview, not production HA.
 
 ## Final HA candidate stabilization (v0.9.2)
 

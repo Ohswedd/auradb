@@ -568,7 +568,7 @@ pub fn cmd_compatibility() -> String {
         "AuraDB {ver}\n\
          Aura Wire Protocol: AWP {proto}\n\
          Storage format: v{storage}\n\
-         Aura Connector (tested): 0.6.0\n\
+         Aura Connector (tested): 0.6.1\n\
          Aura Connector (supported): 0.5.x, 0.6.x\n\
          Search features: bm25, hybrid, vector_exact, facets, aggregations, query_timeouts, ranked_pagination (vector_ann: opt-in HNSW preview; exact is the baseline)\n\
          Capabilities: {caps}\n\
@@ -3310,10 +3310,10 @@ mod tests {
         assert!(out.contains("vector_ann: opt-in HNSW preview"));
         assert!(out.contains("exact is the baseline"));
         assert!(!out.contains("production ANN"));
-        // v1.2.0 pairs with Aura Connector v0.6.0 tested; v0.5.x remains
+        // v1.2.1 pairs with Aura Connector v0.6.1 tested; v0.5.x remains
         // supported for existing features, v0.6.x is the matching line.
         // AWP 1, storage format v2 (both preserved).
-        assert!(out.contains("Aura Connector (tested): 0.6.0"));
+        assert!(out.contains("Aura Connector (tested): 0.6.1"));
         assert!(out.contains("Aura Connector (supported): 0.5.x, 0.6.x"));
         assert!(!out.contains("0.3.x"));
         assert!(out.contains(&format!("AWP {}", auradb_protocol::PROTOCOL_VERSION)));
