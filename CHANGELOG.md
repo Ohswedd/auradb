@@ -4,6 +4,82 @@ All notable changes to AuraDB are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and the project uses
 [Semantic Versioning](https://semver.org/).
 
+## [1.3.0] - 2026-06-09
+
+**Query ergonomics, vector-preview durability, and query observability — single-node
+production line, multi-node HA candidate preview.** AuraDB v1.3.0 adds GROUP BY aggregations
+and EXPLAIN ANALYZE query-profile fields to the single-node production line, and matures the
+opt-in approximate-vector preview with durable lifecycle metadata and an explicit
+exact-fallback policy — without changing the production support claim. Single-node remains the
+recommended production mode; multi-node static clustering remains an HA candidate preview — not
+production HA. **Aura Wire Protocol 1, storage format v2, and the index snapshot format
+version (1) stay frozen**: GROUP BY is additive Query IR, the approximate-preview lifecycle
+metadata is an additive index-snapshot field (the graph itself is still never persisted), and
+the profile fields are additive ANALYZE JSON. Aura Connector **v0.7.0** (compatible 0.7.x;
+0.6.x still supported for existing features; backward compatible with 0.6.1) is the paired
+client. See [docs/V1_3_RELEASE_NOTES.md](docs/V1_3_RELEASE_NOTES.md),
+[docs/QUERY_ENGINE.md](docs/QUERY_ENGINE.md), and [docs/VECTORS.md](docs/VECTORS.md).
+
+### Added
+
+- **GROUP BY aggregations.** The `aggregate` read request gains an additive `group_by` clause:
+  a single scalar field bucketing the matched set, with per-group `count`, `min`, `max`, and
+  the new `avg` metric. Groups ride the same matched set as facets/metrics, so they compose
+  with filters and BM25 search-candidate scoping; null/missing group keys are excluded;
+  ordering is deterministic (descending count, then ascending key); an optional `group_limit`
+  (default 1000) truncates while `group_count_total` reports the full distinct-group count.
+  `avg` considers only `Int`/`Float` values and yields null when a group has none; a
+  non-scalar or unknown group field is rejected with `invalid_request`.
+- **Approximate-vector (HNSW) preview durability and exact fallback.** The index snapshot now
+  records additive per-field lifecycle metadata (field, dimension, vector count, generation
+  marker) so the preview's status is visible across restarts; the approximate graph itself is
+  still never persisted and rebuilds in memory from the exact vectors on first use. A new
+  `ann_fallback` policy (`exact` default / `error`) governs queries when the preview is
+  unavailable (for example below `ANN_PREVIEW_MIN_VECTORS = 16` indexed vectors). `EXPLAIN`
+  reports the resolved `vector_mode` (`exact`, `ann_preview`, or `exact_fallback`).
+- **`auradb vector eval` recall/latency harness.** A new operator command measures the
+  approximate preview's recall@k and latency against the exact baseline over a deterministic
+  query set (`--data-dir`, `--collection`, `--field`, `--queries`, `--k`, `--metric`,
+  `--ef-search`, `--json`). The JSON report carries `collection`, `field`, `metric`,
+  `queries`, `k`, `ef_search`, `mean_recall_at_k`, `min_recall_at_k`, `exact_latency_ms_p50`,
+  and `ann_latency_ms_p50`; the query vectors are never echoed. Numbers are dataset- and
+  machine-specific, never a universal claim.
+- **EXPLAIN ANALYZE query-profile fields.** The ANALYZE output gains additive
+  `plan_id` (deterministic per plan shape), `deadline_ms` (the cooperative deadline in effect,
+  or null), and `timeout_checked` fields for debugging, alongside the existing measured counts
+  and timings. The query payload is never echoed into the plan.
+
+### Unchanged
+
+- **Aura Wire Protocol 1**, **storage format v2**, and the **index snapshot format version
+  (1)** are frozen; no wire or on-disk format change. v1.2, v1.1, and v1.0 data open unchanged
+  with no required index rebuild (the approximate graph rebuilds in memory on first use).
+- The v1.2 query feature set (aggregations, terms facets, cooperative query timeouts, ranked
+  pagination, opt-in HNSW vector preview) is carried forward.
+- Single-node production support; multi-node HA candidate preview (not production HA).
+- **Exact vector search remains the correctness baseline.** Approximate (HNSW) vector search
+  is an **opt-in preview**, not production ANN.
+
+### Known limitations
+
+Honest limitations carried by this release (unchanged scope boundaries):
+
+- **Multi-node is an HA candidate preview, not production HA.** No production automatic
+  failover, no linearizable follower reads (follower reads/search are eventually consistent),
+  no distributed transactions, and no dynamic membership, sharding, or multi-region.
+  Single-node remains the recommended production mode.
+- **Approximate (HNSW) vector search is an opt-in preview, not production ANN.** The graph is
+  never persisted; it rebuilds in memory from the exact vectors on use. Only the lifecycle
+  metadata is durable. Below `ANN_PREVIEW_MIN_VECTORS = 16` the preview is unavailable and the
+  `ann_fallback` policy applies. Exact vector search remains the default and the correctness
+  baseline.
+- **`auradb vector eval` does not emit a candidate-count average.** Per-query HNSW
+  candidates-visited is not yet surfaced through the query result, so `candidate_count_avg` is
+  not in the report; recall and latency are. The numbers are dataset- and machine-specific.
+- **Query timeouts are cooperative, not preemptive.** Reads poll the deadline on their
+  candidate/scan loop, so cancellation is "soon after" the deadline rather than instantaneous;
+  the EXPLAIN ANALYZE `deadline_ms`/`timeout_checked` fields report this cooperative deadline.
+
 ## [1.2.1] - 2026-06-09
 
 **Conformance and documentation hardening — single-node production line, multi-node HA

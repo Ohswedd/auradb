@@ -562,15 +562,19 @@ pub fn cmd_compatibility() -> String {
             Capability::QueryTimeouts => "query_timeouts",
             Capability::RankedPagination => "ranked_pagination",
             Capability::ApproximateVectorSearchPreview => "approximate_vector_search_preview",
+            Capability::GroupByAggregation => "group_by_aggregation",
+            Capability::QueryProfile => "query_profile",
+            Capability::RankedSearchCursor => "ranked_search_cursor",
+            Capability::ApproximateVectorSearch => "approximate_vector_search",
         })
         .collect();
     format!(
         "AuraDB {ver}\n\
          Aura Wire Protocol: AWP {proto}\n\
          Storage format: v{storage}\n\
-         Aura Connector (tested): 0.6.1\n\
-         Aura Connector (supported): 0.5.x, 0.6.x\n\
-         Search features: bm25, hybrid, vector_exact, facets, aggregations, query_timeouts, ranked_pagination (vector_ann: opt-in HNSW preview; exact is the baseline)\n\
+         Aura Connector (tested): 0.7.0\n\
+         Aura Connector (supported): 0.5.x, 0.6.x, 0.7.x\n\
+         Search features: bm25, hybrid, vector_exact, facets, aggregations, group_by, query_timeouts, ranked_pagination, query_profile (vector_ann: opt-in HNSW preview with exact fallback; exact is the baseline)\n\
          Capabilities: {caps}\n\
          See docs/COMPATIBILITY.md for the full matrix.",
         ver = VERSION,
@@ -984,9 +988,12 @@ pub fn cmd_index_check(data_dir: &Path) -> Result<String> {
         }
         for v in &c.vector_fields {
             out.push_str(&format!(
-                "\nvector {}.{}: {} vector(s), dim {}",
-                c.collection, v.field, v.vectors, v.dim
+                "\nvector {}.{}: {} vector(s), dim {}; ann preview: {} (exact baseline always available)",
+                c.collection, v.field, v.vectors, v.dim, v.ann_preview_status
             ));
+            if let Some(generation) = v.ann_generation {
+                out.push_str(&format!(" [generation {generation:#018x}]"));
+            }
         }
     }
     Ok(out)
@@ -1007,6 +1014,135 @@ pub fn cmd_search_explain(data_dir: &Path, input: &Path, analyze: bool) -> Resul
         engine.explain(&query)?
     };
     Ok(serde_json::to_string_pretty(&plan)?)
+}
+
+/// A machine-readable ANN-vs-exact recall/latency evaluation for
+/// `auradb vector eval --json`. Every field is measured on the given dataset and
+/// query set; the numbers are dataset- and machine-specific and are not a
+/// universal recall or performance claim.
+#[derive(Debug, serde::Serialize)]
+pub struct VectorEvalReport {
+    /// The evaluated collection.
+    pub collection: String,
+    /// The evaluated vector field.
+    pub field: String,
+    /// The distance metric.
+    pub metric: String,
+    /// Number of query vectors evaluated.
+    pub queries: usize,
+    /// Neighbours requested per query.
+    pub k: usize,
+    /// The HNSW `efSearch` beam width used for the approximate preview.
+    pub ef_search: usize,
+    /// Mean recall@k of the approximate preview against the exact baseline.
+    pub mean_recall_at_k: f64,
+    /// Worst-case recall@k across all queries.
+    pub min_recall_at_k: f64,
+    /// Median exact-search latency, in milliseconds.
+    pub exact_latency_ms_p50: f64,
+    /// Median approximate-search latency, in milliseconds.
+    pub ann_latency_ms_p50: f64,
+}
+
+fn percentile_p50(mut samples: Vec<f64>) -> f64 {
+    if samples.is_empty() {
+        return 0.0;
+    }
+    samples.sort_by(|a, b| a.total_cmp(b));
+    samples[samples.len() / 2]
+}
+
+/// `auradb vector eval` - measure ANN-preview recall@k and latency against the
+/// exact baseline over a deterministic set of query vectors (one JSON array of
+/// floats per line in `queries`). Returns real measured data only.
+pub fn cmd_vector_eval(
+    data_dir: &Path,
+    collection: &str,
+    field: &str,
+    queries: &Path,
+    k: usize,
+    metric: &str,
+    ef_search: usize,
+) -> Result<String> {
+    use auradb::query::{AnnFallback, AnnParams, FindQuery, Row, VectorSearch};
+
+    if k == 0 {
+        anyhow::bail!("k must be >= 1");
+    }
+    let text = std::fs::read_to_string(queries)
+        .with_context(|| format!("reading query vectors file {}", queries.display()))?;
+    let query_vectors: Vec<Vec<f32>> = text
+        .lines()
+        .map(str::trim)
+        .filter(|l| !l.is_empty())
+        .map(serde_json::from_str::<Vec<f32>>)
+        .collect::<std::result::Result<_, _>>()
+        .context("each non-empty line must be a JSON array of floats")?;
+    if query_vectors.is_empty() {
+        anyhow::bail!("no query vectors provided");
+    }
+
+    let engine = Engine::open(data_dir)?;
+
+    let ids = |rows: &[Row]| -> Vec<String> {
+        rows.iter()
+            .filter_map(|r| match r.fields.get("id") {
+                Some(auradb::core::Value::Text(s)) => Some(s.clone()),
+                _ => None,
+            })
+            .collect()
+    };
+
+    let mut recalls = Vec::with_capacity(query_vectors.len());
+    let mut exact_latencies = Vec::with_capacity(query_vectors.len());
+    let mut ann_latencies = Vec::with_capacity(query_vectors.len());
+
+    for qv in &query_vectors {
+        let mut exact = FindQuery::new(collection);
+        exact.vector = Some(VectorSearch {
+            field: field.to_string(),
+            query: qv.clone(),
+            k,
+            metric: metric.to_string(),
+        });
+        let mut ann = exact.clone();
+        ann.vector_ann = Some(AnnParams {
+            ef_search: Some(ef_search),
+            fallback: AnnFallback::Exact,
+            ..Default::default()
+        });
+
+        let t0 = std::time::Instant::now();
+        let exact_rows = engine.find(&exact)?;
+        exact_latencies.push(t0.elapsed().as_secs_f64() * 1000.0);
+
+        let t1 = std::time::Instant::now();
+        let ann_rows = engine.find(&ann)?;
+        ann_latencies.push(t1.elapsed().as_secs_f64() * 1000.0);
+
+        let exact_ids = ids(&exact_rows);
+        let ann_ids: std::collections::HashSet<String> = ids(&ann_rows).into_iter().collect();
+        let denom = exact_ids.len().max(1);
+        let hits = exact_ids.iter().filter(|id| ann_ids.contains(*id)).count();
+        recalls.push(hits as f64 / denom as f64);
+    }
+
+    let mean_recall = recalls.iter().sum::<f64>() / recalls.len() as f64;
+    let min_recall = recalls.iter().copied().fold(f64::INFINITY, f64::min);
+
+    let report = VectorEvalReport {
+        collection: collection.to_string(),
+        field: field.to_string(),
+        metric: metric.to_string(),
+        queries: query_vectors.len(),
+        k,
+        ef_search,
+        mean_recall_at_k: mean_recall,
+        min_recall_at_k: min_recall,
+        exact_latency_ms_p50: percentile_p50(exact_latencies),
+        ann_latency_ms_p50: percentile_p50(ann_latencies),
+    };
+    Ok(serde_json::to_string_pretty(&report)?)
 }
 
 /// `auradb index rebuild` - rebuild every index from storage and persist fresh
@@ -3310,11 +3446,10 @@ mod tests {
         assert!(out.contains("vector_ann: opt-in HNSW preview"));
         assert!(out.contains("exact is the baseline"));
         assert!(!out.contains("production ANN"));
-        // v1.2.1 pairs with Aura Connector v0.6.1 tested; v0.5.x remains
-        // supported for existing features, v0.6.x is the matching line.
-        // AWP 1, storage format v2 (both preserved).
-        assert!(out.contains("Aura Connector (tested): 0.6.1"));
-        assert!(out.contains("Aura Connector (supported): 0.5.x, 0.6.x"));
+        // v1.3.0 pairs with Aura Connector v0.7.0 tested; v0.5.x/v0.6.x remain
+        // supported for existing features. AWP 1, storage format v2 (both preserved).
+        assert!(out.contains("Aura Connector (tested): 0.7.0"));
+        assert!(out.contains("Aura Connector (supported): 0.5.x, 0.6.x, 0.7.x"));
         assert!(!out.contains("0.3.x"));
         assert!(out.contains(&format!("AWP {}", auradb_protocol::PROTOCOL_VERSION)));
         assert!(out.contains(&format!(

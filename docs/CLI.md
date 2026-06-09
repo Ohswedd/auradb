@@ -167,6 +167,19 @@ and counts, fusion mode, weights) without a client. See
 [SEARCH_AND_RANKING.md](SEARCH_AND_RANKING.md); example queries are in
 `examples/search_bm25.json` and `examples/search_hybrid.json`.
 
+### `auradb vector eval --collection <c> --field <f> --queries <file> [--data-dir <dir>] [--k <n>] [--metric <m>] [--ef-search <n>] [--json]` (v1.3.0)
+Measures the opt-in approximate (HNSW) **preview**'s recall@k and latency against the exact
+baseline over a deterministic set of query vectors, and prints a JSON report. The `--queries`
+file holds **one JSON array of floats per line** (one query vector per line). Defaults:
+`--k 10`, `--metric cosine`, `--ef-search 64`. The report carries `collection`, `field`,
+`metric`, `queries`, `k`, `ef_search`, `mean_recall_at_k`, `min_recall_at_k`,
+`exact_latency_ms_p50`, and `ann_latency_ms_p50`. Every number is **measured on the given
+dataset and machine** — a same-machine diagnostic for tuning `ef_search`, not a universal
+recall or performance claim — and the query vectors are never echoed into the report. A
+per-query candidate-count average is not emitted in this release. Exact vector search remains
+the default and the correctness baseline. See [VECTORS.md](VECTORS.md) and
+[BENCHMARKS.md](BENCHMARKS.md).
+
 ### `auradb cluster ...` (v0.4.0)
 Cluster (Raft) administration. These commands operate offline on a data
 directory's cluster metadata and the parsed `[cluster]` configuration; they do not

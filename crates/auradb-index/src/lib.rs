@@ -26,7 +26,7 @@ use auradb_core::{CollectionSchema, Error, FieldType, Record, RecordId, Result, 
 
 pub use hnsw::{Hnsw, HnswParams};
 pub use metric::{metric_json, Metric};
-pub use persist::{IndexManifest, IndexSnapshot, INDEX_FORMAT_VERSION};
+pub use persist::{HnswMetadata, IndexManifest, IndexSnapshot, INDEX_FORMAT_VERSION};
 
 /// Cache key for a per-field approximate (HNSW) graph: field name, metric name,
 /// and the construction parameters. A graph is rebuilt when any of these — or the
@@ -427,6 +427,10 @@ pub struct CollectionIndexes {
     /// cleared whenever the vectors change, so exact search stays the source of
     /// truth and storage format v2 is unchanged.
     ann_cache: Mutex<HashMap<AnnCacheKey, Arc<Hnsw>>>,
+    /// HNSW/ANN preview lifecycle metadata loaded from the last snapshot (empty
+    /// when the indexes were rebuilt fresh). Used to report durable preview state
+    /// and to detect a stale generation; the graph itself is always rebuilt.
+    loaded_ann_metadata: Vec<persist::HnswMetadata>,
 }
 
 impl CollectionIndexes {
@@ -479,7 +483,33 @@ impl CollectionIndexes {
             text_maps,
             vector_maps,
             ann_cache: Mutex::new(HashMap::new()),
+            loaded_ann_metadata: Vec::new(),
         }
+    }
+
+    /// The HNSW/ANN preview metadata loaded from the last snapshot, if any. Empty
+    /// when the indexes were rebuilt from storage rather than loaded.
+    pub fn loaded_ann_metadata(&self) -> &[persist::HnswMetadata] {
+        &self.loaded_ann_metadata
+    }
+
+    /// The live HNSW/ANN preview status for each vector field: a fresh metadata
+    /// record computed from the current exact-vector index, stamped with
+    /// `generation`. This is the honest current state regardless of whether a
+    /// graph is currently cached (graphs build lazily on first use).
+    pub fn ann_preview_status(&self, generation: u64) -> Vec<persist::HnswMetadata> {
+        let mut out: Vec<persist::HnswMetadata> = self
+            .vector_maps
+            .iter()
+            .map(|(field, idx)| persist::HnswMetadata {
+                field: field.clone(),
+                dim: idx.dim(),
+                vector_count: idx.len(),
+                generation,
+            })
+            .collect();
+        out.sort_by(|a, b| a.field.cmp(&b.field));
+        out
     }
 
     /// Drop any cached approximate (HNSW) graphs; called whenever vectors change
@@ -709,6 +739,13 @@ impl CollectionIndexes {
             .map(|(field, idx)| (field.as_str(), idx.dim(), idx.len()))
     }
 
+    /// The number of indexed vectors on `field`, or `None` if the field has no
+    /// vector index. Used to decide whether the ANN preview clears its
+    /// minimum-dataset threshold.
+    pub fn vector_len(&self, field: &str) -> Option<usize> {
+        self.vector_maps.get(field).map(|idx| idx.len())
+    }
+
     /// Exact nearest-neighbour search over a vector field.
     pub fn vector_nearest(
         &self,
@@ -826,6 +863,9 @@ impl CollectionIndexes {
                 entries: idx.entries.iter().map(|(id, v)| (*id, v.clone())).collect(),
             })
             .collect();
+        // Durable ANN preview metadata: one record per vector field, stamped with
+        // this snapshot's generation. The graph stays in-memory/rebuilt.
+        let hnsw = self.ann_preview_status(fingerprint);
         IndexSnapshot {
             format_version: INDEX_FORMAT_VERSION,
             schema_version,
@@ -850,6 +890,7 @@ impl CollectionIndexes {
                     doc_lengths: ti.doc_lengths.iter().map(|(id, len)| (*id, *len)).collect(),
                 })
                 .collect(),
+            hnsw,
         }
     }
 
@@ -934,6 +975,9 @@ impl CollectionIndexes {
                 vi.insert(id, vector);
             }
         }
+        // Carry the durable ANN preview metadata for status reporting. The graph
+        // is not restored here — it rebuilds in memory on first preview query.
+        idx.loaded_ann_metadata = snapshot.hnsw;
         Ok(idx)
     }
 

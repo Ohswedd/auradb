@@ -125,6 +125,40 @@ production HA. At the engine level,
 `crates/auradb-replication/tests/multi_node.rs::cluster_search_bm25_and_hybrid_after_replication`
 confirms a follower rebuilds its BM25 and vector indexes from the replicated log.
 
+### Live v1.3 connector conformance (1.3.0)
+
+AuraDB v1.3.0 adds over-the-wire connector-driven harnesses for the v1.3 query
+features, exercised against a **running server** through the published Aura
+Connector v0.7.x API (never the in-memory reference backend). Each prints a
+`PASS`/`FAIL` line per check and exits non-zero on failure:
+
+- **`run_connector_group_by.py`** — single-field GROUP BY: deterministic
+  count-desc / key-asc group ordering, per-group `min`/`max`, `group_limit`
+  truncation with an honest `group_count_total`, filter scoping, BM25
+  search-candidate scoping, and a clear capability error on an unsupported
+  backend.
+- **`run_connector_ann_preview.py`** — the opt-in approximate (HNSW) vector
+  preview via `search_vector(..., approximate=HnswOptions(...))`: results
+  returned, recall-vs-exact above a dataset-specific floor, the default
+  `fallback="exact"` baseline, and the honest `fallback="error"` policy (serve
+  the preview or return a structured error — never a silent wrong answer).
+- **`run_connector_cursor_resume.py`** — public ranked-cursor resume:
+  `builder.page(page_size=...)` then `client.resume_search(builder, cursor)` from
+  an externally-held opaque token, duplicate-free pages, opaque-token check, and
+  structured invalid-token rejection.
+- **`run_connector_query_profile.py`** — the best-effort EXPLAIN ANALYZE query
+  profile via `.profile()`: requesting a profile never breaks the query, the
+  `QueryProfile` is well typed when present (advisory fields may be absent), and
+  the client-side query IR is still exposed via `.explain()`.
+
+These require Aura Connector **v0.7.0**. The cluster search-analytics drill
+`scripts/smoke_cluster_search_analytics.sh` runs the search/facets/pagination/
+group-by/cursor-resume suite against a three-node Compose cluster leader, then
+performs a bounded leader-change drill (stop the leader, wait for a new one,
+re-run the checks) and confirms quorum after the old node rejoins. It is an
+operator-run **HA candidate preview** drill — not production HA proof and not an
+automatic-failover SLA.
+
 ### Cluster scenarios (0.4.0)
 
 These scenarios exercise single-node cluster mode end to end. They confirm the

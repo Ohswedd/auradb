@@ -14,7 +14,7 @@ use auradb_cli::{
     cmd_doctor_json, cmd_dump, cmd_gc, cmd_index_check, cmd_index_rebuild, cmd_init, cmd_restore,
     cmd_search_explain, cmd_server, cmd_snapshot_create, cmd_snapshot_inspect,
     cmd_snapshot_restore, cmd_stats_analyze, cmd_stats_show, cmd_status, cmd_status_json,
-    cmd_version,
+    cmd_vector_eval, cmd_version,
 };
 use clap::{Parser, Subcommand};
 
@@ -179,6 +179,11 @@ enum Command {
     Search {
         #[command(subcommand)]
         command: SearchCommand,
+    },
+    /// Vector utilities (`vector eval`: ANN-preview recall/latency vs exact).
+    Vector {
+        #[command(subcommand)]
+        command: VectorCommand,
     },
     /// Cluster (Raft) administration.
     Cluster {
@@ -465,6 +470,38 @@ enum SearchCommand {
 }
 
 #[derive(Subcommand)]
+enum VectorCommand {
+    /// Evaluate approximate (HNSW preview) recall@k and latency against the exact
+    /// baseline over a deterministic set of query vectors. The query file holds
+    /// one JSON array of floats per line. Results are dataset/machine specific.
+    Eval {
+        #[arg(long, default_value = ".local/auradb")]
+        data_dir: PathBuf,
+        /// The collection to evaluate.
+        #[arg(long)]
+        collection: String,
+        /// The vector field to evaluate.
+        #[arg(long)]
+        field: String,
+        /// Path to a file with one JSON array of floats (a query vector) per line.
+        #[arg(long)]
+        queries: PathBuf,
+        /// Neighbours requested per query.
+        #[arg(long, default_value_t = 10)]
+        k: usize,
+        /// The distance metric (`cosine`, `euclidean`, `dot_product`).
+        #[arg(long, default_value = "cosine")]
+        metric: String,
+        /// The HNSW `efSearch` beam width for the approximate preview.
+        #[arg(long, default_value_t = 64)]
+        ef_search: usize,
+        /// Emit the report as JSON (the only output format).
+        #[arg(long)]
+        json: bool,
+    },
+}
+
+#[derive(Subcommand)]
 enum BackupCommand {
     /// Validate a JSONL backup without importing it.
     Verify {
@@ -681,6 +718,29 @@ async fn main() -> Result<()> {
                 input,
                 analyze,
             } => println!("{}", cmd_search_explain(&data_dir, &input, analyze)?),
+        },
+        Command::Vector { command } => match command {
+            VectorCommand::Eval {
+                data_dir,
+                collection,
+                field,
+                queries,
+                k,
+                metric,
+                ef_search,
+                json: _,
+            } => println!(
+                "{}",
+                cmd_vector_eval(
+                    &data_dir,
+                    &collection,
+                    &field,
+                    &queries,
+                    k,
+                    &metric,
+                    ef_search
+                )?
+            ),
         },
         Command::Index { command } => match command {
             IndexCommand::Check { data_dir } => println!("{}", cmd_index_check(&data_dir)?),

@@ -1,0 +1,103 @@
+{
+  "auradb_version": "1.3.0",
+  "records": 10000,
+  "command": "auradb bench --records 10000",
+  "commit": "7c2f845",
+  "machine": {
+    "os": "macos",
+    "arch": "aarch64",
+    "cpus": 14
+  },
+  "measurements": [
+    {
+      "name": "storage_append",
+      "unit": "ops_per_sec",
+      "value": 54880.80098572943,
+      "iterations": 10000
+    },
+    {
+      "name": "point_lookup",
+      "unit": "ops_per_sec",
+      "value": 643655.9658862337,
+      "iterations": 1000
+    },
+    {
+      "name": "secondary_index_lookup",
+      "unit": "ops_per_sec",
+      "value": 672947.5100942127,
+      "iterations": 1000
+    },
+    {
+      "name": "document_path_index_lookup",
+      "unit": "ops_per_sec",
+      "value": 6938.698334885867,
+      "iterations": 1000
+    },
+    {
+      "name": "full_text_lookup",
+      "unit": "ops_per_sec",
+      "value": 114.09931241668603,
+      "iterations": 1000
+    },
+    {
+      "name": "vector_exact_nearest",
+      "unit": "ops_per_sec",
+      "value": 8003.494966181833,
+      "iterations": 200
+    },
+    {
+      "name": "full_text_bm25",
+      "unit": "ops_per_sec",
+      "value": 793.9940959027786,
+      "iterations": 1000
+    },
+    {
+      "name": "hybrid_search",
+      "unit": "ops_per_sec",
+      "value": 545.8936801965068,
+      "iterations": 200
+    },
+    {
+      "name": "cursor_paging",
+      "unit": "ops_per_sec",
+      "value": 54.66544766800053,
+      "iterations": 100
+    },
+    {
+      "name": "aggregate_count",
+      "unit": "ops_per_sec",
+      "value": 1980.296054260112,
+      "iterations": 1000
+    },
+    {
+      "name": "facet_terms",
+      "unit": "ops_per_sec",
+      "value": 1885.2166962331485,
+      "iterations": 1000
+    },
+    {
+      "name": "vector_ann_preview",
+      "unit": "ops_per_sec",
+      "value": 360.0038430410244,
+      "iterations": 200
+    },
+    {
+      "name": "ranked_pagination_first_page",
+      "unit": "ops_per_sec",
+      "value": 780.7031010097867,
+      "iterations": 1000
+    },
+    {
+      "name": "frame_encode_decode",
+      "unit": "ns_per_op",
+      "value": 56.07208,
+      "iterations": 100000
+    },
+    {
+      "name": "dump_restore",
+      "unit": "seconds",
+      "value": 40.652568542,
+      "iterations": 1
+    }
+  ]
+}

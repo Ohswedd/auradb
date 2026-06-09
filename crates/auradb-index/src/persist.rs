@@ -83,6 +83,29 @@ pub struct TextIndexData {
     pub doc_lengths: Vec<(RecordId, u32)>,
 }
 
+/// Persisted lifecycle metadata for the opt-in HNSW/ANN **preview** of one
+/// vector field. The approximate graph itself is never persisted — it is rebuilt
+/// in memory from the exact vectors on first use — so this records only the
+/// durable lifecycle markers needed to report status, detect a dimension change,
+/// and recognise a stale generation across restarts. Additive: snapshots written
+/// before v1.3.0 omit it and deserialize with an empty list.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct HnswMetadata {
+    /// The vector field this preview covers (its source identity together with
+    /// the snapshot's collection).
+    pub field: String,
+    /// The vector dimensionality at snapshot time (used to detect a later
+    /// dimension change that would require a rebuild).
+    pub dim: usize,
+    /// The number of indexed vectors at snapshot time (a stats digest; also the
+    /// signal for whether the preview clears the minimum-dataset threshold).
+    pub vector_count: usize,
+    /// The collection content fingerprint at snapshot time — the generation
+    /// marker. A mismatch against the live fingerprint on open means the exact
+    /// vectors changed and the graph must rebuild.
+    pub generation: u64,
+}
+
 /// A serializable snapshot of one collection's indexes.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct IndexSnapshot {
@@ -110,6 +133,11 @@ pub struct IndexSnapshot {
     /// Full-text inverted indexes.
     #[serde(default)]
     pub text: Vec<TextIndexData>,
+    /// HNSW/ANN preview lifecycle metadata, one entry per vector field (v1.3.0+).
+    /// Additive and CRC-protected by the same frame; older readers ignore it and
+    /// older snapshots deserialize it as empty.
+    #[serde(default)]
+    pub hnsw: Vec<HnswMetadata>,
 }
 
 /// The index directory manifest: format version and collection-to-file map.

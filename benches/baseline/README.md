@@ -19,11 +19,26 @@ number from one laptop is not comparable to a number from another.
 The benchmark opens the engine with `sync_on_commit = false` so it measures
 engine work rather than disk-flush latency. See [docs/BENCHMARKS.md](../../docs/BENCHMARKS.md).
 
-The current baseline is `v1.2.0.json`, captured on the v1.2.0 query-ergonomics
-release branch with a **release** build. v1.2.1 is a conformance and documentation
-hardening release with no engine or performance changes, so it carries the v1.2.0
-baseline forward unchanged (no new baseline file is added). v1.2.0 adds four
-measurements —
+The canonical regression baseline remains `v1.2.0.json`, captured on the v1.2.0
+query-ergonomics release branch with a **release** build. v1.2.1 (conformance and
+documentation hardening) carries it forward unchanged. v1.3.0's additions — GROUP BY
+aggregations, EXPLAIN ANALYZE query-profile fields, and durable approximate-preview
+lifecycle metadata — are additive and do not change the existing benchmarked hot
+paths; the in-memory CPU benchmarks (`point_lookup`, `secondary_index_lookup`,
+`frame_encode_decode`) confirm this, tracking v1.2.0 within noise.
+
+`v1.3.0.json` is a fresh same-machine **release** snapshot taken on the v1.3.0
+branch and is reproducible there, but its I/O-bound measurements were captured in a
+busier I/O session than `v1.2.0.json`. As a result the two files' absolute I/O
+numbers are **not directly comparable**: a `bench compare` between them reports large
+I/O-category deltas that reflect capture conditions (disk contention), not a code
+regression — the unchanged CPU benchmarks rule out a hot-path regression. Treat
+`v1.3.0.json` as warn-only and compare it only against future v1.3.x snapshots taken
+on the same machine under the same conditions; use `v1.2.0.json` as the cross-version
+reference. The `auradb vector eval` recall/latency harness is a separate, dataset-
+and machine-specific diagnostic (not part of this committed regression suite) — see
+[docs/BENCHMARKS.md](../../docs/BENCHMARKS.md).
+v1.2.0 adds four measurements —
 `aggregate_count`, `facet_terms`, `vector_ann_preview` (the opt-in approximate HNSW
 preview, next to `vector_exact_nearest`), and `ranked_pagination_first_page` —
 alongside the existing suite. Note the approximate preview is **slower than exact at

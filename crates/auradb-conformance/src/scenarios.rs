@@ -844,7 +844,32 @@ pub async fn run_all(addr: &str) -> Result<ConformanceReport> {
     report.record(
         "vector_ann_preview",
         async {
-            let mut q = FindQuery::new("Doc");
+            // The approximate (HNSW) preview engages only above a minimum-dataset
+            // threshold (below it, exact is both correct and cheaper). Use a
+            // dedicated collection seeded above that threshold so the preview is
+            // genuinely exercised, not exact-fallback.
+            let ann_schema = CollectionSchema::new("AnnDoc")
+                .with_field(FieldDef {
+                    name: "id".into(),
+                    field_type: FieldType::Uuid,
+                    primary_key: true,
+                    unique: true,
+                    nullable: false,
+                    indexed: false,
+                })
+                .with_field(FieldDef::new("embedding", FieldType::Vector { dim: 3 }));
+            client.create_schema(&ann_schema).await?;
+            for i in 0..24u32 {
+                let mut m = Document::new();
+                m.insert("id".into(), Value::Text(format!("a{i}")));
+                m.insert(
+                    "embedding".into(),
+                    Value::Vector(vec![1.0 - (i as f32) * 0.01, (i as f32) * 0.01, 0.0]),
+                );
+                client.insert("AnnDoc", m).await?;
+            }
+
+            let mut q = FindQuery::new("AnnDoc");
             q.vector = Some(VectorSearch {
                 field: "embedding".into(),
                 query: vec![1.0, 0.0, 0.0],
@@ -858,7 +883,11 @@ pub async fn run_all(addr: &str) -> Result<ConformanceReport> {
             let v = plan
                 .vector
                 .ok_or_else(|| Error::Internal("missing vector plan".into()))?;
-            check(v.approximate, "EXPLAIN reports the approximate preview")
+            check(v.approximate, "EXPLAIN reports the approximate preview")?;
+            check(
+                v.vector_mode.as_deref() == Some("ann_preview"),
+                "EXPLAIN vector_mode is ann_preview",
+            )
         }
         .await,
     );

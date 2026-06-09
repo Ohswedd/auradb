@@ -1,21 +1,21 @@
 # AuraDB Compatibility Matrix
 
-This document records what AuraDB v1.2.1 implements and how it interoperates with
-the Aura Connector client library and the Aura Wire Protocol (AWP). AuraDB v1.2.1 is a
-**conformance and documentation hardening** release: it adds no database or query
-features over v1.2.0 and preserves AWP 1, storage format v2, and the v1.2.0 feature
-set unchanged. It adds live over-the-wire conformance scripts for the v1.2 features
-(facets, aggregations, ranked pagination, cooperative query timeouts) and refreshes
-the support and production documentation. AuraDB v1.2.x
-continues the **v1 single-node production line**: on top of the v1.1.0 search and
-ranking surface it carries aggregations, terms facets, and cooperative query timeouts,
-while remaining a production single-node deployment configured with auth, TLS,
-backups, monitoring, and the documented runbooks. Multi-node static clustering
-remains an HA candidate preview, **not a production HA guarantee**. The aggregate
-request and the per-query `timeout_ms` are additive Query IR, so AWP 1 and storage
-format v2 are unchanged. Exact vector search remains the default and the correctness
-baseline; approximate (HNSW) vector search is available as an **opt-in preview**
-(in-memory/rebuilt, not persisted/incremental), **not production ANN**.
+This document records what AuraDB v1.3.0 implements and how it interoperates with
+the Aura Connector client library and the Aura Wire Protocol (AWP). AuraDB v1.3.0
+continues the **v1 single-node production line**: on top of the v1.2 search, ranking,
+and query-ergonomics surface it adds GROUP BY aggregations and EXPLAIN ANALYZE
+query-profile fields, and matures the opt-in approximate-vector preview with durable
+lifecycle metadata and an explicit exact-fallback policy — while remaining a
+production single-node deployment configured with auth, TLS, backups, monitoring, and
+the documented runbooks. Multi-node static clustering remains an HA candidate preview,
+**not a production HA guarantee**. GROUP BY (`group_by`/`group_limit`) is additive
+Query IR, the approximate-preview lifecycle metadata is an additive index-snapshot
+field (the graph itself is still never persisted), and the EXPLAIN ANALYZE profile
+fields are additive ANALYZE JSON, so **AWP 1, storage format v2, and the index
+snapshot format version (1) are unchanged**. Exact vector search remains the default
+and the correctness baseline; approximate (HNSW) vector search is available as an
+**opt-in preview** (the graph is never persisted; it rebuilds in memory from the exact
+vectors on use), **not production ANN**.
 See [SEARCH_AND_RANKING.md](SEARCH_AND_RANKING.md),
 [SUPPORT_POLICY.md](SUPPORT_POLICY.md),
 [HA_RELEASE_CANDIDATE.md](HA_RELEASE_CANDIDATE.md), and the
@@ -43,7 +43,8 @@ v0.4.x. Single-node mode remains the recommended production mode.
 
 | AuraDB | Aura Connector | Protocol | Status |
 | ------ | -------------- | -------- | ------ |
-| 1.2.1  | 0.6.1          | AWP 1    | Supported, recommended (conformance and documentation hardening over 1.2.0: adds live over-the-wire conformance scripts for facets, aggregations, ranked pagination, and cooperative query timeouts, and refreshes support/production docs; no new database or query features; AWP 1, storage format v2, and the v1.2.0 feature set unchanged; exact vector search remains the default and correctness baseline, with the opt-in approximate (HNSW) vector preview — in-memory/rebuilt, not production ANN). Connector 0.6.0 remains supported; 0.5.x remains supported for pre-1.2 features. |
+| 1.3.0  | 0.7.0          | AWP 1    | Supported, recommended (query ergonomics, vector-preview durability, and query observability over 1.2.x: GROUP BY aggregations (additive `group_by`/`group_limit`), EXPLAIN ANALYZE query-profile fields, durable approximate-preview lifecycle metadata with an `ann_fallback` exact/error policy, and the `auradb vector eval` recall/latency harness; single-node production line; multi-node HA candidate preview, not production HA; AWP 1, storage format v2, and index snapshot format version 1 unchanged; exact vector search remains the default and correctness baseline, with the opt-in approximate (HNSW) vector preview — never persisted, rebuilt in memory on use, not production ANN). Connector 0.7.x; 0.6.x remains supported (backward compatible with 0.6.1) for existing features. |
+| 1.2.1  | 0.6.1          | AWP 1    | Supported (conformance and documentation hardening over 1.2.0: adds live over-the-wire conformance scripts for facets, aggregations, ranked pagination, and cooperative query timeouts, and refreshes support/production docs; no new database or query features; AWP 1, storage format v2, and the v1.2.0 feature set unchanged; exact vector search remains the default and correctness baseline, with the opt-in approximate (HNSW) vector preview — in-memory/rebuilt, not production ANN). Connector 0.6.0 remains supported; 0.5.x remains supported for pre-1.2 features. |
 | 1.2.0  | 0.6.0          | AWP 1    | Supported (query ergonomics release: aggregations, terms facets, cooperative query timeouts; single-node production line; multi-node HA candidate preview, not production HA; aggregate request and per-query `timeout_ms` are additive Query IR; AWP 1 and storage format v2 unchanged; exact vector search is the default and correctness baseline, with an opt-in approximate (HNSW) vector preview — in-memory/rebuilt, not production ANN). Connector 0.5.x remains supported for pre-1.2 features. |
 | 1.1.0  | 0.5.0          | AWP 1    | Supported (search and ranking release: BM25 ranked full-text, hybrid text+vector; single-node production line; multi-node HA candidate preview, not production HA; new clauses are additive Query IR/response fields; AWP 1 and storage format v2 unchanged; exact vector search only, no ANN) |
 | 1.0.1  | 0.4.1          | AWP 1    | Supported (first production patch on the v1.0 single-node production line; multi-node HA candidate preview, not production HA; no new config, architecture, or semantics over 1.0.0; connector unchanged; AWP 1 and storage format v2 frozen for v1) |
@@ -93,7 +94,8 @@ and TLS). Use Aura Connector 0.3.x to connect to an AuraDB 0.2.x server. See
   additive `retryable` error hint, the `not_leader` error code, and the
   additive structured `not_leader` object on the error frame are all additive and
   ignored by older clients. See [PROTOCOL.md](PROTOCOL.md).
-- **Aura Connector (tested):** 0.5.0 (supported 0.5.x; 0.4.x connects for non-search operations)
+- **Aura Connector (tested):** 0.7.0 (supported 0.7.x; 0.6.x remains supported and backward
+  compatible with 0.6.1 for existing features; 0.4.x connects for non-search operations)
 - **Cluster mode:** optional, off by default. Single-node cluster, plus a
   controlled multi-node server **HA candidate preview** gated by two opt-ins;
   single-node mode remains the recommended production path. Multi-node static
@@ -151,8 +153,10 @@ authoritative policy is [SUPPORT_POLICY.md](SUPPORT_POLICY.md).
 | relationship `include` | Yes | to-one and to-many |
 | vector nearest | Yes | exact search (`cosine`, `euclidean`, `dot_product`) |
 | cursor streaming | Yes | server-side cursors with idle reaping |
-| explain | Yes | reports strategy, the index used, and estimated rows/cost |
-| explain analyze | Yes | execution metrics via the raw IR `"analyze": true` flag (no new opcode) |
+| aggregate (count/min/max/avg, terms facets) | Yes | `aggregate` read; `avg` and `group_by` added in v1.3.0 |
+| group by (single scalar field) | Yes | additive `group_by`/`group_limit` on `aggregate` (v1.3.0) |
+| explain | Yes | reports strategy, the index used, estimated rows/cost, and vector `vector_mode` |
+| explain analyze | Yes | execution metrics via the raw IR `"analyze": true` flag (no new opcode); v1.3.0 adds additive `plan_id`/`deadline_ms`/`timeout_checked` |
 | migration estimate | Yes | |
 
 ## Supported schema features
@@ -170,8 +174,12 @@ authoritative policy is [SUPPORT_POLICY.md](SUPPORT_POLICY.md).
   and the correctness baseline).
 - Metrics: `cosine`, `euclidean`, `dot_product`.
 - Approximate nearest neighbour (HNSW) is available as an **opt-in preview** (v1.2.0):
-  in-memory/rebuilt, not persisted/incremental, and **not production ANN**. Exact
-  search remains the correctness baseline.
+  the graph is never persisted; it rebuilds in memory from the exact vectors on use, and
+  it is **not production ANN**. Exact search remains the correctness baseline. v1.3.0
+  adds durable per-field preview lifecycle metadata (an additive index-snapshot field;
+  the graph is still not persisted), an `ann_fallback` policy (`exact` default / `error`)
+  for when the preview is unavailable, the `ANN_PREVIEW_MIN_VECTORS = 16` threshold, a
+  `vector_mode` field in EXPLAIN, and the `auradb vector eval` recall/latency harness.
 
 ## Supported document operations
 

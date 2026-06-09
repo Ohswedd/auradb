@@ -1,14 +1,15 @@
 # AuraDB v1.0 support policy
 
-> **AuraDB v1.2.1 supports production single-node deployments when configured
+> **AuraDB v1.3.0 supports production single-node deployments when configured
 > with auth, TLS, backups, monitoring, and the documented runbooks. Multi-node
 > static clustering remains an HA candidate preview, not production HA. The
 > single-node production line carries BM25 ranked full-text and hybrid text+vector
-> search, exact vector search (the default and correctness baseline), aggregations,
-> terms facets, ranked pagination, and cooperative query timeouts; approximate
-> ANN/HNSW vector search is an opt-in preview, not production ANN. v1.2.1 itself is
-> a conformance and documentation hardening release that adds no features over
-> v1.2.0.**
+> search, exact vector search (the default and correctness baseline), aggregations
+> (including GROUP BY), terms facets, ranked pagination, and cooperative query
+> timeouts; approximate ANN/HNSW vector search is an opt-in preview, not production
+> ANN. v1.3.0 adds GROUP BY aggregations, EXPLAIN ANALYZE query-profile fields, and
+> durable approximate-preview lifecycle metadata with an exact-fallback policy, all
+> additive over v1.2.**
 
 This document is the authoritative statement of what AuraDB v1.0 supports, at what
 level, and for how long. It is written to be precise rather than expansive: a
@@ -24,7 +25,7 @@ compatibility matrix in [COMPATIBILITY.md](COMPATIBILITY.md).
 
 ## Production support statement
 
-AuraDB v1.2.1 supports production **single-node** deployments when configured with
+AuraDB v1.3.0 supports production **single-node** deployments when configured with
 authentication, TLS, scheduled backups with a rehearsed restore, monitoring, and
 the documented runbooks. This is the recommended production deployment mode.
 
@@ -54,6 +55,12 @@ These are validated and supported for production single-node use, run per the
   are additive Query IR over the unchanged AWP 1; v1.2.1 adds live over-the-wire
   conformance coverage for them. See [QUERY_ENGINE.md](QUERY_ENGINE.md) and
   [CONFORMANCE.md](CONFORMANCE.md).
+- **Query ergonomics and observability (v1.3.0)** — GROUP BY aggregations (a single
+  scalar field with per-group `count`/`min`/`max`/`avg`, deterministic count-desc /
+  key-asc ordering, `group_limit` with an honest `group_count_total`, and BM25
+  search-candidate scoping) and additive EXPLAIN ANALYZE query-profile fields
+  (`plan_id`, `deadline_ms`, `timeout_checked`). Additive Query IR and ANALYZE JSON
+  over the unchanged AWP 1. See [QUERY_ENGINE.md](QUERY_ENGINE.md).
 - **Authentication and TLS for network exposure** — enforced static-token auth
   (Argon2id) and server-terminated TLS with optional mutual TLS (rustls), both
   fail-closed. See [SECURITY.md](SECURITY.md).

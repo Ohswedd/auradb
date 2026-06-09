@@ -53,6 +53,36 @@ pub struct FacetValues {
     pub buckets: Vec<FacetBucket>,
 }
 
+/// One GROUP BY bucket: a distinct group-key value, the number of records in the
+/// group, and the requested metrics recomputed over just that group.
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct GroupBucket {
+    /// The distinct value of the group-by field for this bucket.
+    pub key: Value,
+    /// The number of matched records in this group.
+    pub count: usize,
+    /// The requested metrics computed over this group's records, in request
+    /// order. Empty when the query requested no metrics (the `count` above still
+    /// stands on its own).
+    pub metrics: Vec<MetricValue>,
+}
+
+/// The result of a GROUP BY clause: one bucket per distinct group-key value
+/// within the matched set, ordered by descending count then ascending key.
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct GroupByResult {
+    /// The group-by field.
+    pub field: String,
+    /// The returned buckets, ordered by descending count then ascending key and
+    /// truncated to the effective group limit.
+    pub groups: Vec<GroupBucket>,
+    /// The total number of distinct groups before truncation. When this exceeds
+    /// `groups.len()`, the result was truncated by the group limit.
+    pub group_count_total: usize,
+    /// The effective group limit applied.
+    pub group_limit: usize,
+}
+
 /// The result of an [`AggregateQuery`].
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct AggregateResult {
@@ -71,6 +101,10 @@ pub struct AggregateResult {
     pub metrics: Vec<MetricValue>,
     /// The computed facets, in request order.
     pub facets: Vec<FacetValues>,
+    /// The GROUP BY result, when the query carried a `group_by` clause. Additive:
+    /// omitted from the wire when absent, so older connectors are unaffected.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub groups: Option<GroupByResult>,
 }
 
 fn require_schema<'a>(
@@ -161,6 +195,9 @@ pub fn execute_aggregate(
     for f in &q.facets {
         validate_field(schema, &f.field, "facet")?;
     }
+    if let Some(field) = &q.group_by {
+        validate_field(schema, field, "group_by")?;
+    }
 
     // 1. Resolve the candidate id set: a BM25 candidate set (search facet) or a
     //    full scan. The residual filter is applied below in both cases.
@@ -221,6 +258,13 @@ pub fn execute_aggregate(
         )?);
     }
 
+    // 5. GROUP BY (over the same matched set, so it composes with filters and
+    //    BM25 candidate scoping for free).
+    let groups = match &q.group_by {
+        Some(field) => Some(compute_groups(field, &q.metrics, &matched, q, deadline)?),
+        None => None,
+    };
+
     Ok(AggregateResult {
         collection: q.collection.clone(),
         matched: matched_count,
@@ -229,12 +273,113 @@ pub fn execute_aggregate(
         search_scoped,
         metrics,
         facets,
+        groups,
     })
+}
+
+/// Group the matched records by the distinct scalar value of `field`, computing
+/// the requested `metrics` per group. Records whose group value is null or
+/// missing are excluded. Groups are ordered by descending count then ascending
+/// key, then truncated to the effective group limit; the full distinct-group
+/// count is reported so truncation is visible.
+fn compute_groups(
+    field: &str,
+    metrics: &[AggregateMetric],
+    matched: &[&Record],
+    q: &AggregateQuery,
+    deadline: &Deadline,
+) -> Result<GroupByResult> {
+    // key -> (representative typed value, member records)
+    let mut groups: HashMap<String, (Value, Vec<&Record>)> = HashMap::new();
+    for (i, rec) in matched.iter().enumerate() {
+        deadline.check_at(i)?;
+        let Some(value) = rec.get_path(field) else {
+            continue;
+        };
+        let Some(key) = scalar_key(value)? else {
+            continue;
+        };
+        groups
+            .entry(key)
+            .and_modify(|(_, members)| members.push(rec))
+            .or_insert_with(|| (value.clone(), vec![rec]));
+    }
+
+    let group_count_total = groups.len();
+    let mut buckets: Vec<GroupBucket> = groups
+        .into_values()
+        .map(|(key, members)| {
+            let count = members.len();
+            let group_metrics = metrics
+                .iter()
+                .map(|m| compute_metric(m, &members, count))
+                .collect();
+            GroupBucket {
+                key,
+                count,
+                metrics: group_metrics,
+            }
+        })
+        .collect();
+
+    // Deterministic: descending count, ascending key, with a stable type-name +
+    // key tiebreak when keys are not mutually orderable.
+    buckets.sort_by(|a, b| {
+        b.count.cmp(&a.count).then_with(|| {
+            eval::order(&a.key, &b.key).unwrap_or_else(|| {
+                a.key.type_name().cmp(b.key.type_name()).then_with(|| {
+                    scalar_key(&a.key)
+                        .ok()
+                        .flatten()
+                        .cmp(&scalar_key(&b.key).ok().flatten())
+                })
+            })
+        })
+    });
+
+    let group_limit = q.effective_group_limit();
+    buckets.truncate(group_limit);
+
+    Ok(GroupByResult {
+        field: field.to_string(),
+        groups: buckets,
+        group_count_total,
+        group_limit,
+    })
+}
+
+/// Coerce a scalar value to `f64` for numeric aggregation. `Int`/`Float` only;
+/// everything else (including null, text, timestamp) yields `None` and is skipped.
+fn as_numeric(value: &Value) -> Option<f64> {
+    match value {
+        Value::Int(i) => Some(*i as f64),
+        Value::Float(f) => Some(*f),
+        _ => None,
+    }
 }
 
 fn compute_metric(m: &AggregateMetric, matched: &[&Record], matched_count: usize) -> MetricValue {
     let value = match m.op {
         AggregateOp::Count => Value::Int(matched_count as i64),
+        AggregateOp::Avg => {
+            let field = m.field.as_deref().unwrap_or_default();
+            let mut sum = 0.0_f64;
+            let mut n = 0_u64;
+            for rec in matched {
+                let Some(v) = rec.get_path(field) else {
+                    continue;
+                };
+                if let Some(x) = as_numeric(v) {
+                    sum += x;
+                    n += 1;
+                }
+            }
+            if n == 0 {
+                Value::Null
+            } else {
+                Value::Float(sum / n as f64)
+            }
+        }
         AggregateOp::Min | AggregateOp::Max => {
             let field = m.field.as_deref().unwrap_or_default();
             let want_min = matches!(m.op, AggregateOp::Min);

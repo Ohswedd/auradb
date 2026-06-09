@@ -130,6 +130,7 @@ fn ann_preview_explain_shape() {
             m: Some(8),
             ef_construction: Some(64),
             ef_search: Some(40),
+            ..Default::default()
         },
     );
     let plan = engine.explain(&q).unwrap();
