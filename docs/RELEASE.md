@@ -1,14 +1,18 @@
 # Release guide
 
 This guide describes how a maintainer cuts an AuraDB release. The current release
-is `1.3.0` — a **query ergonomics, vector-preview durability, and query
-observability** release on the v1 single-node production line, paired with Aura
+is `1.3.1` — a patch over `1.3.0` that fixes the cluster search-analytics release
+smoke's leader resolution (`scripts/smoke_cluster_search_analytics.sh`) with no
+engine, protocol, storage, query, or connector behavior changes. The `1.3.0`
+feature line it builds on is a **query ergonomics, vector-preview durability, and
+query observability** release on the v1 single-node production line, paired with Aura
 Connector v0.7.0. It adds GROUP BY aggregations and EXPLAIN ANALYZE query-profile
 fields, and matures the opt-in approximate-vector preview with durable lifecycle
 metadata and an exact-fallback policy. Single-node mode is the recommended
 production mode; multi-node static clustering remains an HA candidate preview,
 **not** production HA. AWP 1, storage format v2, and the index snapshot format
 version (1) are **frozen for v1**. See
+[V1_3_1_RELEASE_NOTES.md](V1_3_1_RELEASE_NOTES.md),
 [V1_3_RELEASE_NOTES.md](V1_3_RELEASE_NOTES.md),
 [V1_2_1_RELEASE_NOTES.md](V1_2_1_RELEASE_NOTES.md),
 [V1_1_RELEASE_NOTES.md](V1_1_RELEASE_NOTES.md),
