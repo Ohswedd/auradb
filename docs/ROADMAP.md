@@ -44,34 +44,64 @@ For what is and is not supported today, see [SUPPORT_POLICY.md](SUPPORT_POLICY.m
 Items are actionable work, not promises. Where the path is uncertain we say so
 ("investigate", "evaluate", "candidate", "future work", "not yet committed").
 
-## Target: AuraDB v1.4.0 — Production operability and search quality
+## Shipped: AuraDB v1.4.0 — Production operability and search quality
 
-The next big release strengthens the **production-supported single-node path**,
-improves **search and vector quality evidence**, and raises **operator confidence**.
-It is deliberately *not* a production-HA, production-ANN, sharding, multi-region, or
-distributed-database release; those remain future work (see "Later / not v1.4.0 by
-default" and "Not currently planned for immediate work"). It pairs with **Aura
-Connector v0.8.0**.
+v1.4.0 is **shipped** (current stable). It strengthened the
+**production-supported single-node path**, improved **search and vector quality
+evidence**, and raised **operator confidence**. It was deliberately *not* a
+production-HA, production-ANN, sharding, multi-region, or distributed-database
+release; those remain future work. It pairs with **Aura Connector v0.8.0**.
 
-Planned scope (detailed per category in the sections below):
+Delivered in v1.4.0 (per-item tracking lives in the category sections below):
 
-- **Production single-node drills:** disk-full drill, I/O-error drill,
-  backup/restore rehearsal on larger state, more upgrade fixtures across released
-  versions, and a restore/rollback rehearsal.
-- **Search quality:** a relevance dataset format, search regression fixtures, BM25
-  (k1 / b) tuning guidance, a hybrid ranking calibration harness, and
-  analyzer/tokenizer planning (or a first safe implementation if scoped).
-- **Vector evidence:** larger exact-vs-ANN evaluation datasets, recall/latency
-  report examples, ANN health/reporting improvements, and exact-fallback evidence —
-  with **no production ANN claim**.
-- **Operator confidence:** SLO templates, incident runbook templates,
-  doctor/check/report improvements where needed, and published-image smoke
-  expansion.
-- **Release engineering:** SBOM/signing investigation (or a first implementation if
-  feasible), a release rollback drill, and artifact-verification improvements.
+- **Production single-node drills:** the `scripts/smoke_single_node_production_drills.sh`
+  harness — `df` disk-space preflight, safe I/O-error surface drill, backup + verify,
+  restore-to-fresh rehearsal, snapshot rollback rehearsal, and a machine-readable
+  production drill report — with backing CLI tests and runbook docs.
+- **Search quality:** a documented JSONL relevance dataset format, committed
+  regression fixtures (`fixtures/relevance/`), the `auradb search eval` harness
+  (BM25 / `vector_exact` / hybrid), MRR@k / NDCG@k / Recall@k metrics, BM25 `k1`/`b`
+  evaluation guidance, and a hybrid calibration harness (`--text-weight` /
+  `--vector-weight`).
+- **Vector evidence:** the `auradb vector eval` recall/latency harness and
+  exact-fallback evidence — with **no production ANN claim**.
+
+Analyzer/tokenizer configuration was deliberately *deferred* from v1.4.0 and is
+the headline of v1.5.0 below.
+
+## Target: AuraDB v1.5.0 — Analyzers, tokenization, snippets, and search-quality expansion
+
+The next big release builds on v1.4.0's relevance-evaluation harness with a
+deterministic **analyzer/tokenizer framework**, built-in analyzer presets, and a
+**highlight/snippet foundation** — all additive, with **defaults that preserve
+current search behavior**. It is deliberately *not* a production-HA, production-ANN,
+sharding, or multi-region release; those remain future work. Exact vector search
+remains the correctness baseline and ANN remains an opt-in preview. It pairs with
+**Aura Connector v0.9.0**.
+
+Planned scope:
+
+- configurable query-time analyzer presets
+- deterministic tokenizer framework
+- stemming/normalization options if feasible
+- stopword handling if feasible
+- phrase/prefix matching only if it can be made honest and well-tested
+- highlight/snippet support if server-side offsets can be produced safely
+- relevance fixture expansion for analyzer behavior
+- search eval support for analyzer presets
+- explain/profile fields showing analyzer/tokenizer choice
+- docs explaining defaults and migration behavior
+
+Not in v1.5.0 by default:
+
+- production ANN
+- persisted/incremental HNSW graph
+- production HA
+- linearizable follower reads
+- sharding/multi-region
 
 The category sections below carry the per-item tracking; this section is the
-v1.4.0 lens over them.
+v1.5.0 lens over them.
 
 ## Production single-node hardening
 
@@ -116,7 +146,11 @@ operability of search, not the existence of search.
   guessed; hybrid weight calibration via `--text-weight`/`--vector-weight`. See
   [SEARCH_AND_RANKING.md](SEARCH_AND_RANKING.md). Analyzer/tokenizer configuration
   remains future work.
-- [ ] Highlight / snippet support — evaluate.
+- [~] Highlight / snippet support — **v1.5.0 target**, only if the server can
+  produce snippets from stored document text with deterministic offsets, on
+  explicitly requested fields, with fragment caps and no hidden-field leakage. If
+  it cannot be made honest in v1.5.0 it stays evaluated with a design note in
+  [SEARCH_AND_RANKING.md](SEARCH_AND_RANKING.md).
 - [x] Faceting and aggregations over result sets — shipped in v1.2.0 (`aggregate`
   request: `count`/`min`/`max` metrics and terms facets, including BM25 search
   facets, with an index-backed facet path and honest scan fallback).
@@ -125,9 +159,15 @@ operability of search, not the existence of search.
   the `search_page` AWP request (`ranked_pagination` capability), and the connector
   `QueryBuilder.search_pages()` helper. The server advertises a `cursor_resume`
   capability so an opaque resume token can be persisted and resumed across processes.
-- [ ] Query-time analyzers / tokenizers.
-- [ ] Synonyms or custom analyzers.
-- [ ] Hybrid ranking calibration tooling.
+- [~] Query-time analyzers / tokenizers — **v1.5.0 target**: a deterministic
+  analyzer/tokenizer framework with built-in presets (`default` / `simple` /
+  `keyword` / `ascii_fold`), additive query-time selection, `default` preserving
+  current behavior, search-eval `--analyzer` support, and explain/profile
+  reporting of the effective analyzer. No external dictionaries; no language
+  claims beyond what is implemented.
+- [ ] Synonyms or custom analyzers — future work, not v1.5.0 by default.
+- [ ] Hybrid ranking calibration tooling — future work building on the v1.4.0
+  hybrid calibration harness.
 
 ## Vector search
 
@@ -236,11 +276,11 @@ preview" and any future production-HA decision; the full criteria live in
 - [ ] Release rollback drills.
 - [ ] Artifact-verification improvements.
 
-## Later / not v1.4.0 by default
+## Later / not v1.5.0 by default
 
-These are real future directions, but they are explicitly **out of v1.4.0 scope**
-unless intentionally re-scoped. They do not weaken the v1.4.0 production-single-node
-and search-quality focus.
+These are real future directions, but they are explicitly **out of v1.5.0 scope**
+unless intentionally re-scoped. They do not weaken the v1.5.0 analyzer,
+tokenization, snippet, and search-quality focus.
 
 - Production-HA decision gate for multi-node.
 - Cross-host multi-node chaos soak (beyond loopback).
