@@ -146,7 +146,21 @@ Search and ranking ([`docs/SEARCH_AND_RANKING.md`](docs/SEARCH_AND_RANKING.md)) 
 # Inspect a ranked query's plan (and measured metrics with --analyze).
 auradb search explain --input examples/search_bm25.json
 auradb search explain --input examples/search_hybrid.json --analyze
+
+# Measure ranked-retrieval relevance (MRR@k / NDCG@k / Recall@k) on a committed
+# relevance fixture — bm25, vector_exact, or hybrid. Results are fixture-specific
+# regression signals, not universal benchmarks (use a fresh --data-dir).
+auradb search eval \
+  --data-dir .local/search-eval \
+  --corpus fixtures/relevance/small_corpus.jsonl \
+  --queries fixtures/relevance/small_queries.jsonl \
+  --qrels fixtures/relevance/small_qrels.jsonl \
+  --mode bm25 --k 10 --json
 ```
+
+The relevance dataset format, BM25 `k1`/`b` tuning, and hybrid weight calibration are
+documented in [`docs/SEARCH_AND_RANKING.md`](docs/SEARCH_AND_RANKING.md) and
+[`fixtures/relevance/README.md`](fixtures/relevance/README.md).
 
 The legacy `contains_text` boolean predicate and term-frequency ranking are unchanged
 ([`docs/FULL_TEXT.md`](docs/FULL_TEXT.md)). Unsupported operations return a structured

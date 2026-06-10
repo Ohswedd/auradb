@@ -12,7 +12,7 @@ use auradb_cli::{
     cmd_cluster_restore_plan, cmd_cluster_status, cmd_cluster_status_live, cmd_cluster_wait_leader,
     cmd_cluster_wait_ready, cmd_compact, cmd_compatibility, cmd_config_validate, cmd_doctor,
     cmd_doctor_json, cmd_dump, cmd_gc, cmd_index_check, cmd_index_rebuild, cmd_init, cmd_restore,
-    cmd_search_explain, cmd_server, cmd_snapshot_create, cmd_snapshot_inspect,
+    cmd_search_eval, cmd_search_explain, cmd_server, cmd_snapshot_create, cmd_snapshot_inspect,
     cmd_snapshot_restore, cmd_stats_analyze, cmd_stats_show, cmd_status, cmd_status_json,
     cmd_vector_eval, cmd_version,
 };
@@ -467,6 +467,45 @@ enum SearchCommand {
         #[arg(long)]
         analyze: bool,
     },
+    /// Evaluate ranked-retrieval relevance for a JSONL dataset (corpus, queries,
+    /// qrels), reporting MRR@k, NDCG@k, and Recall@k as JSON. The corpus is
+    /// ingested into a fresh `--data-dir`; results are dataset-specific and are
+    /// not a universal benchmark. Modes: `bm25`, `vector_exact`, `hybrid`.
+    Eval {
+        /// A fresh, empty data directory the corpus is ingested into.
+        #[arg(long, default_value = ".local/auradb-search-eval")]
+        data_dir: PathBuf,
+        /// JSONL corpus file (one document per line).
+        #[arg(long)]
+        corpus: PathBuf,
+        /// JSONL queries file (one query per line).
+        #[arg(long)]
+        queries: PathBuf,
+        /// JSONL relevance judgments file (one qrel per line).
+        #[arg(long)]
+        qrels: PathBuf,
+        /// Retrieval mode: `bm25`, `vector_exact`, or `hybrid`.
+        #[arg(long, default_value = "bm25")]
+        mode: String,
+        /// The rank cutoff `k`.
+        #[arg(long, default_value_t = 10)]
+        k: usize,
+        /// BM25 `k1` override (defaults to the engine's built-in value).
+        #[arg(long)]
+        k1: Option<f32>,
+        /// BM25 `b` override (defaults to the engine's built-in value).
+        #[arg(long)]
+        b: Option<f32>,
+        /// Hybrid text-signal fusion weight.
+        #[arg(long, default_value_t = 0.7)]
+        text_weight: f32,
+        /// Hybrid vector-signal fusion weight.
+        #[arg(long, default_value_t = 0.3)]
+        vector_weight: f32,
+        /// Emit the report as JSON (the only output format).
+        #[arg(long)]
+        json: bool,
+    },
 }
 
 #[derive(Subcommand)]
@@ -718,6 +757,33 @@ async fn main() -> Result<()> {
                 input,
                 analyze,
             } => println!("{}", cmd_search_explain(&data_dir, &input, analyze)?),
+            SearchCommand::Eval {
+                data_dir,
+                corpus,
+                queries,
+                qrels,
+                mode,
+                k,
+                k1,
+                b,
+                text_weight,
+                vector_weight,
+                json: _,
+            } => println!(
+                "{}",
+                cmd_search_eval(
+                    &data_dir,
+                    &corpus,
+                    &queries,
+                    &qrels,
+                    &mode,
+                    k,
+                    k1,
+                    b,
+                    text_weight,
+                    vector_weight,
+                )?
+            ),
         },
         Command::Vector { command } => match command {
             VectorCommand::Eval {

@@ -1,0 +1,5 @@
+{"id":"q-001","text":"restore backup into fresh data directory","tags":["backup","restore"],"vector":[0.90,0.05,0.00,0.20]}
+{"id":"q-002","text":"replication leader election and follower catch up","tags":["replication"],"vector":[0.10,0.90,0.10,0.10]}
+{"id":"q-003","text":"bm25 relevance ranking with k1 and b tuning","tags":["bm25","ranking"],"vector":[0.00,0.10,0.90,0.10]}
+{"id":"q-004","text":"hybrid search combining text and vector similarity","tags":["hybrid"],"vector":[0.00,0.10,0.85,0.15]}
+{"id":"q-005","text":"compact segments and reclaim disk space","tags":["compaction","gc"],"vector":[0.10,0.05,0.05,0.90]}

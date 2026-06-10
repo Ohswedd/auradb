@@ -147,6 +147,19 @@ real failure. It is a **single-node production drill — not a multi-node HA pro
 and it makes no production ANN claim.** Full guide:
 [BACKUP_RESTORE.md](BACKUP_RESTORE.md).
 
+### Search-relevance evaluation (v1.4.0)
+
+`auradb search eval` measures ranked-retrieval relevance (MRR@k / NDCG@k /
+Recall@k) for `bm25`, `vector_exact`, and `hybrid` modes against a committed JSONL
+relevance dataset, emitting a machine-readable JSON report. It is offline and
+deterministic and ingests the corpus into a throwaway `--data-dir`. Use it as a
+release-gate regression check and to tune BM25 `k1`/`b` or hybrid weights on your
+own data. The numbers are **fixture-specific regression signals, not universal
+benchmarks**; the harness uses the exact-vector baseline (no production ANN claim)
+and is single-node (no production HA claim). See
+[SEARCH_AND_RANKING.md](SEARCH_AND_RANKING.md) and
+[`fixtures/relevance/README.md`](../fixtures/relevance/README.md).
+
 ## Single-node cluster mode (v0.4.0)
 
 Cluster mode is opt-in and **off by default**; the recommended production path

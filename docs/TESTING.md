@@ -615,6 +615,31 @@ The search and ranking surface is covered at every layer:
   `search_explain_analyze` scenarios run by `run_all`, plus the Python
   `run_connector_search.py` harness against a live server.
 
+## Search-relevance evaluation tests (v1.4.0)
+
+v1.4.0 adds a deterministic, offline relevance-evaluation harness and its
+regression coverage. All of it runs in the standard `cargo test` workspace gate —
+no Docker, no server, no external downloads:
+
+- **Metric unit/integration tests** (`crates/auradb-query`): the pure MRR@k,
+  NDCG@k, and Recall@k functions in `auradb_query::relevance` — ideal-vs-degraded
+  ordering, the relevance-grade threshold, empty-judgment handling, and a
+  determinism check (`crates/auradb-query/tests/relevance_metrics.rs`).
+- **Engine integration tests** (`crates/auradb/tests/search_relevance.rs`): the
+  metrics score real engine output — a BM25 query and a hybrid query are run
+  end-to-end and the returned ranking is scored against graded qrels.
+- **CLI harness tests** (`crates/auradb-cli/tests/search_relevance_cli.rs`):
+  dataset parsing and validation (missing ids, negative grades, malformed JSON →
+  non-zero), the JSON report shape, the committed-fixture regression bands, BM25
+  default/custom parameter reporting, hybrid weight reporting and rejection of bad
+  weights, the exact-vector path, unknown-mode rejection, determinism, and
+  unknown-qrel-id warnings.
+
+The committed dataset lives in `fixtures/relevance/` (see its README). Results are
+fixture-specific regression signals, not universal benchmarks; the harness uses
+the exact-vector baseline (no production-ANN claim) and is single-node (no
+production-HA claim).
+
 ## Live v1.2 connector conformance (v1.2.1)
 
 v1.2.1 is a conformance and documentation hardening release. It adds **no** database or

@@ -100,9 +100,23 @@ lands here first.
 BM25 and hybrid ranking ship today; this category covers relevance quality and
 operability of search, not the existence of search.
 
-- [ ] Search relevance evaluation datasets.
-- [ ] BM25 parameter (k1 / b) tuning guidance.
-- [~] Highlight / snippet support — evaluate.
+- [~] Search relevance evaluation datasets — second v1.4.0 slice landed: a
+  documented JSONL relevance dataset format with a committed regression fixture
+  (`fixtures/relevance/`), the `auradb search eval` harness (BM25 / exact-vector /
+  hybrid, MRR@k / NDCG@k / Recall@k, machine-readable JSON), pure metric functions
+  in `auradb_query::relevance`, and tests at every layer
+  (`crates/auradb-query/tests/relevance_metrics.rs`,
+  `crates/auradb/tests/search_relevance.rs`,
+  `crates/auradb-cli/tests/search_relevance_cli.rs`). Fixture-specific regression
+  signals, not a universal benchmark; exact-vector baseline (no production ANN
+  claim); single-node (no production HA claim).
+- [~] BM25 parameter (k1 / b) tuning guidance — `auradb search eval` accepts
+  `--k1`/`--b` (additive overrides; defaults preserve current behavior) and echoes
+  the effective parameters, so tuning is *measured* against a dataset rather than
+  guessed; hybrid weight calibration via `--text-weight`/`--vector-weight`. See
+  [SEARCH_AND_RANKING.md](SEARCH_AND_RANKING.md). Analyzer/tokenizer configuration
+  remains future work.
+- [ ] Highlight / snippet support — evaluate.
 - [x] Faceting and aggregations over result sets — shipped in v1.2.0 (`aggregate`
   request: `count`/`min`/`max` metrics and terms facets, including BM25 search
   facets, with an index-backed facet path and honest scan fallback).

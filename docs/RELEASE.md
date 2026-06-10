@@ -52,6 +52,31 @@ post-restore `doctor`/`check`/`stats` reads. It is a single-node production dril
 manual / local release gate (bounded, safe temp dirs), not a required per-PR CI
 job. See [BACKUP_RESTORE.md](BACKUP_RESTORE.md) and [TESTING.md](TESTING.md).
 
+### Search-relevance regression gate (v1.4.0)
+
+Before tagging, run the relevance harness on the committed fixture and confirm the
+measured metrics have not regressed against the recorded baseline bands:
+
+```bash
+rm -rf .local/search-eval
+auradb search eval \
+  --data-dir .local/search-eval \
+  --corpus fixtures/relevance/small_corpus.jsonl \
+  --queries fixtures/relevance/small_queries.jsonl \
+  --qrels fixtures/relevance/small_qrels.jsonl \
+  --mode bm25 --k 10 --json
+# Repeat with --mode vector_exact and --mode hybrid.
+```
+
+The same fixtures are asserted in CI by
+`crates/auradb-cli/tests/search_relevance_cli.rs`, so a ranking regression fails
+the normal `cargo test` gate; the manual run is for inspecting the JSON report and
+sweeping BM25 `k1`/`b` or hybrid weights (see
+[SEARCH_AND_RANKING.md](SEARCH_AND_RANKING.md)). Results are **fixture-specific**,
+not a universal benchmark or relevance guarantee; the harness uses the
+exact-vector baseline (no production ANN claim) and is single-node (no production
+HA claim).
+
 ### GitHub Actions maintenance (Node 24)
 
 Workflow actions are kept on majors that run on Node 24, ahead of the Node 20

@@ -21,6 +21,11 @@ pub use cluster::{
     ClusterMetadataReport, RestorePlanReport,
 };
 
+mod search_eval;
+pub use search_eval::{
+    cmd_search_eval, AggregateMetrics, Bm25Params, PerQueryMetrics, SearchEvalReport, WeightsReport,
+};
+
 /// The package version.
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 
