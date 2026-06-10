@@ -113,7 +113,7 @@ version history:
 ```bash
 auradb dump --data-dir /data --out backup.jsonl
 auradb backup verify --input backup.jsonl --json   # validate WITHOUT importing
-auradb restore --data-dir /restored --in backup.jsonl
+auradb restore --data-dir /restored --input backup.jsonl
 ```
 
 `auradb backup verify` (v0.8.0) validates a dump without importing it: every line
@@ -134,6 +134,18 @@ Properties that hold across GC:
 Backup and restore are **unaffected by cluster mode**: `dump` and `restore`
 operate on the engine's visible state and behave identically whether cluster mode
 is on or off.
+
+### Production drills and recovery confidence
+
+`scripts/smoke_single_node_production_drills.sh` rehearses the supported
+single-node operability path end-to-end — disk-headroom preflight, backup +
+verify, restore into a fresh data dir, rollback to a known-good snapshot, clean
+I/O-error surfacing, and the post-restore `doctor` / `check` / `stats` health
+reads — against bounded, throwaway data under `.local/`. It prints `[PASS]`/
+`[FAIL]` lines, writes a machine-readable JSON report, and exits non-zero on a
+real failure. It is a **single-node production drill — not a multi-node HA proof,
+and it makes no production ANN claim.** Full guide:
+[BACKUP_RESTORE.md](BACKUP_RESTORE.md).
 
 ## Single-node cluster mode (v0.4.0)
 

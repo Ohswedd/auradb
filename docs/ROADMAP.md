@@ -79,11 +79,21 @@ Single-node is the supported production mode, so most operability investment
 lands here first.
 
 - [ ] Longer single-node soak runs on maintained hardware.
-- [ ] Disk-full and I/O-error drills with documented recovery behavior.
+- [~] Disk-full and I/O-error drills with documented recovery behavior — first
+  v1.4.0 slice landed: `scripts/smoke_single_node_production_drills.sh` (a bounded
+  single-node drill harness covering a `df` disk-headroom preflight, backup +
+  verify, restore-to-fresh, snapshot rollback, clean I/O-error surfacing, and
+  post-restore `doctor`/`check`/`stats`, with a machine-readable JSON report),
+  backed by `crates/auradb-cli/tests/production_drills_cli.rs` and documented in
+  [BACKUP_RESTORE.md](BACKUP_RESTORE.md). Single-node only; no production HA or ANN
+  claim.
 - [ ] Backup encryption workflow examples.
 - [ ] More upgrade rehearsal fixtures across released versions.
-- [ ] Operator SLO templates.
-- [ ] Production incident / recovery runbook templates.
+- [~] Operator SLO templates — recovery/SLO report template added in
+  [BACKUP_RESTORE.md](BACKUP_RESTORE.md) (backup age, restore-rehearsal recency,
+  doctor/check result, query-timeout rate, disk headroom).
+- [~] Production incident / recovery runbook templates — restore/rollback runbook
+  added as [RUNBOOKS.md](RUNBOOKS.md) section 21 plus [BACKUP_RESTORE.md](BACKUP_RESTORE.md).
 
 ## Search and ranking
 

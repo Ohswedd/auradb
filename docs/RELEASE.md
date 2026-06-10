@@ -37,6 +37,21 @@ exercised by the `auradb-cli` backup/restore and upgrade-gate tests
 6. Index and planner-stats validation.
 7. Confirm no secrets in the backup-verify output.
 
+Additionally, run the single-node production drill harness before tagging and
+confirm `overall == "pass"`:
+
+```bash
+scripts/smoke_single_node_production_drills.sh
+# inspect .local/prod-drills/run-<epoch>/report.json
+```
+
+It rehearses disk-headroom preflight, backup + verify, restore-to-fresh,
+**rollback to a known-good snapshot**, clean I/O-error surfacing, and the
+post-restore `doctor`/`check`/`stats` reads. It is a single-node production drill
+— **not** a multi-node HA proof, and makes **no** production ANN claim. It is a
+manual / local release gate (bounded, safe temp dirs), not a required per-PR CI
+job. See [BACKUP_RESTORE.md](BACKUP_RESTORE.md) and [TESTING.md](TESTING.md).
+
 ### GitHub Actions maintenance (Node 24)
 
 Workflow actions are kept on majors that run on Node 24, ahead of the Node 20

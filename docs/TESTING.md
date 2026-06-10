@@ -188,6 +188,36 @@ SOAK_DURATION_SECS=10 scripts/soak_cluster_preview.sh
 
 These are operator/manual tools and are not part of required CI.
 
+### Single-node production drills (manual release gate)
+
+- `scripts/smoke_single_node_production_drills.sh` — a bounded, offline harness
+  for the production-supported single-node path. It runs eight drills
+  (`disk_space_preflight`, `backup_restore_rehearsal`, `restore_to_fresh_data_dir`,
+  `rollback_rehearsal`, `io_error_surface_check`, `doctor_after_restore`,
+  `check_after_restore`, `metrics_or_stats_snapshot`), prints `[PASS]`/`[WARN]`/
+  `[FAIL]` lines, and writes a machine-readable report to
+  `.local/prod-drills/run-<epoch>/report.json`. It targets stock macOS bash 3.2,
+  keeps logs (and, on failure, data dirs) under `.local/`, and exits non-zero on a
+  real failure. Disk-full is rehearsed via a read-only `df` preflight (never by
+  filling the disk); I/O errors via permission-denied/missing/corrupt paths. It is
+  a **single-node production drill — not a multi-node HA proof, and it makes no
+  production ANN claim.** A quick run:
+
+  ```bash
+  DRILL_RECORDS=300 scripts/smoke_single_node_production_drills.sh
+  ```
+
+- `crates/auradb-cli/tests/production_drills_cli.rs` — the Rust coverage behind
+  the drills: restore-to-fresh and rollback preserve record counts; `doctor`/
+  `check --json` are healthy after a restore; I/O faults (permission-denied,
+  missing, corrupt) return structured errors and never panic; and the
+  machine-readable reports never echo record contents. (The disk-headroom preflight
+  is shell/`df`-level by design — no unused Rust shim — and is covered by the
+  script.) These complement the existing `backup_drills.rs`,
+  `backup_restore_edge_cases.rs`, `large_dataset.rs`, and `check.rs` suites.
+
+  See [BACKUP_RESTORE.md](BACKUP_RESTORE.md) for the operator guide.
+
 ## HA release-candidate suites (v0.9.0)
 
 > **AuraDB v0.9.0 is an HA release candidate for the controlled static-cluster

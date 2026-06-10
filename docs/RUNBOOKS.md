@@ -32,6 +32,10 @@ Before declaring a single-node deployment production-ready (details in
 8. Run an upgrade rehearsal in a canary.
 9. Verify disk capacity and headroom.
 10. Document the rollback plan (restore from backup).
+11. Run the single-node production drill harness
+    (`scripts/smoke_single_node_production_drills.sh`) and confirm the JSON
+    report's `overall == "pass"` — see section 21 and
+    [BACKUP_RESTORE.md](BACKUP_RESTORE.md).
 
 Conventions: `DATA=/var/lib/auradb` is the data directory; `ADDR=127.0.0.1:7171`
 is a running server's client address. Replace as appropriate.
@@ -520,3 +524,28 @@ auradb check --data-dir "$DATA" --json
 Include the AuraDB version, the redacted reports, what you expected, what
 happened, and the minimal steps to reproduce. See `SECURITY.md` for reporting
 security issues privately.
+
+## 21. Production drill rehearsal (recovery confidence)
+
+Rehearse the supported single-node operability path before a release, after
+changing storage/backup/restore code, or as a periodic recovery-confidence
+check:
+
+```bash
+scripts/smoke_single_node_production_drills.sh
+# Larger state + stricter free-space threshold:
+DRILL_RECORDS=5000 MIN_FREE_MB=1024 scripts/smoke_single_node_production_drills.sh
+```
+
+It exercises, against bounded throwaway data under `.local/`: disk-headroom
+preflight, backup + verify, restore into a fresh data dir, rollback to a
+known-good snapshot, clean I/O-error surfacing, and the post-restore
+`doctor`/`check`/`stats` reads. Confirm `overall == "pass"` in
+`.local/prod-drills/run-<epoch>/report.json`. On failure, the data dirs are
+preserved (logs and the report always are) — attach both to a bug report.
+
+This is a **single-node production drill — not a multi-node HA proof, and it
+makes no production ANN claim.** Disk-full is rehearsed via a read-only `df`
+preflight (never by filling the disk); I/O errors via permission-denied/
+missing/corrupt paths (never by corrupting real data). Full guide:
+[BACKUP_RESTORE.md](BACKUP_RESTORE.md).
