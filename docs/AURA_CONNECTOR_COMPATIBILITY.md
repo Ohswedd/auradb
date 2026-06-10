@@ -2,12 +2,33 @@
 
 This document is the connector-focused companion to the
 [Compatibility Matrix](COMPATIBILITY.md). It records which Aura Connector release
-talks to AuraDB 1.3.1, what it can drive, and what it cannot.
+talks to AuraDB 1.4.0, what it can drive, and what it cannot.
 
 > **AuraDB v0.7.x adds connector cluster ergonomics for the controlled multi-node
 > preview. It is _not_ production HA — there is no automatic failover,
 > linearizable follower reads, or distributed transactions. Single-node mode
 > remains the recommended production mode.**
+
+## Connector support (v1.4.0)
+
+AuraDB v1.4.0 uses **Aura Wire Protocol 1**, frozen for the v1.x line. The
+**supported, tested connector is Aura Connector v0.8.0** (and compatible 0.8.x;
+0.7.x/0.6.x/0.5.x remain supported for the existing feature set). v1.4.0 ships
+production-operability and search-quality **tooling** — the single-node production
+drill harness and the `auradb search eval` relevance evaluation command — which are
+operator-facing CLI/server tooling, **not connector APIs and not a wire-protocol
+change**. Aura Connector v0.8.0 adds purely client-side ergonomics: `ConnectionProfile`
+(including `ConnectionProfile.from_env`, `Client.from_profile`/`Aura.from_profile`, TLS
+CA and SNI/`server_name` wiring, and a token-redacting `repr`), search-eval report
+parsing helpers (`SearchEvalReport`/`SearchEvalMetrics`/`SearchEvalQueryResult` and the
+BM25/hybrid report models, which **parse `auradb search eval` CLI output and do not run
+server-side CLI commands**), and capability require/describe helpers. None of these
+require a server protocol change, so **AWP 1, storage format v2, and the index snapshot
+format version (1) are unchanged** and a v0.7.x connector remains fully compatible with
+AuraDB 1.4.0 for the existing feature set. Exact vector search remains the default and
+correctness baseline; approximate (HNSW) vector search is an opt-in preview — never
+persisted, rebuilt in memory on use, not production ANN. Multi-node leader-redirect
+ergonomics remain an HA candidate preview, not production HA.
 
 ## Connector support (v1.3.1)
 

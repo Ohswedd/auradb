@@ -9,9 +9,9 @@ history lives in [CHANGELOG.md](../CHANGELOG.md) and the per-release notes under
 
 The roadmap is written against the latest shipped release.
 
-- **AuraDB v1.3.1** is the current stable release; single-node remains the
+- **AuraDB v1.4.0** is the current stable release; single-node remains the
   production-supported deployment mode.
-- **Aura Connector v0.7.0** is the tested paired client line.
+- **Aura Connector v0.8.0** is the tested paired client line.
 - **AWP 1**, **storage format v2**, and **index snapshot format version 1** are the
   frozen v1.x compatibility baseline — see [COMPATIBILITY.md](COMPATIBILITY.md).
 

@@ -1,17 +1,20 @@
 # Release guide
 
 This guide describes how a maintainer cuts an AuraDB release. The current release
-is `1.3.1` — a patch over `1.3.0` that fixes the cluster search-analytics release
-smoke's leader resolution (`scripts/smoke_cluster_search_analytics.sh`) with no
-engine, protocol, storage, query, or connector behavior changes. The `1.3.0`
-feature line it builds on is a **query ergonomics, vector-preview durability, and
-query observability** release on the v1 single-node production line, paired with Aura
-Connector v0.7.0. It adds GROUP BY aggregations and EXPLAIN ANALYZE query-profile
-fields, and matures the opt-in approximate-vector preview with durable lifecycle
-metadata and an exact-fallback policy. Single-node mode is the recommended
-production mode; multi-node static clustering remains an HA candidate preview,
-**not** production HA. AWP 1, storage format v2, and the index snapshot format
-version (1) are **frozen for v1**. See
+is `1.4.0` — a **production operability and search quality** release on the v1
+single-node production line, paired with Aura Connector v0.8.0. It adds the
+single-node production drill harness (backup/restore rehearsal, rollback drill,
+disk-space preflight, and a safe injected I/O-error drill, with a machine-readable
+drill report) and the `auradb search eval` relevance evaluation toolchain (MRR@k,
+NDCG@k, Recall@k over a small committed fixture; `bm25`/`hybrid`/`vector_exact`
+modes; BM25 `k1`/`b` guidance; hybrid calibration). These are operability and
+evaluation **tooling** with no new wire, storage, or query-engine surface.
+Single-node mode is the recommended production mode; multi-node static clustering
+remains an HA candidate preview, **not** production HA; approximate (HNSW) vector
+search remains an opt-in preview, **not** production ANN, with exact vector search as
+the default correctness baseline. AWP 1, storage format v2, and the index snapshot
+format version (1) are **frozen for v1** and unchanged. See
+[V1_4_RELEASE_NOTES.md](V1_4_RELEASE_NOTES.md),
 [V1_3_1_RELEASE_NOTES.md](V1_3_1_RELEASE_NOTES.md),
 [V1_3_RELEASE_NOTES.md](V1_3_RELEASE_NOTES.md),
 [V1_2_1_RELEASE_NOTES.md](V1_2_1_RELEASE_NOTES.md),
