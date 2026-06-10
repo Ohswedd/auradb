@@ -20,6 +20,7 @@ pub mod ir;
 pub mod migrate;
 pub mod plan;
 pub mod planner;
+pub mod relevance;
 pub mod stats;
 
 pub use aggregate::{
@@ -44,4 +45,7 @@ pub use ir::{
 };
 pub use migrate::{estimate as estimate_migration, MigrationEstimate};
 pub use plan::{Access, Plan, PlanNode};
+pub use relevance::{
+    dcg_at_k, mrr_at_k, ndcg_at_k, recall_at_k, relevant_set, RELEVANT_GRADE_THRESHOLD,
+};
 pub use stats::{CollectionStats, PlannerStats, STATS_FORMAT_VERSION};

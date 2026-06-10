@@ -1,0 +1,15 @@
+{"query_id":"q-001","doc_id":"doc-001","relevance":3}
+{"query_id":"q-001","doc_id":"doc-003","relevance":2}
+{"query_id":"q-001","doc_id":"doc-002","relevance":1}
+{"query_id":"q-001","doc_id":"doc-012","relevance":1}
+{"query_id":"q-002","doc_id":"doc-004","relevance":3}
+{"query_id":"q-002","doc_id":"doc-006","relevance":2}
+{"query_id":"q-002","doc_id":"doc-005","relevance":1}
+{"query_id":"q-003","doc_id":"doc-007","relevance":3}
+{"query_id":"q-003","doc_id":"doc-008","relevance":1}
+{"query_id":"q-004","doc_id":"doc-008","relevance":3}
+{"query_id":"q-004","doc_id":"doc-009","relevance":2}
+{"query_id":"q-004","doc_id":"doc-007","relevance":1}
+{"query_id":"q-005","doc_id":"doc-010","relevance":3}
+{"query_id":"q-005","doc_id":"doc-011","relevance":2}
+{"query_id":"q-005","doc_id":"doc-012","relevance":1}

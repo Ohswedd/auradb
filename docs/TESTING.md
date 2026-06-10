@@ -188,6 +188,36 @@ SOAK_DURATION_SECS=10 scripts/soak_cluster_preview.sh
 
 These are operator/manual tools and are not part of required CI.
 
+### Single-node production drills (manual release gate)
+
+- `scripts/smoke_single_node_production_drills.sh` — a bounded, offline harness
+  for the production-supported single-node path. It runs eight drills
+  (`disk_space_preflight`, `backup_restore_rehearsal`, `restore_to_fresh_data_dir`,
+  `rollback_rehearsal`, `io_error_surface_check`, `doctor_after_restore`,
+  `check_after_restore`, `metrics_or_stats_snapshot`), prints `[PASS]`/`[WARN]`/
+  `[FAIL]` lines, and writes a machine-readable report to
+  `.local/prod-drills/run-<epoch>/report.json`. It targets stock macOS bash 3.2,
+  keeps logs (and, on failure, data dirs) under `.local/`, and exits non-zero on a
+  real failure. Disk-full is rehearsed via a read-only `df` preflight (never by
+  filling the disk); I/O errors via permission-denied/missing/corrupt paths. It is
+  a **single-node production drill — not a multi-node HA proof, and it makes no
+  production ANN claim.** A quick run:
+
+  ```bash
+  DRILL_RECORDS=300 scripts/smoke_single_node_production_drills.sh
+  ```
+
+- `crates/auradb-cli/tests/production_drills_cli.rs` — the Rust coverage behind
+  the drills: restore-to-fresh and rollback preserve record counts; `doctor`/
+  `check --json` are healthy after a restore; I/O faults (permission-denied,
+  missing, corrupt) return structured errors and never panic; and the
+  machine-readable reports never echo record contents. (The disk-headroom preflight
+  is shell/`df`-level by design — no unused Rust shim — and is covered by the
+  script.) These complement the existing `backup_drills.rs`,
+  `backup_restore_edge_cases.rs`, `large_dataset.rs`, and `check.rs` suites.
+
+  See [BACKUP_RESTORE.md](BACKUP_RESTORE.md) for the operator guide.
+
 ## HA release-candidate suites (v0.9.0)
 
 > **AuraDB v0.9.0 is an HA release candidate for the controlled static-cluster
@@ -584,6 +614,31 @@ The search and ranking surface is covered at every layer:
 - **Conformance** (`crates/auradb-conformance`): `text_search_bm25`, `hybrid_search`, and
   `search_explain_analyze` scenarios run by `run_all`, plus the Python
   `run_connector_search.py` harness against a live server.
+
+## Search-relevance evaluation tests (v1.4.0)
+
+v1.4.0 adds a deterministic, offline relevance-evaluation harness and its
+regression coverage. All of it runs in the standard `cargo test` workspace gate —
+no Docker, no server, no external downloads:
+
+- **Metric unit/integration tests** (`crates/auradb-query`): the pure MRR@k,
+  NDCG@k, and Recall@k functions in `auradb_query::relevance` — ideal-vs-degraded
+  ordering, the relevance-grade threshold, empty-judgment handling, and a
+  determinism check (`crates/auradb-query/tests/relevance_metrics.rs`).
+- **Engine integration tests** (`crates/auradb/tests/search_relevance.rs`): the
+  metrics score real engine output — a BM25 query and a hybrid query are run
+  end-to-end and the returned ranking is scored against graded qrels.
+- **CLI harness tests** (`crates/auradb-cli/tests/search_relevance_cli.rs`):
+  dataset parsing and validation (missing ids, negative grades, malformed JSON →
+  non-zero), the JSON report shape, the committed-fixture regression bands, BM25
+  default/custom parameter reporting, hybrid weight reporting and rejection of bad
+  weights, the exact-vector path, unknown-mode rejection, determinism, and
+  unknown-qrel-id warnings.
+
+The committed dataset lives in `fixtures/relevance/` (see its README). Results are
+fixture-specific regression signals, not universal benchmarks; the harness uses
+the exact-vector baseline (no production-ANN claim) and is single-node (no
+production-HA claim).
 
 ## Live v1.2 connector conformance (v1.2.1)
 

@@ -1,17 +1,20 @@
 # Release guide
 
 This guide describes how a maintainer cuts an AuraDB release. The current release
-is `1.3.1` — a patch over `1.3.0` that fixes the cluster search-analytics release
-smoke's leader resolution (`scripts/smoke_cluster_search_analytics.sh`) with no
-engine, protocol, storage, query, or connector behavior changes. The `1.3.0`
-feature line it builds on is a **query ergonomics, vector-preview durability, and
-query observability** release on the v1 single-node production line, paired with Aura
-Connector v0.7.0. It adds GROUP BY aggregations and EXPLAIN ANALYZE query-profile
-fields, and matures the opt-in approximate-vector preview with durable lifecycle
-metadata and an exact-fallback policy. Single-node mode is the recommended
-production mode; multi-node static clustering remains an HA candidate preview,
-**not** production HA. AWP 1, storage format v2, and the index snapshot format
-version (1) are **frozen for v1**. See
+is `1.4.0` — a **production operability and search quality** release on the v1
+single-node production line, paired with Aura Connector v0.8.0. It adds the
+single-node production drill harness (backup/restore rehearsal, rollback drill,
+disk-space preflight, and a safe injected I/O-error drill, with a machine-readable
+drill report) and the `auradb search eval` relevance evaluation toolchain (MRR@k,
+NDCG@k, Recall@k over a small committed fixture; `bm25`/`hybrid`/`vector_exact`
+modes; BM25 `k1`/`b` guidance; hybrid calibration). These are operability and
+evaluation **tooling** with no new wire, storage, or query-engine surface.
+Single-node mode is the recommended production mode; multi-node static clustering
+remains an HA candidate preview, **not** production HA; approximate (HNSW) vector
+search remains an opt-in preview, **not** production ANN, with exact vector search as
+the default correctness baseline. AWP 1, storage format v2, and the index snapshot
+format version (1) are **frozen for v1** and unchanged. See
+[V1_4_RELEASE_NOTES.md](V1_4_RELEASE_NOTES.md),
 [V1_3_1_RELEASE_NOTES.md](V1_3_1_RELEASE_NOTES.md),
 [V1_3_RELEASE_NOTES.md](V1_3_RELEASE_NOTES.md),
 [V1_2_1_RELEASE_NOTES.md](V1_2_1_RELEASE_NOTES.md),
@@ -36,6 +39,46 @@ exercised by the `auradb-cli` backup/restore and upgrade-gate tests
 5. Query, relationship-include, vector, full-text, and document-path smokes.
 6. Index and planner-stats validation.
 7. Confirm no secrets in the backup-verify output.
+
+Additionally, run the single-node production drill harness before tagging and
+confirm `overall == "pass"`:
+
+```bash
+scripts/smoke_single_node_production_drills.sh
+# inspect .local/prod-drills/run-<epoch>/report.json
+```
+
+It rehearses disk-headroom preflight, backup + verify, restore-to-fresh,
+**rollback to a known-good snapshot**, clean I/O-error surfacing, and the
+post-restore `doctor`/`check`/`stats` reads. It is a single-node production drill
+— **not** a multi-node HA proof, and makes **no** production ANN claim. It is a
+manual / local release gate (bounded, safe temp dirs), not a required per-PR CI
+job. See [BACKUP_RESTORE.md](BACKUP_RESTORE.md) and [TESTING.md](TESTING.md).
+
+### Search-relevance regression gate (v1.4.0)
+
+Before tagging, run the relevance harness on the committed fixture and confirm the
+measured metrics have not regressed against the recorded baseline bands:
+
+```bash
+rm -rf .local/search-eval
+auradb search eval \
+  --data-dir .local/search-eval \
+  --corpus fixtures/relevance/small_corpus.jsonl \
+  --queries fixtures/relevance/small_queries.jsonl \
+  --qrels fixtures/relevance/small_qrels.jsonl \
+  --mode bm25 --k 10 --json
+# Repeat with --mode vector_exact and --mode hybrid.
+```
+
+The same fixtures are asserted in CI by
+`crates/auradb-cli/tests/search_relevance_cli.rs`, so a ranking regression fails
+the normal `cargo test` gate; the manual run is for inspecting the JSON report and
+sweeping BM25 `k1`/`b` or hybrid weights (see
+[SEARCH_AND_RANKING.md](SEARCH_AND_RANKING.md)). Results are **fixture-specific**,
+not a universal benchmark or relevance guarantee; the harness uses the
+exact-vector baseline (no production ANN claim) and is single-node (no production
+HA claim).
 
 ### GitHub Actions maintenance (Node 24)
 

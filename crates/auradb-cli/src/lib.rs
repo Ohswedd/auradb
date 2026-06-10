@@ -21,6 +21,11 @@ pub use cluster::{
     ClusterMetadataReport, RestorePlanReport,
 };
 
+mod search_eval;
+pub use search_eval::{
+    cmd_search_eval, AggregateMetrics, Bm25Params, PerQueryMetrics, SearchEvalReport, WeightsReport,
+};
+
 /// The package version.
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 
@@ -572,8 +577,8 @@ pub fn cmd_compatibility() -> String {
         "AuraDB {ver}\n\
          Aura Wire Protocol: AWP {proto}\n\
          Storage format: v{storage}\n\
-         Aura Connector (tested): 0.7.0\n\
-         Aura Connector (supported): 0.5.x, 0.6.x, 0.7.x\n\
+         Aura Connector (tested): 0.8.0\n\
+         Aura Connector (supported): 0.5.x, 0.6.x, 0.7.x, 0.8.x\n\
          Search features: bm25, hybrid, vector_exact, facets, aggregations, group_by, query_timeouts, ranked_pagination, query_profile (vector_ann: opt-in HNSW preview with exact fallback; exact is the baseline)\n\
          Capabilities: {caps}\n\
          See docs/COMPATIBILITY.md for the full matrix.",
@@ -3446,10 +3451,10 @@ mod tests {
         assert!(out.contains("vector_ann: opt-in HNSW preview"));
         assert!(out.contains("exact is the baseline"));
         assert!(!out.contains("production ANN"));
-        // v1.3.0 pairs with Aura Connector v0.7.0 tested; v0.5.x/v0.6.x remain
+        // v1.4.0 pairs with Aura Connector v0.8.0 tested; v0.5.x/v0.6.x/v0.7.x remain
         // supported for existing features. AWP 1, storage format v2 (both preserved).
-        assert!(out.contains("Aura Connector (tested): 0.7.0"));
-        assert!(out.contains("Aura Connector (supported): 0.5.x, 0.6.x, 0.7.x"));
+        assert!(out.contains("Aura Connector (tested): 0.8.0"));
+        assert!(out.contains("Aura Connector (supported): 0.5.x, 0.6.x, 0.7.x, 0.8.x"));
         assert!(!out.contains("0.3.x"));
         assert!(out.contains(&format!("AWP {}", auradb_protocol::PROTOCOL_VERSION)));
         assert!(out.contains(&format!(

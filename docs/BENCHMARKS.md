@@ -21,6 +21,15 @@ Benchmarks are **hardware-dependent**. They exist to catch regressions between
 revisions on the same machine. They are not universal performance claims, and a
 result from one machine is not comparable to a result from another.
 
+> **Relevance evaluation is not a performance benchmark.** `auradb search eval`
+> (v1.4.0) measures ranked-retrieval *quality* (MRR@k / NDCG@k / Recall@k) on a
+> committed fixture dataset, not latency or throughput. Those metrics are
+> **fixture-specific regression signals**, not a universal relevance benchmark or
+> a guarantee on any other corpus; BM25 `k1`/`b` tuning guidance derived from them
+> is *measured*, not guaranteed, and the harness uses the exact-vector baseline
+> (no production-ANN claim). See [SEARCH_AND_RANKING.md](SEARCH_AND_RANKING.md) and
+> [`fixtures/relevance/README.md`](../fixtures/relevance/README.md).
+
 ## Baseline snapshots
 
 ```bash

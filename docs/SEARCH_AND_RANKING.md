@@ -120,6 +120,66 @@ scanned/matched/returned rows, candidate counts per signal, and timing, and (v1.
 additive query-profile fields `plan_id`, `deadline_ms`, and `timeout_checked`. See
 [QUERY_ENGINE.md](QUERY_ENGINE.md).
 
+## Relevance evaluation and tuning (v1.4.0)
+
+`auradb search eval` measures ranked-retrieval relevance against a committed
+**relevance dataset** so a release gate can catch ranking regressions. It is
+offline, deterministic, needs no Docker and no external embeddings, and uses only
+the retrieval paths above — it adds no new ranking behaviour.
+
+```bash
+# The corpus is ingested into a fresh data directory, so point --data-dir at a
+# throwaway path that does not already hold the RelevanceDoc collection.
+rm -rf .local/search-eval
+auradb search eval \
+  --data-dir .local/search-eval \
+  --corpus fixtures/relevance/small_corpus.jsonl \
+  --queries fixtures/relevance/small_queries.jsonl \
+  --qrels fixtures/relevance/small_qrels.jsonl \
+  --mode bm25 --k 10 --json
+```
+
+The dataset format (JSONL corpus, queries, and graded qrels) is documented in
+[`fixtures/relevance/README.md`](../fixtures/relevance/README.md). The command
+emits a machine-readable JSON report with **MRR@k**, **NDCG@k**, and **Recall@k**
+both aggregated and per query, plus the ids each query returned and honest
+warnings (queries without judgments, missing query vectors, qrels referencing
+unknown ids). A malformed dataset exits non-zero.
+
+**These metrics are fixture-specific** — a regression signal for *this* dataset,
+never a universal benchmark or a relevance guarantee on other corpora.
+
+Modes:
+
+- **`bm25`** — ranked full-text search over the concatenated text field.
+- **`vector_exact`** — exact cosine nearest-neighbour search (the correctness
+  baseline; never the approximate preview, so this makes no production-ANN claim).
+- **`hybrid`** — BM25 + exact vector fused by `weighted_sum`.
+
+**BM25 `k1`/`b` tuning.** The `--k1` and `--b` flags map directly to the
+already-existing `text_search` overrides (defaults `k1 = 1.2`, `b = 0.75`); when
+omitted the report echoes the engine defaults under `preset: "default"`. To tune,
+sweep presets and compare the measured metrics:
+
+```bash
+for k1 in 0.9 1.2 1.6; do for b in 0.50 0.75 1.0; do
+  rm -rf .local/se && auradb search eval --data-dir .local/se \
+    --corpus fixtures/relevance/small_corpus.jsonl \
+    --queries fixtures/relevance/small_queries.jsonl \
+    --qrels fixtures/relevance/small_qrels.jsonl \
+    --mode bm25 --k 10 --k1 "$k1" --b "$b" --json | \
+    jq '{k1: .bm25.k1, b: .bm25.b, ndcg: .metrics.ndcg_at_k}'
+done; done
+```
+
+Pick the preset that maximizes NDCG@k **on your own dataset**: the guidance is
+*measured*, not guaranteed, and the best `k1`/`b` are corpus-dependent.
+
+**Hybrid weight calibration.** `--text-weight` / `--vector-weight` set the fusion
+weights (defaults `0.7` / `0.3`); the report echoes them back. Sweep them the same
+way and compare NDCG@k to calibrate the text/vector balance for your data. Exact
+vector remains the baseline and ANN remains a preview throughout.
+
 ## Operations
 
 - Full-text and vector indexes survive restart, backup/restore, and compaction; BM25 length
@@ -127,6 +187,8 @@ additive query-profile fields `plan_id`, `deadline_ms`, and `timeout_checked`. S
 - `auradb index check` validates BM25 and vector index statistics.
 - `auradb stats analyze` refreshes the full-text statistics the planner uses.
 - `auradb search explain --input query.json [--analyze]` inspects a ranked query's plan.
+- `auradb search eval` measures fixture-specific MRR@k/NDCG@k/Recall@k for BM25, exact-vector,
+  and hybrid retrieval (see "Relevance evaluation and tuning" above).
 - Search metrics: `search_text_queries_total`, `search_hybrid_queries_total`,
   `search_vector_queries_total`, and the `ranking_latency` histogram (see
   [OBSERVABILITY.md](OBSERVABILITY.md)).

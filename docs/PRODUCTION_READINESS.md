@@ -147,6 +147,17 @@ auradb restore --data-dir ./restore --input backup.jsonl
 auradb check --data-dir ./restore --json
 ```
 
+### Production drill harness (recovery confidence)
+
+Beyond the per-feature gate above, `scripts/smoke_single_node_production_drills.sh`
+rehearses the operator recovery path end-to-end — disk-headroom preflight, backup
++ verify, restore into a fresh data dir, **rollback to a known-good snapshot**,
+clean I/O-error surfacing, and the post-restore `doctor`/`check`/`stats` reads —
+and emits a machine-readable JSON report. Run it before a release and confirm
+`overall == "pass"`. It is a single-node production drill, **not** a multi-node HA
+proof, and makes **no** production ANN claim. See
+[BACKUP_RESTORE.md](BACKUP_RESTORE.md).
+
 ## Single-node production checklist
 
 ### 1. Secure configuration
@@ -217,6 +228,9 @@ AuraDB v1.0.1 ships with, and is gated by, the following validation (see
 - resource-limit enforcement tests;
 - large-dataset smokes (CI-safe) and an on-demand 100k stress;
 - a single-node soak/repeatability harness;
+- a single-node production drill harness (disk-headroom preflight, backup +
+  verify, restore-to-fresh, snapshot rollback, I/O-error surfacing, post-restore
+  `doctor`/`check`/`stats`), with a machine-readable JSON report;
 - performance-regression threshold tooling;
 - cluster-preview recovery tests (repeated restart, snapshot install, reconnect
   storm, partition/heal, cluster doctor);

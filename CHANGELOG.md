@@ -4,6 +4,64 @@ All notable changes to AuraDB are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and the project uses
 [Semantic Versioning](https://semver.org/).
 
+## [1.4.0] - 2026-06-10
+
+**Production operability and search quality — single-node production line, multi-node HA
+candidate preview.** AuraDB v1.4.0 is a minor release focused on operating a single node in
+production and measuring search quality. It adds a single-node production drill harness
+(backup/restore rehearsal, rollback drill, disk-space preflight, and an injected I/O-error
+drill, with a machine-readable drill report) and a search relevance evaluation toolchain
+(`auradb search eval`) that computes MRR@k, NDCG@k, and Recall@k over a committed relevance
+fixture, with BM25 `k1`/`b` evaluation guidance, a hybrid calibration harness, and a
+`vector_exact` evaluation mode. **Aura Wire Protocol 1, storage format v2, and the index
+snapshot format version (1) are unchanged**; no wire or on-disk format change. Single-node
+remains the production-supported mode; multi-node clustering remains an **HA candidate
+preview** (not production HA) and approximate (HNSW) vector search remains an **opt-in
+preview** (not production ANN) with exact vector search as the default correctness baseline.
+Aura Connector **v0.8.0** is the paired client (0.8.x; 0.7.x/0.6.x/0.5.x still supported for
+the existing feature set). See [docs/V1_4_RELEASE_NOTES.md](docs/V1_4_RELEASE_NOTES.md) and
+[docs/COMPATIBILITY.md](docs/COMPATIBILITY.md).
+
+### Added
+
+- **Single-node production drill harness** (`scripts/smoke_single_node_production_drills.sh`):
+  backup/restore rehearsal and rollback drill, disk-space preflight, and a safe injected
+  I/O-error drill, emitting a machine-readable drill report. The disk-full drill is a safe
+  preflight / injected-failure style check — it does not actually fill the disk.
+- **Search relevance evaluation** (`auradb search eval`): MRR@k, NDCG@k, and Recall@k over a
+  small committed relevance fixture (`fixtures/relevance/`), with `--mode bm25`, `--mode
+  hybrid`, and `--mode vector_exact`, JSON output, BM25 `k1`/`b` evaluation guidance, and a
+  hybrid calibration harness. The relevance metrics live in `auradb-query`.
+
+### Unchanged
+
+- **Aura Wire Protocol 1**, **storage format v2**, and the **index snapshot format version
+  (1)** are frozen; v1.3.x and earlier data open unchanged with no required rebuild.
+- Single-node is production-supported; multi-node is an HA candidate preview (not production
+  HA); approximate (HNSW) vector search is an opt-in preview (not production ANN), never
+  persisted, rebuilt in memory on use; exact vector search is the default and correctness
+  baseline; query timeouts remain cooperative.
+
+### Known limitations
+
+Honest limitations carried by this release (unchanged scope boundaries):
+
+- **Multi-node is an HA candidate preview, not production HA.** No production automatic
+  failover, no linearizable follower reads (follower reads/search are eventually consistent),
+  no distributed transactions, and no dynamic membership, sharding, or multi-region.
+  Single-node remains the recommended production mode.
+- **Approximate (HNSW) vector search is an opt-in preview, not production ANN.** The graph is
+  in-memory and rebuilt from the exact vectors (never persisted; not incremental). Exact
+  vector search remains the default and the correctness baseline.
+- **The single-node production drill harness is a rehearsal, not a guarantee.** The disk-full
+  drill is a safe preflight / injected-failure check (it does not actually fill the disk), and
+  the harness exercises backup/restore, rollback, and I/O-error handling on one host — it is
+  not an availability or durability SLA.
+- **Search relevance metrics are fixture-specific, not a universal benchmark.** MRR@k, NDCG@k,
+  and Recall@k from `auradb search eval` are computed over a small committed relevance fixture
+  for regression signal and tuning guidance; they are not a guaranteed-relevance or
+  cross-corpus quality claim.
+
 ## [1.3.1] - 2026-06-09
 
 **Release-smoke correctness — single-node production line, multi-node HA candidate preview.**
