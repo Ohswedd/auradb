@@ -42,6 +42,26 @@ the existing feature set). See [docs/V1_4_RELEASE_NOTES.md](docs/V1_4_RELEASE_NO
   persisted, rebuilt in memory on use; exact vector search is the default and correctness
   baseline; query timeouts remain cooperative.
 
+### Known limitations
+
+Honest limitations carried by this release (unchanged scope boundaries):
+
+- **Multi-node is an HA candidate preview, not production HA.** No production automatic
+  failover, no linearizable follower reads (follower reads/search are eventually consistent),
+  no distributed transactions, and no dynamic membership, sharding, or multi-region.
+  Single-node remains the recommended production mode.
+- **Approximate (HNSW) vector search is an opt-in preview, not production ANN.** The graph is
+  in-memory and rebuilt from the exact vectors (never persisted; not incremental). Exact
+  vector search remains the default and the correctness baseline.
+- **The single-node production drill harness is a rehearsal, not a guarantee.** The disk-full
+  drill is a safe preflight / injected-failure check (it does not actually fill the disk), and
+  the harness exercises backup/restore, rollback, and I/O-error handling on one host — it is
+  not an availability or durability SLA.
+- **Search relevance metrics are fixture-specific, not a universal benchmark.** MRR@k, NDCG@k,
+  and Recall@k from `auradb search eval` are computed over a small committed relevance fixture
+  for regression signal and tuning guidance; they are not a guaranteed-relevance or
+  cross-corpus quality claim.
+
 ## [1.3.1] - 2026-06-09
 
 **Release-smoke correctness — single-node production line, multi-node HA candidate preview.**
