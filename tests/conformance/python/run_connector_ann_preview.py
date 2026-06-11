@@ -25,6 +25,8 @@ import argparse
 import asyncio
 import sys
 
+from _conformance_isolation import add_isolation_args, collection_prefix, scoped_models
+
 try:
     from aura import AuraCapabilityError, AuraError, AuraModel, Field, HnswOptions, Vector, connect
     from aura.config import TLSConfig, TokenAuth
@@ -50,7 +52,7 @@ def gen_vec(seed: int) -> list[float]:
 _N = 40
 
 
-async def run(addr: str, token: str | None, tls_ca: str | None, server_name: str) -> int:
+async def run(addr: str, token: str | None, tls_ca: str | None, server_name: str, prefix: str) -> int:
     scheme = "auradbs" if tls_ca else "auradb"
     dsn = f"{scheme}://{addr}/conf_ann_preview"
     options: dict = {}
@@ -62,6 +64,8 @@ async def run(addr: str, token: str | None, tls_ca: str | None, server_name: str
     class ConfAnnItem(AuraModel):
         id: str = Field(primary_key=True)
         embedding: Vector[DIM]
+
+    (ConfAnnItem,) = scoped_models(prefix, ConfAnnItem)
 
     passed: list[str] = []
     failed: list[str] = []
@@ -149,8 +153,12 @@ def main() -> None:
     parser.add_argument("--auth-token", default=None)
     parser.add_argument("--tls-ca", default=None)
     parser.add_argument("--tls-server-name", default="localhost")
+    add_isolation_args(parser)
     args = parser.parse_args()
-    sys.exit(asyncio.run(run(args.addr, args.auth_token, args.tls_ca, args.tls_server_name)))
+    prefix = collection_prefix(args)
+    sys.exit(
+        asyncio.run(run(args.addr, args.auth_token, args.tls_ca, args.tls_server_name, prefix))
+    )
 
 
 if __name__ == "__main__":

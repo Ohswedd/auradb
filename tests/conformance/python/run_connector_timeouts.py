@@ -27,6 +27,8 @@ import argparse
 import asyncio
 import sys
 
+from _conformance_isolation import add_isolation_args, collection_prefix, scoped_models
+
 try:
     from aura import AuraError, AuraModel, AuraTimeoutError, Field, Vector, connect
     from aura.config import TLSConfig, TokenAuth
@@ -50,9 +52,9 @@ class ConfTimeoutDoc(AuraModel):
     embedding: Vector[3]
 
 
-def _row(i: int) -> ConfTimeoutDoc:
+def _row(model: type, i: int) -> object:
     a = float(i % 7)
-    return ConfTimeoutDoc(
+    return model(
         id=f"t{i:05d}",
         n=i,
         body="raft consensus replicates the log across many nodes",
@@ -60,16 +62,17 @@ def _row(i: int) -> ConfTimeoutDoc:
     )
 
 
-async def _seed(client) -> None:
-    existing = (await client.query(ConfTimeoutDoc).aggregate_count().aggregate()).metric("count")
+async def _seed(client, model: type) -> None:
+    existing = (await client.query(model).aggregate_count().aggregate()).metric("count")
     if existing and existing >= _DATASET_SIZE:
         return
     await client.bulk_insert(
-        ConfTimeoutDoc, [_row(i) for i in range(_DATASET_SIZE)], batch_size=1000
+        model, [_row(model, i) for i in range(_DATASET_SIZE)], batch_size=1000
     )
 
 
-async def run(addr: str, token: str | None, tls_ca: str | None, server_name: str) -> int:
+async def run(addr: str, token: str | None, tls_ca: str | None, server_name: str, prefix: str) -> int:
+    (ConfTimeoutDoc,) = scoped_models(prefix, globals()["ConfTimeoutDoc"])
     scheme = "auradbs" if tls_ca else "auradb"
     dsn = f"{scheme}://{addr}/conf_timeouts"
     options: dict = {}
@@ -86,7 +89,7 @@ async def run(addr: str, token: str | None, tls_ca: str | None, server_name: str
         print(f"  [{'PASS' if ok else 'FAIL'}] {name}" + ("" if ok else f": {detail}"))
 
     async with connect(dsn, models=[ConfTimeoutDoc], **options) as client:
-        await _seed(client)
+        await _seed(client, ConfTimeoutDoc)
 
         # ----- timeout_option_accepted -----
         # A generous budget completes normally and returns rows.
@@ -165,8 +168,12 @@ def main() -> None:
     parser.add_argument("--auth-token", default=None)
     parser.add_argument("--tls-ca", default=None)
     parser.add_argument("--tls-server-name", default="localhost")
+    add_isolation_args(parser)
     args = parser.parse_args()
-    sys.exit(asyncio.run(run(args.addr, args.auth_token, args.tls_ca, args.tls_server_name)))
+    prefix = collection_prefix(args)
+    sys.exit(
+        asyncio.run(run(args.addr, args.auth_token, args.tls_ca, args.tls_server_name, prefix))
+    )
 
 
 if __name__ == "__main__":

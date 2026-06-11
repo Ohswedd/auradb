@@ -25,6 +25,8 @@ import argparse
 import asyncio
 import sys
 
+from _conformance_isolation import add_isolation_args, collection_prefix, scoped_models
+
 try:
     from aura import AuraCapabilityError, AuraError, AuraModel, Field, Vector, connect
     from aura.config import TLSConfig, TokenAuth
@@ -55,7 +57,8 @@ _DATASET = [
 ]
 
 
-async def run(addr: str, token: str | None, tls_ca: str | None, server_name: str) -> int:
+async def run(addr: str, token: str | None, tls_ca: str | None, server_name: str, prefix: str) -> int:
+    (ConfFacetItem,) = scoped_models(prefix, globals()["ConfFacetItem"])
     scheme = "auradbs" if tls_ca else "auradb"
     dsn = f"{scheme}://{addr}/conf_facets"
     options: dict = {}
@@ -186,7 +189,7 @@ async def run(addr: str, token: str | None, tls_ca: str | None, server_name: str
                            for f in getattr(agg_builder.query, "facets", ()))
         used_index_present = cat_facet is not None and isinstance(cat_facet.used_index, bool)
         check("facet_explain_or_explain_analyze_if_connector_exposes_it",
-              isinstance(ir, dict) and ir.get("model") == "ConfFacetItem"
+              isinstance(ir, dict) and ir.get("model") == ConfFacetItem.__name__
               and facet_in_ast and used_index_present,
               f"ir_model={ir.get('model')} facet_in_ast={facet_in_ast} "
               f"used_index_present={used_index_present}")
@@ -202,8 +205,12 @@ def main() -> None:
     parser.add_argument("--auth-token", default=None)
     parser.add_argument("--tls-ca", default=None)
     parser.add_argument("--tls-server-name", default="localhost")
+    add_isolation_args(parser)
     args = parser.parse_args()
-    sys.exit(asyncio.run(run(args.addr, args.auth_token, args.tls_ca, args.tls_server_name)))
+    prefix = collection_prefix(args)
+    sys.exit(
+        asyncio.run(run(args.addr, args.auth_token, args.tls_ca, args.tls_server_name, prefix))
+    )
 
 
 if __name__ == "__main__":

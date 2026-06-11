@@ -28,6 +28,8 @@ import struct
 import sys
 import zlib
 
+from _conformance_isolation import add_isolation_args, collection_prefix, scope_name
+
 MAGIC = b"AURA"
 VERSION = 1
 HEADER_LEN = 44
@@ -236,6 +238,9 @@ def doc(id, status, views, emb):
     }
 
 
+USER = "User"
+DOC = "Doc"
+
 SCENARIOS = []
 
 
@@ -284,72 +289,72 @@ def schema_create(c):
 
 @scenario
 def insert(c):
-    c.mutate({"mutation": "insert", "collection": "User", "fields": {"id": "u1"}})
+    c.mutate({"mutation": "insert", "collection": USER, "fields": {"id": "u1"}})
     for d in (doc("d1", "published", 10, [1.0, 0.0, 0.0]),
               doc("d2", "draft", 5, [0.0, 1.0, 0.0]),
               doc("d3", "published", 20, [0.9, 0.1, 0.0])):
-        c.mutate({"mutation": "insert", "collection": "Doc", "fields": d})
+        c.mutate({"mutation": "insert", "collection": DOC, "fields": d})
 
 
 @scenario
 def find(c):
-    assert len(c.find_all({"collection": "Doc"})) == 3
+    assert len(c.find_all({"collection": DOC})) == 3
 
 
 @scenario
 def filter_scenario(c):
-    rows = c.find_all({"collection": "Doc", "filter": {"type": "compare", "field": "status", "op": "eq", "value": "published"}})
+    rows = c.find_all({"collection": DOC, "filter": {"type": "compare", "field": "status", "op": "eq", "value": "published"}})
     assert len(rows) == 2
 
 
 @scenario
 def document_field(c):
-    rows = c.find_all({"collection": "Doc", "filter": {"type": "compare", "field": "metadata.source", "op": "eq", "value": "import"}})
+    rows = c.find_all({"collection": DOC, "filter": {"type": "compare", "field": "metadata.source", "op": "eq", "value": "import"}})
     assert len(rows) == 3
 
 
 @scenario
 def document_path_index(c):
     flt = {"type": "compare", "field": "metadata.source", "op": "eq", "value": "import"}
-    plan = c.explain({"collection": "Doc", "filter": flt})
+    plan = c.explain({"collection": DOC, "filter": flt})
     assert plan["used_index"] == "metadata.source", plan
     assert plan["strategy"] == "index_lookup", plan
-    assert len(c.find_all({"collection": "Doc", "filter": flt})) == 3
+    assert len(c.find_all({"collection": DOC, "filter": flt})) == 3
 
 
 @scenario
 def full_text_search(c):
     common = {"type": "contains_text", "field": "body", "query": "document"}
-    assert len(c.find_all({"collection": "Doc", "filter": common})) == 3
+    assert len(c.find_all({"collection": DOC, "filter": common})) == 3
     unique = {"type": "contains_text", "field": "body", "query": "d1"}
-    assert len(c.find_all({"collection": "Doc", "filter": unique})) == 1
-    plan = c.explain({"collection": "Doc", "filter": common})
+    assert len(c.find_all({"collection": DOC, "filter": unique})) == 1
+    plan = c.explain({"collection": DOC, "filter": common})
     assert plan["strategy"] == "full_text_scan", plan
     assert plan["used_index"] == "body", plan
 
 
 @scenario
 def relationship_include(c):
-    rows = c.find_all({"collection": "Doc", "includes": ["owner"], "limit": 1})
+    rows = c.find_all({"collection": DOC, "includes": ["owner"], "limit": 1})
     assert rows and len(rows[0]["includes"]["owner"]) == 1
 
 
 @scenario
 def vector_nearest(c):
-    rows = c.find_all({"collection": "Doc", "vector": {"field": "embedding", "query": [1.0, 0.0, 0.0], "k": 2, "metric": "cosine"}})
+    rows = c.find_all({"collection": DOC, "vector": {"field": "embedding", "query": [1.0, 0.0, 0.0], "k": 2, "metric": "cosine"}})
     assert len(rows) == 2 and rows[0]["fields"]["id"] == "d1"
 
 
 @scenario
 def explain(c):
-    plan = c.explain({"collection": "Doc", "filter": {"type": "compare", "field": "status", "op": "eq", "value": "published"}})
+    plan = c.explain({"collection": DOC, "filter": {"type": "compare", "field": "status", "op": "eq", "value": "published"}})
     assert plan["used_index"] == "status"
 
 
 @scenario
 def count_and_exists(c):
-    assert c.count("Doc") == 3
-    assert c.exists("Doc", {"type": "compare", "field": "id", "op": "eq", "value": "d1"})
+    assert c.count(DOC) == 3
+    assert c.exists(DOC, {"type": "compare", "field": "id", "op": "eq", "value": "d1"})
 
 
 @scenario
@@ -362,13 +367,13 @@ def migration_estimate(c):
 
 @scenario
 def update_upsert_delete(c):
-    r = c.mutate({"mutation": "update", "collection": "Doc",
+    r = c.mutate({"mutation": "update", "collection": DOC,
                   "filter": {"type": "compare", "field": "id", "op": "eq", "value": "d2"},
                   "set": {"status": "published"}})
     assert r["updated"] == 1
-    r = c.mutate({"mutation": "upsert", "collection": "Doc", "fields": doc("d1", "archived", 99, [1.0, 0.0, 0.0])})
+    r = c.mutate({"mutation": "upsert", "collection": DOC, "fields": doc("d1", "archived", 99, [1.0, 0.0, 0.0])})
     assert r["updated"] == 1
-    r = c.mutate({"mutation": "delete", "collection": "Doc",
+    r = c.mutate({"mutation": "delete", "collection": DOC,
                   "filter": {"type": "compare", "field": "id", "op": "eq", "value": "d3"}})
     assert r["deleted"] == 1
 
@@ -376,27 +381,27 @@ def update_upsert_delete(c):
 @scenario
 def transaction(c):
     txn = c.begin()
-    c.mutate({"mutation": "insert", "collection": "Doc", "fields": doc("d4", "draft", 1, [0.0, 0.0, 1.0])}, txn_id=txn)
+    c.mutate({"mutation": "insert", "collection": DOC, "fields": doc("d4", "draft", 1, [0.0, 0.0, 1.0])}, txn_id=txn)
     c.commit(txn)
-    assert c.exists("Doc", {"type": "compare", "field": "id", "op": "eq", "value": "d4"})
+    assert c.exists(DOC, {"type": "compare", "field": "id", "op": "eq", "value": "d4"})
     txn = c.begin()
-    c.mutate({"mutation": "insert", "collection": "Doc", "fields": doc("d5", "draft", 1, [0.0, 0.0, 1.0])}, txn_id=txn)
+    c.mutate({"mutation": "insert", "collection": DOC, "fields": doc("d5", "draft", 1, [0.0, 0.0, 1.0])}, txn_id=txn)
     c.rollback(txn)
-    assert not c.exists("Doc", {"type": "compare", "field": "id", "op": "eq", "value": "d5"})
+    assert not c.exists(DOC, {"type": "compare", "field": "id", "op": "eq", "value": "d5"})
 
 
 @scenario
 def transaction_scoped_reads(c):
     id_eq = {"type": "compare", "field": "id", "op": "eq", "value": "d6"}
     txn = c.begin()
-    c.mutate({"mutation": "insert", "collection": "Doc", "fields": doc("d6", "draft", 1, [0.0, 0.0, 1.0])}, txn_id=txn)
+    c.mutate({"mutation": "insert", "collection": DOC, "fields": doc("d6", "draft", 1, [0.0, 0.0, 1.0])}, txn_id=txn)
     # Read-your-writes: visible to the transaction's own reads...
-    assert c.exists("Doc", id_eq, txn_id=txn), "staged write must be visible within the transaction"
-    assert len(c.find_all({"collection": "Doc", "filter": id_eq}, txn_id=txn)) == 1
+    assert c.exists(DOC, id_eq, txn_id=txn), "staged write must be visible within the transaction"
+    assert len(c.find_all({"collection": DOC, "filter": id_eq}, txn_id=txn)) == 1
     # ...but not to a non-transactional read until commit.
-    assert not c.exists("Doc", id_eq), "staged write must be invisible to non-transactional reads"
+    assert not c.exists(DOC, id_eq), "staged write must be invisible to non-transactional reads"
     c.commit(txn)
-    assert c.exists("Doc", id_eq), "committed write must be visible after commit"
+    assert c.exists(DOC, id_eq), "committed write must be visible after commit"
 
 
 def main():
@@ -405,7 +410,16 @@ def main():
     parser.add_argument("--auth-token", default=None, help="static token for an auth-enabled server")
     parser.add_argument("--tls-ca", default=None, help="PEM CA bundle to trust (enables TLS)")
     parser.add_argument("--tls-server-name", default="localhost")
+    add_isolation_args(parser)
     args = parser.parse_args()
+
+    global USER, DOC
+    prefix = collection_prefix(args)
+    USER = scope_name(prefix, "User")
+    DOC = scope_name(prefix, "Doc")
+    USER_SCHEMA["name"] = USER
+    DOC_SCHEMA["name"] = DOC
+    DOC_SCHEMA["relationships"][0]["target"] = USER
     host, port = args.addr.rsplit(":", 1)
     client = Client(
         host,
