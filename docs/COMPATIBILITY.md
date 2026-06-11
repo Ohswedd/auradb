@@ -1,25 +1,26 @@
 # AuraDB Compatibility Matrix
 
-This document records what AuraDB v1.4.0 implements and how it interoperates with
-the Aura Connector client library and the Aura Wire Protocol (AWP). AuraDB v1.4.0
-continues the **v1 single-node production line** with a release focused on production
-operability and search quality: on top of the v1.3 surface it adds a single-node
-production drill harness (backup/restore rehearsal, rollback drill, disk-space
-preflight, and a safe injected I/O-error drill, with a machine-readable drill report)
-and a search relevance evaluation toolchain (`auradb search eval`) that computes
-MRR@k, NDCG@k, and Recall@k over a small committed relevance fixture, with BM25
-`k1`/`b` evaluation guidance, a hybrid calibration harness, and a `vector_exact`
-evaluation mode — while remaining a production single-node deployment configured with
-auth, TLS, backups, monitoring, and the documented runbooks. These additions are
-operability and evaluation **tooling**; they introduce **no new wire, storage, or
-query-engine surface**. Multi-node static clustering remains an HA candidate preview,
+This document records what AuraDB v1.5.0 implements and how it interoperates with
+the Aura Connector client library and the Aura Wire Protocol (AWP). AuraDB v1.5.0
+continues the **v1 single-node production line** with a release focused on live
+search analyzers, snippets, and search-quality expansion: on top of the v1.4 surface
+it adds a deterministic analyzer framework with live query-time analyzer selection
+(negotiated by the new `query_analyzers` capability), opt-in plain-text
+snippets/highlights (negotiated by the new `search_snippets` capability), and
+search-eval analyzer comparison — while remaining a production single-node deployment
+configured with auth, TLS, backups, monitoring, and the documented runbooks. These
+features are negotiated **additively**; the `default` analyzer reproduces v1.x
+tokenization and ranking exactly, so they introduce **no new wire framing, storage, or
+index snapshot format**. Multi-node static clustering remains an HA candidate preview,
 **not a production HA guarantee**. **AWP 1, storage format v2, and the index snapshot
-format version (1) are unchanged**, so v1.3.x and earlier data open with no required
+format version (1) are unchanged**, so v1.4.x and earlier data open with no required
 rebuild. Exact vector search remains the default and the correctness baseline;
 approximate (HNSW) vector search is available as an **opt-in preview** (the graph is
 never persisted; it rebuilds in memory from the exact vectors on use), **not
-production ANN**. The relevance fixtures are regression signals for the shipped
-datasets, **not universal benchmarks or guaranteed relevance**.
+production ANN**. `english_basic` is a small, deterministic analyzer (a fixed stopword
+list and conservative plural folding), **not full NLP**. The relevance fixtures are
+regression signals for the shipped datasets, **not universal benchmarks or guaranteed
+relevance**.
 See [SEARCH_AND_RANKING.md](SEARCH_AND_RANKING.md),
 [SUPPORT_POLICY.md](SUPPORT_POLICY.md),
 [HA_RELEASE_CANDIDATE.md](HA_RELEASE_CANDIDATE.md), and the
@@ -47,6 +48,7 @@ v0.4.x. Single-node mode remains the recommended production mode.
 
 | AuraDB | Aura Connector | Protocol | Status |
 | ------ | -------------- | -------- | ------ |
+| 1.5.0  | 0.9.0          | AWP 1    | Supported, recommended (live search analyzers, snippets, and search-quality expansion over 1.4.x: adds a deterministic analyzer framework with live query-time analyzer selection (the new `query_analyzers` capability; presets `default`/`simple`/`ascii_fold`/`keyword`/`english_basic`, with `keyword` supported in text and hybrid search and analyzer-aware EXPLAIN/profile), opt-in plain-text snippets/highlights with a field allowlist, fragment caps, and Unicode-safe ranges (the new `search_snippets` capability), and `auradb search eval` analyzer selection plus a `compare-analyzers` subcommand. Negotiated additively with no new wire framing, storage, or index snapshot format; the `default` analyzer reproduces v1.x ranking exactly; AWP 1, storage format v2, and index snapshot format version 1 unchanged; single-node production line; multi-node HA candidate preview, not production HA; exact vector search remains the default and correctness baseline, with the opt-in approximate (HNSW) vector preview — never persisted, rebuilt in memory on use, not production ANN; `english_basic` is small and deterministic, not full NLP; relevance fixtures are regression signals, not universal benchmarks). Connector 0.9.x; 0.8.x/0.7.x/0.6.x/0.5.x remain supported for existing features (no wire change). |
 | 1.4.0  | 0.8.0          | AWP 1    | Supported, recommended (production operability and search quality over 1.3.x: adds the single-node production drill harness (`scripts/smoke_single_node_production_drills.sh`) — backup/restore rehearsal, rollback drill, disk-space preflight, and a safe injected I/O-error drill with a machine-readable drill report (the disk-full drill is preflight/injected-failure style, it does not actually fill the disk) — and the `auradb search eval` relevance evaluation toolchain (MRR@k, NDCG@k, Recall@k over a small committed fixture; `bm25`/`hybrid`/`vector_exact` modes; BM25 `k1`/`b` guidance; hybrid calibration). These are operability and evaluation tooling with no new wire, storage, or query-engine surface; AWP 1, storage format v2, and index snapshot format version 1 unchanged; single-node production line; multi-node HA candidate preview, not production HA; exact vector search remains the default and correctness baseline, with the opt-in approximate (HNSW) vector preview — never persisted, rebuilt in memory on use, not production ANN; relevance fixtures are regression signals, not universal benchmarks). Connector 0.8.x; 0.7.x/0.6.x/0.5.x remain supported for existing features (no wire change). |
 | 1.3.1  | 0.7.0          | AWP 1    | Supported (patch over 1.3.0 for release-smoke correctness: fixes the cluster search-analytics smoke (`scripts/smoke_cluster_search_analytics.sh`) to resolve the leader by each node's self-reported role and to wait for a genuine leader change during the failover drill instead of grepping an address token and accepting a stale stopped leader; no engine, protocol, storage, query, or connector behavior changes; AWP 1, storage format v2, and index snapshot format version 1 unchanged; single-node production line; multi-node HA candidate preview, not production HA; exact vector search remains the default and correctness baseline, with the opt-in approximate (HNSW) vector preview — never persisted, rebuilt in memory on use, not production ANN). Connector 0.7.x; 0.6.x remains supported (backward compatible with 0.6.1) for existing features. |
 | 1.3.0  | 0.7.0          | AWP 1    | Supported, recommended (query ergonomics, vector-preview durability, and query observability over 1.2.x: GROUP BY aggregations (additive `group_by`/`group_limit`), EXPLAIN ANALYZE query-profile fields, durable approximate-preview lifecycle metadata with an `ann_fallback` exact/error policy, and the `auradb vector eval` recall/latency harness; single-node production line; multi-node HA candidate preview, not production HA; AWP 1, storage format v2, and index snapshot format version 1 unchanged; exact vector search remains the default and correctness baseline, with the opt-in approximate (HNSW) vector preview — never persisted, rebuilt in memory on use, not production ANN). Connector 0.7.x; 0.6.x remains supported (backward compatible with 0.6.1) for existing features. |

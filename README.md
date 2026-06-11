@@ -7,7 +7,7 @@
 [![CI](https://github.com/Ohswedd/auradb/actions/workflows/ci.yml/badge.svg)](https://github.com/Ohswedd/auradb/actions/workflows/ci.yml)
 [![Security](https://github.com/Ohswedd/auradb/actions/workflows/security.yml/badge.svg)](https://github.com/Ohswedd/auradb/actions/workflows/security.yml)
 [![Docker](https://github.com/Ohswedd/auradb/actions/workflows/docker.yml/badge.svg)](https://github.com/Ohswedd/auradb/actions/workflows/docker.yml)
-[![Release](https://img.shields.io/badge/release-v1.4.0-green.svg)](CHANGELOG.md)
+[![Release](https://img.shields.io/badge/release-v1.5.0-green.svg)](CHANGELOG.md)
 [![Rust](https://img.shields.io/badge/rust-1.85%2B-orange.svg)](https://www.rust-lang.org)
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
 
@@ -21,10 +21,10 @@ systems. It speaks the Aura Wire Protocol over TCP, persists and recovers data l
 and ships with auth, TLS, backups, observability, and operator runbooks.
 
 The matching client is [**Aura Connector**](https://github.com/Ohswedd/aura-connector), a
-typed async Python connector. AuraDB v1.4.0 pairs with Aura Connector v0.8.x.
+typed async Python connector. AuraDB v1.5.0 pairs with Aura Connector v0.9.x.
 
 ```bash
-docker run --rm -p 7171:7171 -v auradb-data:/data ghcr.io/ohswedd/auradb:1.4.0
+docker run --rm -p 7171:7171 -v auradb-data:/data ghcr.io/ohswedd/auradb:1.5.0
 ```
 
 ## Support status
@@ -38,7 +38,8 @@ docker run --rm -p 7171:7171 -v auradb-data:/data ghcr.io/ohswedd/auradb:1.4.0
 | Aggregations, terms facets, cooperative query timeouts | Stable (v1.2.0) | **Yes** |
 | GROUP BY aggregations, EXPLAIN ANALYZE query-profile fields | Stable (v1.3.0) | **Yes** |
 | Single-node production drill harness, search relevance evaluation (`auradb search eval`) | Stable (v1.4.0) | **Yes** (operability + search-quality tooling) |
-| Aura Connector 0.8.x, AWP 1, storage format v2 | Stable / frozen for v1 | **Yes** |
+| Live search analyzers + opt-in snippets/highlights (`query_analyzers`, `search_snippets`) | Stable (v1.5.0) | **Yes** (search-quality tooling) |
+| Aura Connector 0.9.x, AWP 1, storage format v2 | Stable / frozen for v1 | **Yes** |
 | Static multi-node cluster (Raft) | HA candidate preview | **No** (not production HA) |
 | Approximate (HNSW) vector search | Opt-in preview (v1.2.0) | **No** (not production ANN) |
 
@@ -53,7 +54,7 @@ are in [`docs/SUPPORT_POLICY.md`](docs/SUPPORT_POLICY.md),
 
 ```bash
 # Docker (development image; binds all interfaces with --allow-insecure-bind).
-docker run --rm -p 7171:7171 -v auradb-data:/data ghcr.io/ohswedd/auradb:1.4.0
+docker run --rm -p 7171:7171 -v auradb-data:/data ghcr.io/ohswedd/auradb:1.5.0
 
 # From source (stable Rust 1.85+). The server and CLI is one binary: target/release/auradb.
 git clone https://github.com/Ohswedd/auradb.git && cd auradb
@@ -74,10 +75,11 @@ docker compose -f docker-compose.secure.yml config   # validate the secure stack
 
 ## Connect
 
-Aura Connector talks to AuraDB over AWP 1, including auth and TLS. AuraDB v1.4.0 is paired
-with Aura Connector v0.8.x (connection profiles, search-eval report parsing helpers,
-capability require/describe helpers); v0.7.x remains supported (backward compatible) for the
-existing feature set, which is unchanged at the wire-protocol level.
+Aura Connector talks to AuraDB over AWP 1, including auth and TLS. AuraDB v1.5.0 is paired
+with Aura Connector v0.9.x (analyzer-aware search, snippet request/result helpers, connection
+profiles, search-eval report parsing helpers, capability require/describe helpers); v0.8.x and
+v0.7.x remain supported (backward compatible) for the existing feature set, which is unchanged
+at the wire-protocol level.
 
 ```bash
 python -m pip install "aura-connector>=0.6,<0.7"

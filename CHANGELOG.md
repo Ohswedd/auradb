@@ -4,6 +4,75 @@ All notable changes to AuraDB are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and the project uses
 [Semantic Versioning](https://semver.org/).
 
+## [1.5.0] - 2026-06-11
+
+**Live search analyzers, snippets, and search-quality expansion — single-node production line,
+multi-node HA candidate preview.** AuraDB v1.5.0 is a minor release that takes search-quality
+tooling live over the wire. It adds a deterministic analyzer framework with query-time analyzer
+selection (negotiated through the new `query_analyzers` capability), opt-in search
+snippets/highlights (negotiated through the new `search_snippets` capability), and search-eval
+support for comparing analyzers. **Aura Wire Protocol 1, storage format v2, and the index
+snapshot format version (1) are unchanged**; no wire framing, on-disk, or index snapshot format
+change — these features are negotiated additively and the `default` analyzer preserves v1.x
+ranking behavior exactly. Single-node remains the production-supported mode; multi-node
+clustering remains an **HA candidate preview** (not production HA) and approximate (HNSW) vector
+search remains an **opt-in preview** (not production ANN) with exact vector search as the default
+correctness baseline. Aura Connector **v0.9.0** is the paired client (0.9.x; 0.8.x/0.7.x/0.6.x/0.5.x
+still supported for the existing feature set). See
+[docs/V1_5_RELEASE_NOTES.md](docs/V1_5_RELEASE_NOTES.md) and
+[docs/COMPATIBILITY.md](docs/COMPATIBILITY.md).
+
+### Added
+
+- **Deterministic analyzer framework** (`auradb-index`): pluggable, deterministic analyzers with
+  the presets `default`, `simple`, `ascii_fold`, `keyword`, and `english_basic`. `english_basic`
+  adds a small stopword list and conservative plural folding; `keyword` indexes the whole field
+  as a single token. The `default` analyzer preserves v1.x tokenization and ranking exactly.
+- **Live query-time analyzer selection**: ranked text search and hybrid search accept a per-query
+  analyzer over the wire, negotiated by the new **`query_analyzers`** server capability. The
+  `keyword` analyzer is supported in both text and hybrid search. EXPLAIN/profile output is
+  analyzer-aware.
+- **Live opt-in snippets/highlights** (`auradb-query`): ranked text search can return plain-text
+  snippets with highlight ranges for explicitly requested fields, negotiated by the new
+  **`search_snippets`** server capability. Snippets honor a field allowlist and per-query fragment
+  caps, are plain text only, and use Unicode-safe (character-boundary) ranges.
+- **Search-eval analyzer support** (`auradb search eval`): `--analyzer` selection and a
+  `compare-analyzers` subcommand that evaluates a set of analyzers over the same fixture, plus
+  committed analyzer relevance fixtures (`fixtures/relevance/analyzer_*.jsonl`).
+- **Live analyzer and snippet conformance suites**
+  (`tests/conformance/python/run_connector_analyzers.py`,
+  `tests/conformance/python/run_connector_snippets.py`).
+
+### Unchanged
+
+- **Aura Wire Protocol 1**, **storage format v2**, and the **index snapshot format version
+  (1)** are frozen; v1.4.x and earlier data open unchanged with no required rebuild. Analyzer
+  and snippet support is negotiated additively; the `default` analyzer reproduces prior ranking.
+- Single-node is production-supported; multi-node is an HA candidate preview (not production
+  HA); approximate (HNSW) vector search is an opt-in preview (not production ANN), never
+  persisted, rebuilt in memory on use; exact vector search is the default and correctness
+  baseline; query timeouts remain cooperative.
+
+### Known limitations
+
+Honest limitations carried by this release (unchanged scope boundaries plus new feature bounds):
+
+- **`english_basic` is deterministic and small.** It applies a fixed stopword list and
+  conservative plural folding; it is **not** full NLP and **not** a full stemmer or
+  language-aware analyzer.
+- **Relevance scores are fixture-specific regression signals, not universal benchmarks.** The
+  analyzer comparison metrics from `auradb search eval` are computed over small committed
+  fixtures for regression signal and tuning guidance, not a guaranteed-relevance or cross-corpus
+  quality claim.
+- **Snippets are plain text and opt-in.** They are returned only for explicitly requested fields,
+  are subject to the field allowlist and fragment caps, and are not rich/HTML markup.
+- **Multi-node is an HA candidate preview, not production HA.** No production automatic failover,
+  no linearizable follower reads, no distributed transactions, and no dynamic membership,
+  sharding, or multi-region. Single-node remains the recommended production mode.
+- **Approximate (HNSW) vector search is an opt-in preview, not production ANN.** The graph is
+  in-memory and rebuilt from the exact vectors (never persisted; not incremental). Exact vector
+  search remains the default and the correctness baseline.
+
 ## [1.4.0] - 2026-06-10
 
 **Production operability and search quality — single-node production line, multi-node HA

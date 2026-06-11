@@ -1,19 +1,21 @@
 # Release guide
 
 This guide describes how a maintainer cuts an AuraDB release. The current release
-is `1.4.0` — a **production operability and search quality** release on the v1
-single-node production line, paired with Aura Connector v0.8.0. It adds the
-single-node production drill harness (backup/restore rehearsal, rollback drill,
-disk-space preflight, and a safe injected I/O-error drill, with a machine-readable
-drill report) and the `auradb search eval` relevance evaluation toolchain (MRR@k,
-NDCG@k, Recall@k over a small committed fixture; `bm25`/`hybrid`/`vector_exact`
-modes; BM25 `k1`/`b` guidance; hybrid calibration). These are operability and
-evaluation **tooling** with no new wire, storage, or query-engine surface.
+is `1.5.0` — a **live search analyzers, snippets, and search-quality expansion**
+release on the v1 single-node production line, paired with Aura Connector v0.9.0. It
+adds a deterministic analyzer framework with live query-time analyzer selection
+(negotiated by the new `query_analyzers` capability; presets `default`, `simple`,
+`ascii_fold`, `keyword`, and `english_basic`), opt-in plain-text snippets/highlights
+(negotiated by the new `search_snippets` capability), and `auradb search eval`
+analyzer selection plus a `compare-analyzers` subcommand. These features are
+negotiated **additively**; the `default` analyzer reproduces v1.x ranking exactly,
+with no new wire framing, storage, or index snapshot format.
 Single-node mode is the recommended production mode; multi-node static clustering
 remains an HA candidate preview, **not** production HA; approximate (HNSW) vector
 search remains an opt-in preview, **not** production ANN, with exact vector search as
 the default correctness baseline. AWP 1, storage format v2, and the index snapshot
 format version (1) are **frozen for v1** and unchanged. See
+[V1_5_RELEASE_NOTES.md](V1_5_RELEASE_NOTES.md),
 [V1_4_RELEASE_NOTES.md](V1_4_RELEASE_NOTES.md),
 [V1_3_1_RELEASE_NOTES.md](V1_3_1_RELEASE_NOTES.md),
 [V1_3_RELEASE_NOTES.md](V1_3_RELEASE_NOTES.md),

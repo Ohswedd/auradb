@@ -9,9 +9,9 @@ history lives in [CHANGELOG.md](../CHANGELOG.md) and the per-release notes under
 
 The roadmap is written against the latest shipped release.
 
-- **AuraDB v1.4.0** is the current stable release; single-node remains the
+- **AuraDB v1.5.0** is the current stable release; single-node remains the
   production-supported deployment mode.
-- **Aura Connector v0.8.0** is the tested paired client line.
+- **Aura Connector v0.9.0** is the tested paired client line.
 - **AWP 1**, **storage format v2**, and **index snapshot format version 1** are the
   frozen v1.x compatibility baseline — see [COMPATIBILITY.md](COMPATIBILITY.md).
 
@@ -69,28 +69,28 @@ Delivered in v1.4.0 (per-item tracking lives in the category sections below):
 Analyzer/tokenizer configuration was deliberately *deferred* from v1.4.0 and is
 the headline of v1.5.0 below.
 
-## Target: AuraDB v1.5.0 — Analyzers, tokenization, snippets, and search-quality expansion
+## Shipped: AuraDB v1.5.0 — Live search analyzers, snippets, and search-quality expansion
 
-The next big release builds on v1.4.0's relevance-evaluation harness with a
-deterministic **analyzer/tokenizer framework**, built-in analyzer presets, and a
-**highlight/snippet foundation** — all additive, with **defaults that preserve
-current search behavior**. It is deliberately *not* a production-HA, production-ANN,
-sharding, or multi-region release; those remain future work. Exact vector search
-remains the correctness baseline and ANN remains an opt-in preview. It pairs with
-**Aura Connector v0.9.0**.
+v1.5.0 is **shipped** (current stable). It builds on v1.4.0's relevance-evaluation
+harness with a deterministic **analyzer framework** taken live over the wire,
+built-in analyzer presets, and an opt-in **highlight/snippet** path — all additive,
+with **defaults that preserve current search behavior**. It is deliberately *not* a
+production-HA, production-ANN, sharding, or multi-region release; those remain future
+work. Exact vector search remains the correctness baseline and ANN remains an opt-in
+preview. It pairs with **Aura Connector v0.9.0**.
 
-Planned scope:
+Delivered in v1.5.0:
 
-- configurable query-time analyzer presets
-- deterministic tokenizer framework
-- stemming/normalization options if feasible
-- stopword handling if feasible
-- phrase/prefix matching only if it can be made honest and well-tested
-- highlight/snippet support if server-side offsets can be produced safely
-- relevance fixture expansion for analyzer behavior
-- search eval support for analyzer presets
-- explain/profile fields showing analyzer/tokenizer choice
-- docs explaining defaults and migration behavior
+- live query-time analyzer selection (the `query_analyzers` capability)
+- a deterministic analyzer framework with presets `default`, `simple`, `ascii_fold`,
+  `keyword`, and `english_basic` (small fixed stopwords and conservative plural folding)
+- `keyword` analyzer support in text and hybrid search
+- opt-in plain-text snippets/highlights (the `search_snippets` capability) with a field
+  allowlist, fragment caps, and Unicode-safe ranges
+- `auradb search eval` analyzer selection and a `compare-analyzers` subcommand
+- analyzer relevance fixtures (`fixtures/relevance/analyzer_*.jsonl`)
+- analyzer-aware EXPLAIN/profile output
+- live analyzer and snippet conformance suites
 
 Not in v1.5.0 by default:
 

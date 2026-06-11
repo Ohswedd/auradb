@@ -96,7 +96,7 @@ dependencies = [
 
 [[package]]
 name = "auradb"
-version = "1.4.0"
+version = "1.5.0"
 dependencies = [
  "auradb-cluster",
  "auradb-core",
@@ -115,7 +115,7 @@ dependencies = [
 
 [[package]]
 name = "auradb-cli"
-version = "1.4.0"
+version = "1.5.0"
 dependencies = [
  "anyhow",
  "auradb",
@@ -139,7 +139,7 @@ dependencies = [
 
 [[package]]
 name = "auradb-cluster"
-version = "1.4.0"
+version = "1.5.0"
 dependencies = [
  "criterion",
  "rand 0.8.6",
@@ -151,7 +151,7 @@ dependencies = [
 
 [[package]]
 name = "auradb-conformance"
-version = "1.4.0"
+version = "1.5.0"
 dependencies = [
  "auradb",
  "auradb-core",
@@ -169,7 +169,7 @@ dependencies = [
 
 [[package]]
 name = "auradb-core"
-version = "1.4.0"
+version = "1.5.0"
 dependencies = [
  "serde",
  "serde_json",
@@ -178,7 +178,7 @@ dependencies = [
 
 [[package]]
 name = "auradb-index"
-version = "1.4.0"
+version = "1.5.0"
 dependencies = [
  "auradb-core",
  "crc32fast",
@@ -189,7 +189,7 @@ dependencies = [
 
 [[package]]
 name = "auradb-observability"
-version = "1.4.0"
+version = "1.5.0"
 dependencies = [
  "serde",
  "serde_json",
@@ -199,7 +199,7 @@ dependencies = [
 
 [[package]]
 name = "auradb-protocol"
-version = "1.4.0"
+version = "1.5.0"
 dependencies = [
  "auradb-core",
  "crc32fast",
@@ -211,7 +211,7 @@ dependencies = [
 
 [[package]]
 name = "auradb-query"
-version = "1.4.0"
+version = "1.5.0"
 dependencies = [
  "auradb-core",
  "auradb-index",
@@ -223,7 +223,7 @@ dependencies = [
 
 [[package]]
 name = "auradb-raft"
-version = "1.4.0"
+version = "1.5.0"
 dependencies = [
  "auradb-cluster",
  "crc32fast",
@@ -236,7 +236,7 @@ dependencies = [
 
 [[package]]
 name = "auradb-replication"
-version = "1.4.0"
+version = "1.5.0"
 dependencies = [
  "auradb",
  "auradb-cluster",
@@ -259,7 +259,7 @@ dependencies = [
 
 [[package]]
 name = "auradb-server"
-version = "1.4.0"
+version = "1.5.0"
 dependencies = [
  "argon2",
  "auradb",
@@ -286,7 +286,7 @@ dependencies = [
 
 [[package]]
 name = "auradb-storage"
-version = "1.4.0"
+version = "1.5.0"
 dependencies = [
  "auradb-core",
  "crc32fast",
@@ -298,7 +298,7 @@ dependencies = [
 
 [[package]]
 name = "auradb-txn"
-version = "1.4.0"
+version = "1.5.0"
 dependencies = [
  "auradb-core",
  "auradb-storage",
