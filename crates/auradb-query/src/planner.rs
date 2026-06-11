@@ -549,6 +549,7 @@ mod tests {
             rank: TextRank::Bm25,
             k1: None,
             b: None,
+            analyzer: None,
         }));
         q.limit = Some(5);
         let plan = plan_find(&q, &schema(), &idx(), None, 1000);
@@ -582,6 +583,7 @@ mod tests {
             operator: TextOperator::Or,
             k1: None,
             b: None,
+            analyzer: None,
         }));
         let plan = plan_find(&q, &schema(), &idx(), None, 1000);
         assert!(matches!(plan.access, Access::Hybrid { .. }));
@@ -601,6 +603,7 @@ mod tests {
             rank: TextRank::Bm25,
             k1: None,
             b: None,
+            analyzer: None,
         }));
         let mut stats = CollectionStats {
             row_count: 1000,

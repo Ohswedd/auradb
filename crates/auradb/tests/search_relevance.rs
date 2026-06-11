@@ -106,6 +106,7 @@ fn bm25_ranking_scores_perfectly_for_clear_query() {
         rank: TextRank::Bm25,
         k1: None,
         b: None,
+        analyzer: None,
     }));
     let rows = engine.find(&q).unwrap();
     let ranked = ranked_ids(&rows);
@@ -142,6 +143,7 @@ fn hybrid_ranking_is_scored_by_metrics() {
         operator: TextOperator::Or,
         k1: None,
         b: None,
+        analyzer: None,
     }));
     let rows = engine.find(&q).unwrap();
     let ranked = ranked_ids(&rows);
@@ -167,6 +169,7 @@ fn empty_judgments_yield_zero_without_panicking() {
         rank: TextRank::Bm25,
         k1: None,
         b: None,
+        analyzer: None,
     }));
     let ranked = ranked_ids(&engine.find(&q).unwrap());
     let empty: HashSet<String> = HashSet::new();

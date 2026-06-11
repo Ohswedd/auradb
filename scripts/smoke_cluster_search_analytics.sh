@@ -18,14 +18,14 @@
 #
 # Image selection (AURADB_IMAGE), artifact retention (KEEP_ARTIFACTS=1), and the
 # Python interpreter (PYTHON=...) are configurable. Usage:
-#   AURADB_IMAGE=auradb:1.4.0 PYTHON=.local/verify/bin/python \
+#   AURADB_IMAGE=auradb:1.5.0 PYTHON=.local/verify/bin/python \
 #     bash scripts/smoke_cluster_search_analytics.sh
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "${REPO_ROOT}"
 COMPOSE_FILE="docker-compose.cluster.yml"
-export AURADB_IMAGE="${AURADB_IMAGE:-ghcr.io/ohswedd/auradb:1.4.0}"
+export AURADB_IMAGE="${AURADB_IMAGE:-ghcr.io/ohswedd/auradb:1.5.0}"
 KEEP_ARTIFACTS="${KEEP_ARTIFACTS:-0}"
 PYTHON="${PYTHON:-python3}"
 CONF="${REPO_ROOT}/tests/conformance/python"

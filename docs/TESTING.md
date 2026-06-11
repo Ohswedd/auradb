@@ -640,6 +640,61 @@ fixture-specific regression signals, not universal benchmarks; the harness uses
 the exact-vector baseline (no production-ANN claim) and is single-node (no
 production-HA claim).
 
+## Analyzer and snippet tests (v1.5.0)
+
+v1.5.0 adds the deterministic analyzer framework (including `english_basic`), its
+`search eval` integration, **live analyzer selection and snippets over AWP**, and
+their conformance harnesses. The unit and engine tests run in the standard
+`cargo test` gate — no Docker, no server, no downloads:
+
+- **Analyzer unit tests** (`crates/auradb-index/src/analyzer.rs`): `default` is
+  byte-identical to `tokenize`, `simple` lowercasing, `keyword` single-token,
+  `ascii_fold` diacritic folding, the `english_basic` stopword/plural-fold behavior
+  and its no-NLP guards — including the protected-ending tests that keep `lens`,
+  `status`, `analysis`, and `class` intact while still folding `backups`/`queries` —
+  stable byte offsets across folding, empty input, punctuation, basic Unicode, an
+  adversarial no-panic sweep, the per-token `map_default_token` invariant, and the
+  structured unknown-analyzer error.
+- **Snippet unit tests** (`crates/auradb-query/src/snippet.rs`): basic match, the
+  field allowlist, no-hidden-fields redaction, fragment count/length caps,
+  highlight offsets, Unicode offsets, ascii-fold matching, and the empty-query /
+  no-match cases.
+- **Live engine tests** (`crates/auradb/tests/search_analyzers_live.rs`): a query
+  run through the embedded engine (the same path the server's `Find` dispatch uses)
+  proves `default` matches the v1.4 baseline, `simple` case behavior, `ascii_fold`
+  diacritic recovery, `keyword` whole-field matching, `english_basic` plural recall
+  and the `lens`-not-`len` regression, the **`keyword` analyzer in hybrid search**
+  (accepted, text component matches the whole-field fixture, vector component still
+  contributes, `EXPLAIN`/profile report `analyzer="keyword"` with a `keyword:` text
+  source, unknown analyzer still errors, and default hybrid behavior unchanged), the
+  unknown-analyzer error, `EXPLAIN`/`EXPLAIN ANALYZE` analyzer reporting, and the
+  opt-in snippet surface (basic fragment, opt-in-only, field allowlist, internal
+  fields never eligible, fragment/char caps, Unicode safety, missing/non-text-field
+  safety, and ranges that slice the matched text).
+- **Serde additivity** (`crates/auradb-query/src/ir.rs`): a missing `analyzer`
+  defaults to `default` and is omitted on the wire; a missing `snippet` request is
+  omitted; unknown extra fields from a newer client still deserialize; and a legacy
+  `Row` without `snippets` round-trips.
+- **Capability tests** (`crates/auradb-core/src/capability.rs`): `query_analyzers`
+  and `search_snippets` are advertised and serialize to their stable snake_case
+  names.
+- **CLI analyzer tests** (`crates/auradb-cli/tests/search_analyzers_cli.rs`):
+  `search eval --analyzer` reports the effective analyzer; `default` equals an
+  omitted analyzer; `simple` equals `default` on the fixture; `ascii_fold` recall
+  exceeds `simple` (accent recovery); `keyword` recall is below `simple` (exact
+  whole-field matching) while still finding the exactly-matching document; the
+  `english_basic` lens regression (the `lens` query finds the lens doc while the
+  truncated `len` probe finds nothing); the `keyword` analyzer in **hybrid** mode and
+  a `compare-analyzers --mode hybrid` leg that includes `keyword` and `english_basic`;
+  the unknown-analyzer error; determinism; and the `compare-analyzers` report
+  (per-leg metrics plus rejection of unknown/duplicate analyzers).
+
+Live over-the-wire analyzer and snippet conformance runs against a real server
+through the Aura Connector — see [CONFORMANCE.md](CONFORMANCE.md)
+(`run_connector_analyzers.py`, `run_connector_snippets.py`). The analyzer behavior
+fixtures live in `fixtures/relevance/analyzer_*.jsonl` (see the README). The numbers
+are fixture-specific regression signals, not universal benchmarks.
+
 ## Live v1.2 connector conformance (v1.2.1)
 
 v1.2.1 is a conformance and documentation hardening release. It adds **no** database or

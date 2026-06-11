@@ -1,19 +1,21 @@
 # Release guide
 
 This guide describes how a maintainer cuts an AuraDB release. The current release
-is `1.4.0` — a **production operability and search quality** release on the v1
-single-node production line, paired with Aura Connector v0.8.0. It adds the
-single-node production drill harness (backup/restore rehearsal, rollback drill,
-disk-space preflight, and a safe injected I/O-error drill, with a machine-readable
-drill report) and the `auradb search eval` relevance evaluation toolchain (MRR@k,
-NDCG@k, Recall@k over a small committed fixture; `bm25`/`hybrid`/`vector_exact`
-modes; BM25 `k1`/`b` guidance; hybrid calibration). These are operability and
-evaluation **tooling** with no new wire, storage, or query-engine surface.
+is `1.5.0` — a **live search analyzers, snippets, and search-quality expansion**
+release on the v1 single-node production line, paired with Aura Connector v0.9.0. It
+adds a deterministic analyzer framework with live query-time analyzer selection
+(negotiated by the new `query_analyzers` capability; presets `default`, `simple`,
+`ascii_fold`, `keyword`, and `english_basic`), opt-in plain-text snippets/highlights
+(negotiated by the new `search_snippets` capability), and `auradb search eval`
+analyzer selection plus a `compare-analyzers` subcommand. These features are
+negotiated **additively**; the `default` analyzer reproduces v1.x ranking exactly,
+with no new wire framing, storage, or index snapshot format.
 Single-node mode is the recommended production mode; multi-node static clustering
 remains an HA candidate preview, **not** production HA; approximate (HNSW) vector
 search remains an opt-in preview, **not** production ANN, with exact vector search as
 the default correctness baseline. AWP 1, storage format v2, and the index snapshot
 format version (1) are **frozen for v1** and unchanged. See
+[V1_5_RELEASE_NOTES.md](V1_5_RELEASE_NOTES.md),
 [V1_4_RELEASE_NOTES.md](V1_4_RELEASE_NOTES.md),
 [V1_3_1_RELEASE_NOTES.md](V1_3_1_RELEASE_NOTES.md),
 [V1_3_RELEASE_NOTES.md](V1_3_RELEASE_NOTES.md),
@@ -79,6 +81,37 @@ sweeping BM25 `k1`/`b` or hybrid weights (see
 not a universal benchmark or relevance guarantee; the harness uses the
 exact-vector baseline (no production ANN claim) and is single-node (no production
 HA claim).
+
+### Analyzer regression gate (v1.5.0)
+
+Confirm the analyzer presets behave as recorded on the analyzer fixtures (the
+relationships are asserted in `crates/auradb-cli/tests/search_analyzers_cli.rs`,
+so a regression fails `cargo test`; the manual run inspects the JSON):
+
+```bash
+rm -rf .local/search-eval-simple
+auradb search eval --data-dir .local/search-eval-simple \
+  --corpus fixtures/relevance/analyzer_corpus.jsonl \
+  --queries fixtures/relevance/analyzer_queries.jsonl \
+  --qrels fixtures/relevance/analyzer_qrels.jsonl \
+  --mode bm25 --analyzer simple --k 10 --json
+# Repeat with --analyzer ascii_fold (recall should rise on accents), --analyzer
+# keyword (recall should fall — exact whole-field matching), and --analyzer
+# english_basic, or run `search eval compare-analyzers
+# --analyzers default,simple,ascii_fold,keyword,english_basic`.
+# Every analyzer is also valid under --mode hybrid (keyword included), e.g.
+#   ... --mode hybrid --analyzer keyword --k 10 --json
+```
+
+`default` (or an omitted `--analyzer`/wire analyzer) is **byte-identical** to the
+v1.4 baseline. v1.5.0 makes analyzer selection and opt-in snippets live over AWP via
+the **additive, defaulted** `query_analyzers` and `search_snippets` capabilities: the
+analyzer/snippet request and response fields are additive, so **AWP 1, storage format
+v2, and index snapshot format version 1 are unchanged** and existing clients
+(including Aura Connector 0.8.0, which sends no analyzer/snippet fields) are
+unaffected. Live over-the-wire analyzer/snippet conformance is a release gate
+(`run_connector_analyzers.py`, `run_connector_snippets.py`; see
+[CONFORMANCE.md](CONFORMANCE.md)).
 
 ### GitHub Actions maintenance (Node 24)
 

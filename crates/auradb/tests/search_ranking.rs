@@ -51,6 +51,7 @@ fn text_query(query: &str) -> FindQuery {
         rank: TextRank::Bm25,
         k1: None,
         b: None,
+        analyzer: None,
     }));
     q
 }
@@ -302,6 +303,7 @@ fn hybrid(text: &str, vector: Vec<f32>, weights: HybridWeights, fusion: FusionMo
         operator: TextOperator::Or,
         k1: None,
         b: None,
+        analyzer: None,
     }));
     q
 }

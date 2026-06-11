@@ -161,6 +161,7 @@ fn search_facets_backup_restore() {
         rank: TextRank::Bm25,
         k1: None,
         b: None,
+        analyzer: None,
     }));
     q.facets = vec![FacetRequest {
         field: "category".into(),

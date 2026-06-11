@@ -2,12 +2,36 @@
 
 This document is the connector-focused companion to the
 [Compatibility Matrix](COMPATIBILITY.md). It records which Aura Connector release
-talks to AuraDB 1.4.0, what it can drive, and what it cannot.
+talks to AuraDB 1.5.0, what it can drive, and what it cannot.
 
 > **AuraDB v0.7.x adds connector cluster ergonomics for the controlled multi-node
 > preview. It is _not_ production HA — there is no automatic failover,
 > linearizable follower reads, or distributed transactions. Single-node mode
 > remains the recommended production mode.**
+
+## Connector support (v1.5.0)
+
+AuraDB v1.5.0 uses **Aura Wire Protocol 1**, frozen for the v1.x line. The
+**supported, tested connector is Aura Connector v0.9.0** (and compatible 0.9.x;
+0.8.x/0.7.x/0.6.x/0.5.x remain supported for the existing feature set). v1.5.0 takes
+search-quality work live over the wire: a deterministic analyzer framework with
+query-time analyzer selection (negotiated by the new `query_analyzers` capability) and
+opt-in plain-text snippets/highlights (negotiated by the new `search_snippets`
+capability). Aura Connector v0.9.0 adds the matching client ergonomics: `AnalyzerOptions`,
+`search_text(..., analyzer=...)` and a `.analyzer(...)` builder method, hybrid analyzer
+request support, snippet request helpers with typed `SearchSnippet` /
+`SearchSnippetFragment` / `HighlightRange` result models (including byte-to-character
+range handling for Python string slicing), and analyzer-aware search-eval report parsing.
+These connector features are **capability-gated**: against a server that does not
+advertise `query_analyzers`/`search_snippets`, the AuraDB-only paths raise capability
+errors rather than silently degrading. None of this changes the wire framing, so **AWP 1,
+storage format v2, and the index snapshot format version (1) are unchanged**, and an older
+connector (0.8.x and earlier) remains fully compatible with AuraDB 1.5.0 for the existing
+feature set — it simply sends no analyzer/snippet fields. Exact vector search remains the
+default and correctness baseline; approximate (HNSW) vector search is an opt-in preview —
+never persisted, rebuilt in memory on use, not production ANN. `english_basic` is small and
+deterministic, not full NLP. Multi-node leader-redirect ergonomics remain an HA candidate
+preview, not production HA.
 
 ## Connector support (v1.4.0)
 

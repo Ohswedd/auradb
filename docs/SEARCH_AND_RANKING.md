@@ -180,6 +180,137 @@ weights (defaults `0.7` / `0.3`); the report echoes them back. Sweep them the sa
 way and compare NDCG@k to calibrate the text/vector balance for your data. Exact
 vector remains the baseline and ANN remains a preview throughout.
 
+## Analyzers and tokenization (v1.5.0)
+
+AuraDB v1.5.0 adds a small, deterministic **analyzer framework** that decides how
+text is split into tokens. An analyzer is selected by name; the built-in presets
+are:
+
+| Preset | Behavior |
+|--------|----------|
+| `default` | The v1.x tokenizer: lowercase, split on every non-alphanumeric boundary. **Selecting it changes nothing** — it is the current behavior, given a name. |
+| `simple`  | The same tokenization as `default`. On any input it emits the same terms; documented as equal to `default`. |
+| `ascii_fold` | `simple` plus a fixed ASCII-folding table for common Latin diacritics (for example `café` → `cafe`, `naïve` → `naive`). No external dictionary; non-Latin scripts pass through unchanged. |
+| `keyword` | The whole field collapses to a single normalized term for **exact whole-field matching** of short fields. A partial-term query will not match a multi-word field. |
+| `english_basic` | `simple` plus a small built-in English stopword list and a conservative plural fold (`backups` → `backup`, `boxes` → `box`, `policies` → `policy`, `queries` → `query`). A tiny built-in helper, **not** a stemmer and **not** full language-aware NLP: no dictionary, no `-ing`/`-ed` handling, no part-of-speech model. The fold protects common false positives — words ending in `ss`/`us`/`is`/`ns` are never stripped, so singulars like `class`, `status`, `analysis`, and `lens` are left intact (`lens` stays `lens`). It is applied symmetrically to query and index. |
+
+Guarantees and non-goals:
+
+- **`default` preserves current search semantics exactly.** Omitting the analyzer,
+  or passing `--analyzer default` (or sending no analyzer over the wire), is
+  byte-identical to v1.4.
+- Tokenization is **deterministic**: a given preset and input always produce the
+  same token order, token text, and byte offsets.
+- Every preset except `english_basic` applies **no stemming, no stopword list, and
+  no language model**; `english_basic` removes a small fixed stopword list and folds
+  a narrow, tested set of plural suffixes. No preset uses a language model or
+  external dictionary. The analyzers make no language claims beyond the mechanical
+  transformations above.
+- Token **byte offsets** index the original (pre-folding) text, so they drive
+  highlighting directly.
+- **Offline `search eval` and live search share the same analyzer code.** A preset
+  behaves identically whether selected in the eval harness (which analyzes the
+  corpus text up front) or on a live query (which evaluates the analyzer over the
+  persisted default-tokenized index — see below).
+
+### Analyzers in `search eval`
+
+`auradb search eval --analyzer <name>` applies the analyzer **symmetrically** to
+the corpus text and the query text, so a non-default analyzer is a consistent
+evaluation rather than a query-only mismatch. An unknown analyzer name is a loud,
+structured error — there is no silent fallback. The report records the effective
+analyzer under the `analyzer` field.
+
+```bash
+rm -rf .local/se-fold
+auradb search eval \
+  --data-dir .local/se-fold \
+  --corpus fixtures/relevance/analyzer_corpus.jsonl \
+  --queries fixtures/relevance/analyzer_queries.jsonl \
+  --qrels fixtures/relevance/analyzer_qrels.jsonl \
+  --mode bm25 --analyzer ascii_fold --k 10 --json
+```
+
+To compare several analyzers over one dataset in a single run:
+
+```bash
+rm -rf .local/se-compare
+auradb search eval compare-analyzers \
+  --data-dir .local/se-compare \
+  --corpus fixtures/relevance/analyzer_corpus.jsonl \
+  --queries fixtures/relevance/analyzer_queries.jsonl \
+  --qrels fixtures/relevance/analyzer_qrels.jsonl \
+  --mode bm25 --analyzers default,simple,ascii_fold,keyword,english_basic --k 10 --json
+```
+
+As with all relevance metrics, the per-analyzer numbers are **fixture-specific**
+regression signals, not a universal benchmark. The analyzer affects the
+text-bearing modes (`bm25`, `hybrid`); for `vector_exact` it is recorded but has
+no effect.
+
+### Analyzers on live search (over AWP)
+
+A ranked `text_search` (and the text side of a `hybrid`) clause carries an optional
+`analyzer` field. It is **additive and defaulted**: an omitted or `default` analyzer
+is byte-identical to v1.4, so existing clients and stored queries are unaffected,
+and the AWP version is unchanged. A v1.5.0 server advertises the `query_analyzers`
+capability; the connector gates a non-default analyzer on it and otherwise raises a
+capability error rather than silently dropping the request.
+
+How a non-default analyzer matches the existing index without re-indexing or
+changing the storage / index-snapshot format:
+
+- `default` / `simple` use the existing default-tokenized search verbatim.
+- `ascii_fold` and `english_basic` are **per-token transforms** of the default
+  tokenizer, so the engine evaluates them over a transformed view of the persisted
+  default postings at query time — symmetric with how `search eval` analyzes the
+  corpus up front.
+- `keyword` is whole-field: the engine gathers candidates from the default index
+  and confirms each against the stored field text. The **hybrid** text signal uses
+  this same whole-field keyword path — `keyword` is accepted in `hybrid` search, its
+  text component contributes the exact whole-field matches, and the vector component
+  is fused as usual. There is no silent fallback: `EXPLAIN` reports the hybrid text
+  source as `keyword:<field>` (rather than `bm25:<field>`) when `keyword` is selected.
+
+`EXPLAIN` / `EXPLAIN ANALYZE` report the effective analyzer under the ranked-text
+(or hybrid) plan's `analyzer` field.
+
+## Highlight / snippet support (v1.5.0)
+
+A ranked text (or hybrid) search can request **opt-in** plain-text snippets with
+highlight ranges. The request is an additive field on the find request:
+
+```json
+{ "collection": "Doc",
+  "text_search": { "field": "body", "query": "restore backup" },
+  "snippet": { "fields": ["body"], "max_fragments": 2, "fragment_chars": 200 } }
+```
+
+Each result row gains an additive `snippets` array (omitted entirely when no
+snippet was requested, so existing clients are unaffected). The deterministic
+builder (`auradb_query::snippet`) enforces:
+
+- a **field allowlist** — a snippet is only ever built for a field named in
+  `snippet.fields`; a field absent from that list (including any internal,
+  `_`-prefixed name) is never read or returned, so internal or unrequested fields
+  cannot leak;
+- **server-clamped caps** — fragment count and fragment length are clamped to server
+  maximums, so a snippet can never echo an entire large document regardless of what
+  the client asks for;
+- **safe skipping** — a requested field that is absent or non-textual is skipped, not
+  a panic and not an empty placeholder;
+- **deterministic** output with offsets that land on character boundaries (verified
+  for multibyte/Unicode text).
+
+Snippet output is **plain text** — fragments carry the original characters plus byte
+ranges (offsets into the fragment text) marking matches. Callers that render to HTML
+must escape the text themselves; the builder makes no markup claims.
+
+Snippets are gated by the `search_snippets` capability: a v1.5.0 server advertises
+it, and a snippet request against a server that does not advertise it is refused with
+a capability error rather than silently ignored. Opt-in only: a query without a
+`snippet` clause returns no snippets and behaves exactly as before.
+
 ## Operations
 
 - Full-text and vector indexes survive restart, backup/restore, and compaction; BM25 length

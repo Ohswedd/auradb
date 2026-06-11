@@ -299,6 +299,7 @@ pub async fn run_all(addr: &str) -> Result<ConformanceReport> {
                 rank: TextRank::Bm25,
                 k1: None,
                 b: None,
+                analyzer: None,
             }));
             let rows = client.find_all(&q).await?;
             check(rows.len() == 2, "two BM25 matches")?;
@@ -327,6 +328,7 @@ pub async fn run_all(addr: &str) -> Result<ConformanceReport> {
                 operator: TextOperator::Or,
                 k1: None,
                 b: None,
+                analyzer: None,
             }));
             let rows = client.find_all(&q).await?;
             check(!rows.is_empty(), "hybrid returns rows")?;
@@ -346,6 +348,7 @@ pub async fn run_all(addr: &str) -> Result<ConformanceReport> {
                 rank: TextRank::Bm25,
                 k1: None,
                 b: None,
+                analyzer: None,
             }));
             let plan = client.explain_analyze(&q).await?;
             check(plan.text_search.is_some(), "text_search summary present")?;
@@ -829,6 +832,7 @@ pub async fn run_all(addr: &str) -> Result<ConformanceReport> {
                 rank: TextRank::Bm25,
                 k1: None,
                 b: None,
+                analyzer: None,
             }));
             q.facets = vec![FacetRequest {
                 field: "status".into(),
@@ -905,6 +909,7 @@ pub async fn run_all(addr: &str) -> Result<ConformanceReport> {
                 rank: TextRank::Bm25,
                 k1: None,
                 b: None,
+                analyzer: None,
             }));
             let reference: Vec<String> = client
                 .find_all(&find)

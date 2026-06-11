@@ -72,6 +72,16 @@ pub enum Capability {
     /// Exact vector search remains the default and correctness baseline; this is
     /// not production ANN.
     ApproximateVectorSearch,
+    /// Live over-the-wire query-time analyzer selection for ranked text search
+    /// (`default`, `simple`, `ascii_fold`, `keyword`, `english_basic`), negotiated
+    /// by Aura Connector v0.9+ (v1.5.0). The analyzers are small, deterministic,
+    /// dependency-free presets; `english_basic` is a tiny built-in helper, not full
+    /// NLP. The default analyzer preserves v1.x behavior exactly.
+    QueryAnalyzers,
+    /// Live over-the-wire, opt-in search snippets/highlights on ranked text search,
+    /// negotiated by Aura Connector v0.9+ (v1.5.0). Snippets are plain text, built
+    /// only from explicitly requested stored fields, and capped in count and length.
+    SearchSnippets,
 }
 
 impl Capability {
@@ -103,6 +113,8 @@ impl Capability {
             Capability::QueryProfile,
             Capability::RankedSearchCursor,
             Capability::ApproximateVectorSearch,
+            Capability::QueryAnalyzers,
+            Capability::SearchSnippets,
         ]
     }
 }
@@ -153,5 +165,17 @@ mod tests {
         let back: ServerCapabilities = serde_json::from_str(&json).unwrap();
         assert_eq!(caps, back);
         assert!(back.has(Capability::Explain));
+    }
+
+    #[test]
+    fn query_analyzers_and_snippets_advertised() {
+        // The v1.5.0 live analyzer and snippet capabilities are advertised, and they
+        // serialize to the stable snake_case names the connector negotiates on.
+        let caps = ServerCapabilities::current(1);
+        assert!(caps.has(Capability::QueryAnalyzers));
+        assert!(caps.has(Capability::SearchSnippets));
+        let json = serde_json::to_string(&caps).unwrap();
+        assert!(json.contains("query_analyzers"));
+        assert!(json.contains("search_snippets"));
     }
 }
