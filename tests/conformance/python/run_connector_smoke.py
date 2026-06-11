@@ -24,6 +24,8 @@ import argparse
 import asyncio
 import sys
 
+from _conformance_isolation import add_isolation_args, collection_prefix, scoped_models
+
 try:
     from aura import AuraModel, Field, Vector, connect
     from aura.config import TLSConfig, TokenAuth
@@ -40,11 +42,14 @@ class Note(AuraModel):
     embedding: Vector[3]
 
 
-def _note(nid: str, topic: str, body: str, emb: list[float], source: str = "smoke") -> Note:
-    return Note(id=nid, topic=topic, body=body, metadata={"source": source}, embedding=emb)
+def _note(
+    model: type, nid: str, topic: str, body: str, emb: list[float], source: str = "smoke"
+) -> object:
+    return model(id=nid, topic=topic, body=body, metadata={"source": source}, embedding=emb)
 
 
-async def run(addr: str, token: str | None, tls_ca: str | None, server_name: str) -> int:
+async def run(addr: str, token: str | None, tls_ca: str | None, server_name: str, prefix: str) -> int:
+    (Note,) = scoped_models(prefix, globals()["Note"])
     scheme = "auradbs" if tls_ca else "auradb"
     dsn = f"{scheme}://{addr}/smoke"
     options: dict = {}
@@ -66,9 +71,9 @@ async def run(addr: str, token: str | None, tls_ca: str | None, server_name: str
 
         # Create schema (implicit via the registered model) + insert.
         for note in (
-            _note("n1", "alpha", "the quick brown fox", [1.0, 0.0, 0.0]),
-            _note("n2", "beta", "the lazy brown dog", [0.0, 1.0, 0.0], source="import"),
-            _note("n3", "alpha", "a quick red fox", [0.9, 0.1, 0.0]),
+            _note(Note, "n1", "alpha", "the quick brown fox", [1.0, 0.0, 0.0]),
+            _note(Note, "n2", "beta", "the lazy brown dog", [0.0, 1.0, 0.0], source="import"),
+            _note(Note, "n3", "alpha", "a quick red fox", [0.9, 0.1, 0.0]),
         ):
             await client.insert(note)
         check("insert", True)
@@ -98,7 +103,7 @@ async def run(addr: str, token: str | None, tls_ca: str | None, server_name: str
         # Read-your-writes within a transaction (guarded: not all connector
         # builds expose in-transaction reads).
         async with client.transaction() as tx:
-            await tx.insert(_note("n4", "gamma", "fresh note", [0.0, 0.0, 1.0]))
+            await tx.insert(_note(Note, "n4", "gamma", "fresh note", [0.0, 0.0, 1.0]))
             if hasattr(tx, "query"):
                 visible = await tx.query(Note).where(Note.id == "n4").exists()
                 check("read_your_writes", bool(visible))
@@ -133,8 +138,12 @@ def main() -> None:
     parser.add_argument("--auth-token", default=None)
     parser.add_argument("--tls-ca", default=None)
     parser.add_argument("--tls-server-name", default="localhost")
+    add_isolation_args(parser)
     args = parser.parse_args()
-    sys.exit(asyncio.run(run(args.addr, args.auth_token, args.tls_ca, args.tls_server_name)))
+    prefix = collection_prefix(args)
+    sys.exit(
+        asyncio.run(run(args.addr, args.auth_token, args.tls_ca, args.tls_server_name, prefix))
+    )
 
 
 if __name__ == "__main__":

@@ -21,6 +21,8 @@ import argparse
 import asyncio
 import sys
 
+from _conformance_isolation import add_isolation_args, collection_prefix, scoped_models
+
 try:
     from aura import AuraModel, Field, Vector, connect, search_scores
     from aura.config import TLSConfig, TokenAuth
@@ -35,11 +37,12 @@ class Doc(AuraModel):
     embedding: Vector[3]
 
 
-def _doc(did: str, body: str, emb: list[float]) -> Doc:
-    return Doc(id=did, body=body, embedding=emb)
+def _doc(model: type, did: str, body: str, emb: list[float]) -> object:
+    return model(id=did, body=body, embedding=emb)
 
 
-async def run(addr: str, token: str | None, tls_ca: str | None, server_name: str) -> int:
+async def run(addr: str, token: str | None, tls_ca: str | None, server_name: str, prefix: str) -> int:
+    (Doc,) = scoped_models(prefix, globals()["Doc"])
     scheme = "auradbs" if tls_ca else "auradb"
     dsn = f"{scheme}://{addr}/search"
     options: dict = {}
@@ -64,9 +67,9 @@ async def run(addr: str, token: str | None, tls_ca: str | None, server_name: str
         # Upsert so the harness is idempotent across re-runs against a persistent
         # server (a live cluster keeps its data between conformance runs).
         for d in (
-            _doc("d1", "raft consensus raft", [1.0, 0.0, 0.0]),
-            _doc("d2", "the raft module coordinates replicas", [0.0, 1.0, 0.0]),
-            _doc("d3", "storage compaction and flushing", [0.0, 0.0, 1.0]),
+            _doc(Doc, "d1", "raft consensus raft", [1.0, 0.0, 0.0]),
+            _doc(Doc, "d2", "the raft module coordinates replicas", [0.0, 1.0, 0.0]),
+            _doc(Doc, "d3", "storage compaction and flushing", [0.0, 0.0, 1.0]),
         ):
             await client.upsert(
                 Doc, key={"id": d.id}, values={"body": d.body, "embedding": list(d.embedding)}
@@ -97,8 +100,12 @@ def main() -> None:
     parser.add_argument("--auth-token", default=None)
     parser.add_argument("--tls-ca", default=None)
     parser.add_argument("--tls-server-name", default="localhost")
+    add_isolation_args(parser)
     args = parser.parse_args()
-    sys.exit(asyncio.run(run(args.addr, args.auth_token, args.tls_ca, args.tls_server_name)))
+    prefix = collection_prefix(args)
+    sys.exit(
+        asyncio.run(run(args.addr, args.auth_token, args.tls_ca, args.tls_server_name, prefix))
+    )
 
 
 if __name__ == "__main__":

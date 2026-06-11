@@ -113,6 +113,36 @@ unaffected. Live over-the-wire analyzer/snippet conformance is a release gate
 (`run_connector_analyzers.py`, `run_connector_snippets.py`; see
 [CONFORMANCE.md](CONFORMANCE.md)).
 
+### Repeated-run conformance gate (v1.5.1)
+
+The Python conformance harnesses are safe to rerun against the same live server.
+Each run scopes its collections to a per-run name prefix (the shared helper
+`tests/conformance/python/_conformance_isolation.py`), so a second run does not hit a
+fixed-primary-key `unique_violation` or drift on exact `count`/result assertions. This
+is purely a harness change: it touches neither AWP, the storage format, the index
+snapshot format, nor any production server behavior, and works under both the current
+and published backward-compatibility connectors.
+
+The gate is to run each harness **twice in a row against one server** and confirm both
+runs pass — no flags, no data-dir reset, no manual cleanup between runs:
+
+```bash
+# Defaults isolate automatically; both runs pass.
+for run in 1 2; do
+  python tests/conformance/python/run_connector_conformance.py --addr 127.0.0.1:7171
+done
+# Pin a namespace for inspection with --run-id <token> (collections become
+# <token>_<ClassName>), or an exact literal prefix with --collection-prefix <prefix>.
+```
+
+For v1.5.1 this was validated against a freshly built v1.5.x server: every single-node
+harness passed twice in a row under the current `aura-connector` 0.9.0, and the
+published `aura-connector` 0.8.0 backward-compatibility set passed twice in a row. The
+analyzer/snippet harnesses require a ≥0.9.0 connector (v1.5 live features) and are not
+part of the 0.8.0 backward-compatibility set. The cluster harnesses already repeat
+safely via idempotent `upsert`/count-guarded seeding against a dedicated preview
+cluster fixture.
+
 ### GitHub Actions maintenance (Node 24)
 
 Workflow actions are kept on majors that run on Node 24, ahead of the Node 20

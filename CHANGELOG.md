@@ -4,6 +4,47 @@ All notable changes to AuraDB are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and the project uses
 [Semantic Versioning](https://semver.org/).
 
+## [1.5.1] - 2026-06-11
+
+**Conformance-harness correctness — single-node production line, multi-node HA candidate
+preview.** AuraDB v1.5.1 is a patch release that makes the Python conformance harnesses safe
+to rerun against the same live server. It adds **no** engine, protocol, storage, query,
+connector, or compatibility behavior changes. **Aura Wire Protocol 1, storage format v2, and
+the index snapshot format version (1) are unchanged.** Aura Connector **v0.9.0** remains the
+paired client and is unaffected (no connector release is required). Single-node remains the
+production-supported mode; multi-node clustering remains an **HA candidate preview** (not
+production HA) and approximate (HNSW) vector search remains an **opt-in preview** (not
+production ANN) with exact vector search as the default correctness baseline. The v1.5.0 tag
+is **not** moved. See [docs/V1_5_1_RELEASE_NOTES.md](docs/V1_5_1_RELEASE_NOTES.md).
+
+### Added
+
+- **Shared conformance run-isolation helper**
+  (`tests/conformance/python/_conformance_isolation.py`): scopes each harness run to its own
+  collection namespace so repeated runs against one live server no longer collide on fixed
+  primary keys. The seam is the collection name (a collection is addressed over the wire by
+  its model's class name), so the helper returns run-scoped model subclasses under a per-run
+  prefix — touching neither AWP, the storage format, the index snapshot format, nor any
+  server behavior, and working identically under the current and published
+  backward-compatibility connectors. Defaults isolate automatically (a fresh random prefix);
+  `--run-id <token>` (with an `AURA_CONFORMANCE_RUN_ID` environment default) and
+  `--collection-prefix <prefix>` pin a reproducible namespace.
+
+### Changed
+
+- **Every single-node connector conformance harness** plus the standard-library
+  `run_conformance.py` now scope their seeded collections per run, so each passes twice in a
+  row against one server with no data-dir reset. The cluster harnesses already repeat safely
+  via idempotent `upsert`/count-guarded seeding.
+- **Version bump** to `1.5.1` across the workspace (`Cargo.toml`, `Cargo.lock`), the CLI
+  version string, the documentation, and the Docker Compose image tags. `auradb compatibility`
+  continues to report `Aura Connector (tested): 0.9.0`.
+
+### Documentation
+
+- `docs/CONFORMANCE.md`, `docs/TESTING.md`, and `docs/RELEASE.md` document run isolation, the
+  new flags, repeated-run safety, and the repeated-run conformance gate.
+
 ## [1.5.0] - 2026-06-11
 
 **Live search analyzers, snippets, and search-quality expansion — single-node production line,

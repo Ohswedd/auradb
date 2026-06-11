@@ -25,6 +25,8 @@ import argparse
 import asyncio
 import sys
 
+from _conformance_isolation import add_isolation_args, collection_prefix, scoped_models
+
 try:
     from aura import AuraModel, Field, QueryProfile, connect
     from aura.config import TLSConfig, TokenAuth
@@ -49,7 +51,8 @@ _DATASET = [
 ]
 
 
-async def run(addr: str, token: str | None, tls_ca: str | None, server_name: str) -> int:
+async def run(addr: str, token: str | None, tls_ca: str | None, server_name: str, prefix: str) -> int:
+    (ConfProfileItem,) = scoped_models(prefix, globals()["ConfProfileItem"])
     scheme = "auradbs" if tls_ca else "auradb"
     dsn = f"{scheme}://{addr}/conf_query_profile"
     options: dict = {}
@@ -117,7 +120,7 @@ async def run(addr: str, token: str | None, tls_ca: str | None, server_name: str
         ir = client.query(ConfProfileItem).aggregate_count().profile().explain()
         check(
             "profile_explain_ir_exposed",
-            isinstance(ir, dict) and ir.get("model") == "ConfProfileItem",
+            isinstance(ir, dict) and ir.get("model") == ConfProfileItem.__name__,
             f"ir_model={ir.get('model') if isinstance(ir, dict) else type(ir).__name__}",
         )
 
@@ -132,8 +135,12 @@ def main() -> None:
     parser.add_argument("--auth-token", default=None)
     parser.add_argument("--tls-ca", default=None)
     parser.add_argument("--tls-server-name", default="localhost")
+    add_isolation_args(parser)
     args = parser.parse_args()
-    sys.exit(asyncio.run(run(args.addr, args.auth_token, args.tls_ca, args.tls_server_name)))
+    prefix = collection_prefix(args)
+    sys.exit(
+        asyncio.run(run(args.addr, args.auth_token, args.tls_ca, args.tls_server_name, prefix))
+    )
 
 
 if __name__ == "__main__":

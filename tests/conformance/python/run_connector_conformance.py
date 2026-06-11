@@ -22,6 +22,8 @@ import argparse
 import asyncio
 import sys
 
+from _conformance_isolation import add_isolation_args, collection_prefix, scoped_models
+
 try:
     from aura import AuraModel, Field, Vector, connect
     from aura.config import TLSConfig, TokenAuth
@@ -41,14 +43,17 @@ class Article(AuraModel):
     embedding: Vector[3]
 
 
-def _article(aid: str, status: str, body: str, views: int, emb: list[float], source: str = "import") -> Article:
-    return Article(
+def _article(
+    model: type, aid: str, status: str, body: str, views: int, emb: list[float], source: str = "import"
+) -> object:
+    return model(
         id=aid, status=status, title=f"T-{aid}", body=body, views=views,
         metadata={"source": source}, embedding=emb,
     )
 
 
-async def run(addr: str, token: str | None, tls_ca: str | None, server_name: str) -> int:
+async def run(addr: str, token: str | None, tls_ca: str | None, server_name: str, prefix: str) -> int:
+    (Article,) = scoped_models(prefix, globals()["Article"])
     scheme = "auradbs" if tls_ca else "auradb"
     dsn = f"{scheme}://{addr}/conformance"
     options: dict = {}
@@ -82,9 +87,9 @@ async def run(addr: str, token: str | None, tls_ca: str | None, server_name: str
         check("ping", await client.ping())
 
         for art in (
-            _article("a1", "published", "alpha document one", 10, [1.0, 0.0, 0.0]),
-            _article("a2", "draft", "beta document two", 5, [0.0, 1.0, 0.0]),
-            _article("a3", "published", "alpha document three", 20, [0.9, 0.1, 0.0], source="web"),
+            _article(Article, "a1", "published", "alpha document one", 10, [1.0, 0.0, 0.0]),
+            _article(Article, "a2", "draft", "beta document two", 5, [0.0, 1.0, 0.0]),
+            _article(Article, "a3", "published", "alpha document three", 20, [0.9, 0.1, 0.0], source="web"),
         ):
             await client.insert(art)
         check("insert", True)
@@ -114,12 +119,12 @@ async def run(addr: str, token: str | None, tls_ca: str | None, server_name: str
         check("upsert", a1.status == "archived")
 
         async with client.transaction() as tx:
-            await tx.insert(_article("a4", "draft", "delta four", 1, [0.0, 0.0, 1.0]))
+            await tx.insert(_article(Article, "a4", "draft", "delta four", 1, [0.0, 0.0, 1.0]))
         committed = await client.query(Article).where(Article.id == "a4").exists()
         check("transaction_commit", committed)
 
         try:
-            await client.insert(_article("a1", "x", "dup", 1, [0.0, 0.0, 1.0]))
+            await client.insert(_article(Article, "a1", "x", "dup", 1, [0.0, 0.0, 1.0]))
             check("error_mapping", False, "duplicate insert did not raise")
         except AuraConstraintError:
             check("error_mapping", True)
@@ -138,8 +143,12 @@ def main() -> None:
     parser.add_argument("--auth-token", default=None)
     parser.add_argument("--tls-ca", default=None)
     parser.add_argument("--tls-server-name", default="localhost")
+    add_isolation_args(parser)
     args = parser.parse_args()
-    sys.exit(asyncio.run(run(args.addr, args.auth_token, args.tls_ca, args.tls_server_name)))
+    prefix = collection_prefix(args)
+    sys.exit(
+        asyncio.run(run(args.addr, args.auth_token, args.tls_ca, args.tls_server_name, prefix))
+    )
 
 
 if __name__ == "__main__":

@@ -442,6 +442,52 @@ python tests/conformance/python/run_conformance.py --addr 127.0.0.1:7171 \
   --auth-token "your-secret" --tls-ca .local/certs/ca.crt
 ```
 
+## Run isolation (repeated runs are safe by default)
+
+Every Python harness seeds fixed primary keys into named collections. Run the same
+harness twice against one long-lived server and a naive second run would collide on
+those keys — an `insert` of an already-present key raises, and exact `count`/result
+assertions drift once the first run's rows remain. To make repeated runs against a
+shared or already-seeded server safe, the harnesses scope each run to its own
+collection namespace.
+
+The isolation seam is the collection name. An AuraDB collection is identified over
+the wire by its model's class name, so the shared helper
+`tests/conformance/python/_conformance_isolation.py` gives each run a fresh name
+prefix. It returns run-scoped subclasses of the declared models (each inherits every
+field and rebuilds its schema under `<prefix><ClassName>`), leaving the original
+models untouched. This relies only on the long-stable model/collection contract, so
+it works identically under the current Aura Connector and the published
+backward-compatibility connectors. It changes neither AWP, the storage format, the
+index snapshot format, nor any production server behaviour — the server simply sees
+a distinctly named collection per run.
+
+Defaults stay simple — **no flag is needed**. With no flag the prefix is a fresh
+random token, so running a harness twice in a row just works:
+
+```bash
+# Both runs pass against the same server; each uses its own collections.
+python tests/conformance/python/run_connector_conformance.py --addr 127.0.0.1:7171
+python tests/conformance/python/run_connector_conformance.py --addr 127.0.0.1:7171
+```
+
+Two optional flags pin the namespace when you want reproducibility:
+
+- `--run-id <token>` — scope this run's collections as `<token>_<ClassName>`
+  (handy for inspecting one run's data). The `AURA_CONFORMANCE_RUN_ID` environment
+  variable supplies a default `--run-id`, so a whole suite of harnesses can share
+  one run namespace.
+- `--collection-prefix <prefix>` — use an exact literal prefix, overriding
+  `--run-id`, e.g. `--collection-prefix ci_` yields `ci_<ClassName>`.
+
+Re-running with the *same* pinned `--run-id`/`--collection-prefix` deliberately
+reuses the same collections (and so can collide on fixed keys, exactly as a single
+shared namespace would); omit the flags, or vary the token, for independent runs.
+
+The cluster harnesses (`run_connector_*_cluster.py`, `run_connector_leader_change.py`)
+seed through idempotent `upsert`/count-guarded writes against a dedicated preview
+cluster fixture, so they are already safe to repeat without a per-run prefix.
+
 ## Official-client harnesses
 
 Two Python harnesses drive a running server through the published Aura Connector

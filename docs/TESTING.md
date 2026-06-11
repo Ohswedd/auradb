@@ -695,6 +695,46 @@ through the Aura Connector — see [CONFORMANCE.md](CONFORMANCE.md)
 fixtures live in `fixtures/relevance/analyzer_*.jsonl` (see the README). The numbers
 are fixture-specific regression signals, not universal benchmarks.
 
+## Conformance run isolation (v1.5.1)
+
+v1.5.1 is a conformance-hardening release. It adds **no** database, query, server, or
+wire features over v1.5.0 and changes no production behavior; it makes the Python
+conformance harnesses safe to rerun against the same live server. The collision it
+removes: a second run of a seed-bearing harness against an already-seeded server hit
+a fixed-primary-key `unique_violation` on `insert` (or drifted on exact `count`/result
+assertions). The published `aura-connector` 0.8.0 backward-compatibility suites were
+the visible trigger — they passed on a fresh data dir but collided on rerun.
+
+- **Shared helper** (`tests/conformance/python/_conformance_isolation.py`): resolves a
+  per-run collection-name prefix and returns run-scoped subclasses of each harness's
+  models. The seam is the collection name (a collection is addressed over the wire by
+  its model's class name), so a per-run prefix yields a fresh, non-colliding keyspace.
+  It touches neither AWP, the storage format, the index snapshot format, nor any
+  production server behavior, and relies only on the long-stable model/collection
+  contract — so it works identically under the current connector and the published
+  backward-compatibility connectors.
+- **Defaults just work**: with no flag the prefix is a fresh random token, so a harness
+  run twice in a row passes both times. `--run-id <token>` pins a reproducible
+  `<token>_<ClassName>` namespace (with an `AURA_CONFORMANCE_RUN_ID` environment
+  default shared across harnesses), and `--collection-prefix <prefix>` sets an exact
+  literal prefix.
+- **Coverage**: every single-node connector harness (`run_connector_smoke.py`,
+  `run_connector_conformance.py`, `run_connector_search.py`, `run_connector_facets.py`,
+  `run_connector_group_by.py`, `run_connector_pagination.py`,
+  `run_connector_query_profile.py`, `run_connector_cursor_resume.py`,
+  `run_connector_timeouts.py`, `run_connector_ann_preview.py`,
+  `run_connector_analyzers.py`, `run_connector_snippets.py`) plus the standard-library
+  `run_conformance.py` carry run isolation. The cluster harnesses seed through
+  idempotent `upsert`/count-guarded writes against a dedicated preview cluster fixture
+  and are already safe to repeat.
+- **Validation**: against one freshly built v1.5.x server, every single-node harness
+  passed twice in a row under the current `aura-connector` 0.9.0, and the published
+  `aura-connector` 0.8.0 backward-compatibility set passed twice in a row. The
+  analyzer/snippet harnesses correctly require a ≥0.9.0 connector (they exercise v1.5
+  live-analyzer/snippet features) and are not part of the 0.8.0 set.
+
+See [CONFORMANCE.md](CONFORMANCE.md) §"Run isolation".
+
 ## Live v1.2 connector conformance (v1.2.1)
 
 v1.2.1 is a conformance and documentation hardening release. It adds **no** database or
