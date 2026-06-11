@@ -1,0 +1,8 @@
+{"id":"aq-001","text":"backup restore","tags":["keyword-exact"],"vector":[1.0,0.0,0.0]}
+{"id":"aq-002","text":"cafe","tags":["ascii-fold"],"vector":[0.05,0.95,0.0]}
+{"id":"aq-003","text":"naive","tags":["ascii-fold"],"vector":[0.1,0.0,0.9]}
+{"id":"aq-004","text":"well formed","tags":["punctuation"],"vector":[0.0,0.0,1.0]}
+{"id":"aq-005","text":"upper case","tags":["case"],"vector":[0.0,0.1,0.9]}
+{"id":"aq-006","text":"restore","tags":["keyword-miss"],"vector":[0.9,0.0,0.1]}
+{"id":"aq-007","text":"lens","tags":["english-basic-regression"],"vector":[0.0,0.2,0.8]}
+{"id":"aq-008","text":"len","tags":["english-basic-negative"],"vector":[0.0,0.2,0.8]}

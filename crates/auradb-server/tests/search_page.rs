@@ -90,6 +90,7 @@ fn bm25() -> FindQuery {
         rank: TextRank::Bm25,
         k1: None,
         b: None,
+        analyzer: None,
     }));
     q
 }

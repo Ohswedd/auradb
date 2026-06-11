@@ -23,7 +23,8 @@ pub use cluster::{
 
 mod search_eval;
 pub use search_eval::{
-    cmd_search_eval, AggregateMetrics, Bm25Params, PerQueryMetrics, SearchEvalReport, WeightsReport,
+    cmd_compare_analyzers, cmd_search_eval, cmd_search_eval_with_analyzer, AggregateMetrics,
+    AnalyzerComparison, AnalyzerLeg, Bm25Params, PerQueryMetrics, SearchEvalReport, WeightsReport,
 };
 
 /// The package version.
@@ -571,6 +572,8 @@ pub fn cmd_compatibility() -> String {
             Capability::QueryProfile => "query_profile",
             Capability::RankedSearchCursor => "ranked_search_cursor",
             Capability::ApproximateVectorSearch => "approximate_vector_search",
+            Capability::QueryAnalyzers => "query_analyzers",
+            Capability::SearchSnippets => "search_snippets",
         })
         .collect();
     format!(
@@ -2505,6 +2508,7 @@ pub fn run_bench(data_dir: &Path, records: usize, commit: Option<String>) -> Res
             rank: auradb::query::TextRank::Bm25,
             k1: None,
             b: None,
+            analyzer: None,
         }));
         q.limit = Some(10);
         engine.find(&q)?;
@@ -2532,6 +2536,7 @@ pub fn run_bench(data_dir: &Path, records: usize, commit: Option<String>) -> Res
             operator: auradb::query::TextOperator::Or,
             k1: None,
             b: None,
+            analyzer: None,
         }));
         engine.find(&q)?;
         Ok(())
@@ -2637,6 +2642,7 @@ pub fn run_bench(data_dir: &Path, records: usize, commit: Option<String>) -> Res
             rank: auradb::query::TextRank::Bm25,
             k1: None,
             b: None,
+            analyzer: None,
         }));
         engine.search_page(&q, 10, None)?;
         Ok(())
@@ -3165,6 +3171,7 @@ mod tests {
             rank: TextRank::Bm25,
             k1: None,
             b: None,
+            analyzer: None,
         }));
         let rows = engine.find(&text).unwrap();
         assert_eq!(rows.len(), 1, "one body mentions raft");
@@ -3183,6 +3190,7 @@ mod tests {
             operator: TextOperator::Or,
             k1: None,
             b: None,
+            analyzer: None,
         }));
         assert!(!engine.find(&hybrid).unwrap().is_empty());
 
@@ -3217,6 +3225,7 @@ mod tests {
             rank: TextRank::Bm25,
             k1: None,
             b: None,
+            analyzer: None,
         }));
         let rows = engine.find(&bm).unwrap();
         assert_eq!(rows.len(), 1);
@@ -3240,6 +3249,7 @@ mod tests {
             operator: TextOperator::Or,
             k1: None,
             b: None,
+            analyzer: None,
         }));
         let hrows = engine.find(&hy).unwrap();
         assert!(!hrows.is_empty());

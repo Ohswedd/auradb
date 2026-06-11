@@ -241,6 +241,7 @@ fn search_with_facets_bm25() {
         rank: TextRank::Bm25,
         k1: None,
         b: None,
+        analyzer: None,
     }));
     q.facets = vec![facet("category", None)];
     q.metrics = vec![count_metric()];

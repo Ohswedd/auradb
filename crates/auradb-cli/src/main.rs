@@ -3,18 +3,18 @@
 
 use std::path::PathBuf;
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use auradb_cli::{
     build_config, cmd_auth_hash_token, cmd_auth_rotate_token, cmd_backup_verify, cmd_bench,
     cmd_bench_compare, cmd_bench_json, cmd_cert_generate_dev, cmd_check, cmd_check_json,
     cmd_cluster_backup_plan, cmd_cluster_bootstrap, cmd_cluster_compact_log, cmd_cluster_doctor,
     cmd_cluster_doctor_live, cmd_cluster_init, cmd_cluster_leader, cmd_cluster_peers,
     cmd_cluster_restore_plan, cmd_cluster_status, cmd_cluster_status_live, cmd_cluster_wait_leader,
-    cmd_cluster_wait_ready, cmd_compact, cmd_compatibility, cmd_config_validate, cmd_doctor,
-    cmd_doctor_json, cmd_dump, cmd_gc, cmd_index_check, cmd_index_rebuild, cmd_init, cmd_restore,
-    cmd_search_eval, cmd_search_explain, cmd_server, cmd_snapshot_create, cmd_snapshot_inspect,
-    cmd_snapshot_restore, cmd_stats_analyze, cmd_stats_show, cmd_status, cmd_status_json,
-    cmd_vector_eval, cmd_version,
+    cmd_cluster_wait_ready, cmd_compact, cmd_compare_analyzers, cmd_compatibility,
+    cmd_config_validate, cmd_doctor, cmd_doctor_json, cmd_dump, cmd_gc, cmd_index_check,
+    cmd_index_rebuild, cmd_init, cmd_restore, cmd_search_eval_with_analyzer, cmd_search_explain,
+    cmd_server, cmd_snapshot_create, cmd_snapshot_inspect, cmd_snapshot_restore, cmd_stats_analyze,
+    cmd_stats_show, cmd_status, cmd_status_json, cmd_vector_eval, cmd_version,
 };
 use clap::{Parser, Subcommand};
 
@@ -26,6 +26,10 @@ struct Cli {
     command: Command,
 }
 
+// Clap argument enums carry by-value option structs, so the size spread between a
+// unit variant and a flag-heavy one is inherent to the CLI definition, not a design
+// smell — boxing every variant would only obscure the argument shape.
+#[allow(clippy::large_enum_variant)]
 #[derive(Subcommand)]
 enum Command {
     /// Print the version.
@@ -452,6 +456,7 @@ enum IndexCommand {
     },
 }
 
+#[allow(clippy::large_enum_variant)]
 #[derive(Subcommand)]
 enum SearchCommand {
     /// Explain a query (read from a JSON file as a FindQuery IR), reporting the
@@ -471,9 +476,61 @@ enum SearchCommand {
     /// qrels), reporting MRR@k, NDCG@k, and Recall@k as JSON. The corpus is
     /// ingested into a fresh `--data-dir`; results are dataset-specific and are
     /// not a universal benchmark. Modes: `bm25`, `vector_exact`, `hybrid`.
+    ///
+    /// With the `compare-analyzers` subcommand, evaluate the same dataset under
+    /// several analyzers and report their metrics side by side.
+    #[command(args_conflicts_with_subcommands = true)]
     Eval {
         /// A fresh, empty data directory the corpus is ingested into.
         #[arg(long, default_value = ".local/auradb-search-eval")]
+        data_dir: PathBuf,
+        /// JSONL corpus file (one document per line).
+        #[arg(long)]
+        corpus: Option<PathBuf>,
+        /// JSONL queries file (one query per line).
+        #[arg(long)]
+        queries: Option<PathBuf>,
+        /// JSONL relevance judgments file (one qrel per line).
+        #[arg(long)]
+        qrels: Option<PathBuf>,
+        /// Retrieval mode: `bm25`, `vector_exact`, or `hybrid`.
+        #[arg(long, default_value = "bm25")]
+        mode: String,
+        /// The rank cutoff `k`.
+        #[arg(long, default_value_t = 10)]
+        k: usize,
+        /// BM25 `k1` override (defaults to the engine's built-in value).
+        #[arg(long)]
+        k1: Option<f32>,
+        /// BM25 `b` override (defaults to the engine's built-in value).
+        #[arg(long)]
+        b: Option<f32>,
+        /// Hybrid text-signal fusion weight.
+        #[arg(long, default_value_t = 0.7)]
+        text_weight: f32,
+        /// Hybrid vector-signal fusion weight.
+        #[arg(long, default_value_t = 0.3)]
+        vector_weight: f32,
+        /// Query-time analyzer applied to corpus and query text: `default`
+        /// (preserves the v1.4 baseline), `simple`, `ascii_fold`, `keyword`, or
+        /// `english_basic`. The same analyzer code backs live AWP search.
+        #[arg(long, default_value = "default")]
+        analyzer: String,
+        /// Emit the report as JSON (the only output format).
+        #[arg(long)]
+        json: bool,
+        #[command(subcommand)]
+        compare: Option<EvalCompareCommand>,
+    },
+}
+
+#[derive(Subcommand)]
+enum EvalCompareCommand {
+    /// Evaluate the same dataset under several analyzers and report their metrics
+    /// side by side. Each analyzer runs in its own subdirectory of `--data-dir`.
+    CompareAnalyzers {
+        /// A fresh, empty data directory; one subdirectory is created per analyzer.
+        #[arg(long, default_value = ".local/auradb-search-eval-compare")]
         data_dir: PathBuf,
         /// JSONL corpus file (one document per line).
         #[arg(long)]
@@ -502,6 +559,13 @@ enum SearchCommand {
         /// Hybrid vector-signal fusion weight.
         #[arg(long, default_value_t = 0.3)]
         vector_weight: f32,
+        /// Comma-separated analyzer presets to compare (any of: `default`,
+        /// `simple`, `ascii_fold`, `keyword`, `english_basic`).
+        #[arg(
+            long,
+            default_value = "default,simple,ascii_fold,keyword,english_basic"
+        )]
+        analyzers: String,
         /// Emit the report as JSON (the only output format).
         #[arg(long)]
         json: bool,
@@ -768,22 +832,63 @@ async fn main() -> Result<()> {
                 b,
                 text_weight,
                 vector_weight,
+                analyzer,
                 json: _,
-            } => println!(
-                "{}",
-                cmd_search_eval(
-                    &data_dir,
-                    &corpus,
-                    &queries,
-                    &qrels,
-                    &mode,
+                compare,
+            } => match compare {
+                Some(EvalCompareCommand::CompareAnalyzers {
+                    data_dir,
+                    corpus,
+                    queries,
+                    qrels,
+                    mode,
                     k,
                     k1,
                     b,
                     text_weight,
                     vector_weight,
-                )?
-            ),
+                    analyzers,
+                    json: _,
+                }) => println!(
+                    "{}",
+                    cmd_compare_analyzers(
+                        &data_dir,
+                        &corpus,
+                        &queries,
+                        &qrels,
+                        &mode,
+                        k,
+                        k1,
+                        b,
+                        text_weight,
+                        vector_weight,
+                        &analyzers,
+                    )?
+                ),
+                None => {
+                    let corpus = corpus.context(
+                        "search eval requires --corpus (or use the compare-analyzers subcommand)",
+                    )?;
+                    let queries = queries.context("search eval requires --queries")?;
+                    let qrels = qrels.context("search eval requires --qrels")?;
+                    println!(
+                        "{}",
+                        cmd_search_eval_with_analyzer(
+                            &data_dir,
+                            &corpus,
+                            &queries,
+                            &qrels,
+                            &mode,
+                            k,
+                            k1,
+                            b,
+                            text_weight,
+                            vector_weight,
+                            Some(&analyzer),
+                        )?
+                    )
+                }
+            },
         },
         Command::Vector { command } => match command {
             VectorCommand::Eval {

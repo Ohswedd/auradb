@@ -1,0 +1,9 @@
+{"id":"ad-001","title":"Backup restore","tags":[],"category":"","vector":[1.0,0.0,0.0]}
+{"id":"ad-002","title":"Backup and restore guide","body":"A guide that walks through backup and restore steps.","tags":["guide"],"category":"ops","vector":[0.95,0.05,0.0]}
+{"id":"ad-003","title":"Café menu","body":"Our café serves espresso and pastries.","tags":["food"],"category":"misc","vector":[0.0,1.0,0.0]}
+{"id":"ad-004","title":"Cafe downtown bistro","body":"A small cafe in the downtown bistro district.","tags":["food"],"category":"misc","vector":[0.05,0.95,0.0]}
+{"id":"ad-005","title":"Well-formed JSON config","body":"A well-formed configuration file parses cleanly.","tags":["config"],"category":"docs","vector":[0.0,0.0,1.0]}
+{"id":"ad-006","title":"UPPER CASE shouting headline","body":"An ALL CAPS headline tests case folding.","tags":["style"],"category":"docs","vector":[0.0,0.1,0.9]}
+{"id":"ad-007","title":"Naïve heuristics","body":"A naïve heuristic ignores the accented spelling.","tags":["theory"],"category":"docs","vector":[0.1,0.0,0.9]}
+{"id":"ad-008","title":"Restore from snapshot","body":"Restore a collection from a stored snapshot file.","tags":["ops"],"category":"ops","vector":[0.9,0.0,0.1]}
+{"id":"ad-009","title":"Lens cleaning kit","body":"Clean camera lenses and the lens mount carefully.","tags":["optics"],"category":"docs","vector":[0.0,0.15,0.85]}

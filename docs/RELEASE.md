@@ -80,6 +80,37 @@ not a universal benchmark or relevance guarantee; the harness uses the
 exact-vector baseline (no production ANN claim) and is single-node (no production
 HA claim).
 
+### Analyzer regression gate (v1.5.0)
+
+Confirm the analyzer presets behave as recorded on the analyzer fixtures (the
+relationships are asserted in `crates/auradb-cli/tests/search_analyzers_cli.rs`,
+so a regression fails `cargo test`; the manual run inspects the JSON):
+
+```bash
+rm -rf .local/search-eval-simple
+auradb search eval --data-dir .local/search-eval-simple \
+  --corpus fixtures/relevance/analyzer_corpus.jsonl \
+  --queries fixtures/relevance/analyzer_queries.jsonl \
+  --qrels fixtures/relevance/analyzer_qrels.jsonl \
+  --mode bm25 --analyzer simple --k 10 --json
+# Repeat with --analyzer ascii_fold (recall should rise on accents), --analyzer
+# keyword (recall should fall — exact whole-field matching), and --analyzer
+# english_basic, or run `search eval compare-analyzers
+# --analyzers default,simple,ascii_fold,keyword,english_basic`.
+# Every analyzer is also valid under --mode hybrid (keyword included), e.g.
+#   ... --mode hybrid --analyzer keyword --k 10 --json
+```
+
+`default` (or an omitted `--analyzer`/wire analyzer) is **byte-identical** to the
+v1.4 baseline. v1.5.0 makes analyzer selection and opt-in snippets live over AWP via
+the **additive, defaulted** `query_analyzers` and `search_snippets` capabilities: the
+analyzer/snippet request and response fields are additive, so **AWP 1, storage format
+v2, and index snapshot format version 1 are unchanged** and existing clients
+(including Aura Connector 0.8.0, which sends no analyzer/snippet fields) are
+unaffected. Live over-the-wire analyzer/snippet conformance is a release gate
+(`run_connector_analyzers.py`, `run_connector_snippets.py`; see
+[CONFORMANCE.md](CONFORMANCE.md)).
+
 ### GitHub Actions maintenance (Node 24)
 
 Workflow actions are kept on majors that run on Node 24, ahead of the Node 20

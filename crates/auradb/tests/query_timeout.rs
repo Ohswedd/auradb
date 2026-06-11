@@ -89,6 +89,7 @@ fn bm25_query() -> FindQuery {
         rank: TextRank::Bm25,
         k1: None,
         b: None,
+        analyzer: None,
     }));
     q
 }
@@ -118,6 +119,7 @@ fn hybrid_query() -> FindQuery {
         operator: TextOperator::Or,
         k1: None,
         b: None,
+        analyzer: None,
     }));
     q
 }

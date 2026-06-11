@@ -641,6 +641,7 @@ async fn cluster_search_bm25_and_hybrid_after_replication() {
         rank: auradb::query::TextRank::Bm25,
         k1: None,
         b: None,
+        analyzer: None,
     }));
     let rows = cluster.nodes[follower].engine.find(&bm).unwrap();
     assert_eq!(rows.len(), 2, "BM25 on follower after replication");
@@ -664,6 +665,7 @@ async fn cluster_search_bm25_and_hybrid_after_replication() {
         operator: auradb::query::TextOperator::Or,
         k1: None,
         b: None,
+        analyzer: None,
     }));
     assert!(
         !cluster.nodes[follower].engine.find(&hy).unwrap().is_empty(),
@@ -741,6 +743,7 @@ async fn cluster_aggregate_and_facets_after_replication() {
         rank: auradb::query::TextRank::Bm25,
         k1: None,
         b: None,
+        analyzer: None,
     }));
     sf.facets = vec![auradb::query::FacetRequest {
         field: "category".into(),
@@ -770,6 +773,7 @@ async fn cluster_search_page_after_replication() {
         rank: auradb::query::TextRank::Bm25,
         k1: None,
         b: None,
+        analyzer: None,
     }));
 
     let reference: Vec<Value> = cluster.nodes[follower]
@@ -875,6 +879,7 @@ async fn cluster_aggregate_after_follower_restart() {
         rank: auradb::query::TextRank::Bm25,
         k1: None,
         b: None,
+        analyzer: None,
     }));
     let (rows, _next) = cluster.nodes[follower]
         .engine

@@ -21,6 +21,7 @@ pub mod migrate;
 pub mod plan;
 pub mod planner;
 pub mod relevance;
+pub mod snippet;
 pub mod stats;
 
 pub use aggregate::{
@@ -40,12 +41,16 @@ pub use ir::{
 pub use ir::{
     FacetRequest, Filter, FindQuery, FusionMode, HybridSearch, HybridWeights, Mutation,
     MutationResult, OrderKey, QueryResultPage, RankedPageResult, ReadRequest, Row,
-    SearchPageRequest, TextOperator, TextRank, TextSearch, VectorSearch, BM25_DEFAULT_B,
-    BM25_DEFAULT_K1, DEFAULT_FACET_LIMIT, DEFAULT_GROUP_LIMIT,
+    SearchPageRequest, SnippetRequest, TextOperator, TextRank, TextSearch, VectorSearch,
+    BM25_DEFAULT_B, BM25_DEFAULT_K1, DEFAULT_FACET_LIMIT, DEFAULT_GROUP_LIMIT,
 };
 pub use migrate::{estimate as estimate_migration, MigrationEstimate};
 pub use plan::{Access, Plan, PlanNode};
 pub use relevance::{
     dcg_at_k, mrr_at_k, ndcg_at_k, recall_at_k, relevant_set, RELEVANT_GRADE_THRESHOLD,
 };
+pub use snippet::{build_snippet, HighlightRange, Snippet, SnippetFragment, SnippetOptions};
 pub use stats::{CollectionStats, PlannerStats, STATS_FORMAT_VERSION};
+
+#[doc(inline)]
+pub use auradb_index::{Analyzer, AnalyzerPreset, Token, TokenStream};

@@ -15,6 +15,7 @@
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]
 
+pub mod analyzer;
 pub mod hnsw;
 mod metric;
 pub mod persist;
@@ -24,6 +25,7 @@ use std::sync::{Arc, Mutex};
 
 use auradb_core::{CollectionSchema, Error, FieldType, Record, RecordId, Result, Value};
 
+pub use analyzer::{Analyzer, AnalyzerPreset, Token, TokenStream};
 pub use hnsw::{Hnsw, HnswParams};
 pub use metric::{metric_json, Metric};
 pub use persist::{HnswMetadata, IndexManifest, IndexSnapshot, INDEX_FORMAT_VERSION};
@@ -185,12 +187,23 @@ impl TextIndex {
         let mut terms = tokenize(query);
         terms.sort();
         terms.dedup();
+        self.search_over(&self.postings, &terms)
+    }
+
+    /// Term-frequency AND search over an explicit postings view and pre-analyzed,
+    /// sorted+deduped query terms. Factored out so analyzer-aware retrieval can run
+    /// the identical scoring over a transformed view (see [`Self::analyzed_view`]).
+    fn search_over(
+        &self,
+        postings: &HashMap<String, HashMap<RecordId, u32>>,
+        terms: &[String],
+    ) -> Vec<(RecordId, f32)> {
         if terms.is_empty() {
             return Vec::new();
         }
         let mut matched: HashMap<RecordId, (u32, f32)> = HashMap::new();
-        for term in &terms {
-            if let Some(map) = self.postings.get(term) {
+        for term in terms {
+            if let Some(map) = postings.get(term) {
                 for (id, tf) in map {
                     let entry = matched.entry(*id).or_insert((0, 0.0));
                     entry.0 += 1;
@@ -221,6 +234,23 @@ impl TextIndex {
         let mut terms = tokenize(query);
         terms.sort();
         terms.dedup();
+        self.bm25_over(&self.postings, &terms, require_all, k1, b)
+    }
+
+    /// BM25 over an explicit postings view and pre-analyzed, sorted+deduped query
+    /// terms. The document-length statistics (`doc_lengths`/`total_tokens`) are
+    /// always those of the default tokenization: a per-token analyzer maps each
+    /// indexed token to exactly the same number of output tokens (zero for a
+    /// dropped stopword), so a document's length is unchanged or a safe upper bound,
+    /// and `default`/`simple` reproduce the baseline scoring byte-for-byte.
+    fn bm25_over(
+        &self,
+        postings: &HashMap<String, HashMap<RecordId, u32>>,
+        terms: &[String],
+        require_all: bool,
+        k1: f32,
+        b: f32,
+    ) -> Vec<(RecordId, f32)> {
         if terms.is_empty() {
             return Vec::new();
         }
@@ -231,8 +261,8 @@ impl TextIndex {
         let avgdl = (self.total_tokens as f32 / n).max(1.0);
         // (accumulated score, number of distinct query terms matched).
         let mut acc: HashMap<RecordId, (f32, u32)> = HashMap::new();
-        for term in &terms {
-            let Some(postings) = self.postings.get(term) else {
+        for term in terms {
+            let Some(postings) = postings.get(term) else {
                 continue;
             };
             let df = postings.len() as f32;
@@ -261,6 +291,28 @@ impl TextIndex {
                 .then(a.0.cmp(&b.0))
         });
         out
+    }
+
+    /// Build a postings view transformed by a per-token `analyzer`: each persisted
+    /// default term is mapped via [`Analyzer::map_default_token`] and the posting
+    /// lists are merged under the resulting term(s). This lets a non-default
+    /// analyzer (`ascii_fold`, `english_basic`, …) retrieve over the persisted
+    /// default-tokenized postings without re-indexing or changing the snapshot
+    /// format. Returns `None` for a non-per-token analyzer (e.g. `keyword`).
+    fn analyzed_view(&self, analyzer: Analyzer) -> Option<HashMap<String, HashMap<RecordId, u32>>> {
+        if !analyzer.preset().is_per_token() {
+            return None;
+        }
+        let mut view: HashMap<String, HashMap<RecordId, u32>> = HashMap::new();
+        for (term, posting) in &self.postings {
+            for out in analyzer.map_default_token(term)? {
+                let entry = view.entry(out).or_default();
+                for (id, tf) in posting {
+                    *entry.entry(*id).or_insert(0) += *tf;
+                }
+            }
+        }
+        Some(view)
     }
 }
 
@@ -715,6 +767,50 @@ impl CollectionIndexes {
             .get(field)
             .ok_or_else(|| Error::InvalidRequest(format!("no full-text index on field {field}")))?;
         Ok(ti.bm25_search(query, require_all, k1, b))
+    }
+
+    /// Analyzer-aware ranked full-text search over a text-indexed field.
+    ///
+    /// The query and the persisted index are matched under `analyzer`'s preset:
+    /// `default`/`simple` reproduce [`Self::text_bm25_search`] exactly, while a
+    /// per-token preset (`ascii_fold`, `english_basic`) retrieves over a transformed
+    /// view of the persisted default postings so the symmetric corpus/query analysis
+    /// matches the offline `search eval` harness. `rank` selects BM25 or summed
+    /// term-frequency scoring.
+    ///
+    /// Returns `Ok(None)` for a non-per-token analyzer (currently `keyword`), whose
+    /// whole-field semantics cannot be derived from per-token postings; the caller
+    /// resolves those against the stored field text instead. Errors when no
+    /// full-text index covers `field`.
+    // The argument list mirrors `text_bm25_search` plus the analyzer and a rank
+    // selector; bundling them would only obscure the call sites in `exec.rs`.
+    #[allow(clippy::too_many_arguments)]
+    pub fn text_search_analyzed(
+        &self,
+        field: &str,
+        query: &str,
+        analyzer: Analyzer,
+        bm25: bool,
+        require_all: bool,
+        k1: f32,
+        b: f32,
+    ) -> Result<Option<Vec<(RecordId, f32)>>> {
+        let ti = self
+            .text_maps
+            .get(field)
+            .ok_or_else(|| Error::InvalidRequest(format!("no full-text index on field {field}")))?;
+        let Some(view) = ti.analyzed_view(analyzer) else {
+            return Ok(None);
+        };
+        let mut terms = analyzer.index_terms(query);
+        terms.sort();
+        terms.dedup();
+        let results = if bm25 {
+            ti.bm25_over(&view, &terms, require_all, k1, b)
+        } else {
+            ti.search_over(&view, &terms)
+        };
+        Ok(Some(results))
     }
 
     /// Summary statistics for the full-text index on `field`, if one exists.

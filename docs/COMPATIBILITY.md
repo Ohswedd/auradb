@@ -136,6 +136,34 @@ authoritative policy is [SUPPORT_POLICY.md](SUPPORT_POLICY.md).
 | BM25 ranked full-text search | Stable | Yes (new in v1.1.0) | **Yes** | `text_search` clause; Okapi BM25 |
 | Hybrid text + vector search | Stable | Yes (new in v1.1.0) | **Yes** | `hybrid` clause; weighted-sum / RRF fusion |
 
+## v1.5.0 additive capabilities: query analyzers & search snippets
+
+v1.5.0 adds two **additive, opt-in** search capabilities. They are advertised as
+`query_analyzers` and `search_snippets` in the connect-time capability set and
+require **no AWP, storage, or index-snapshot format change** — the analyzer and
+snippet request/response fields are additive and defaulted, so existing clients and
+stored queries are byte-identical to v1.4.
+
+| Capability | Status | Production use | Notes |
+| ---------- | ------ | -------------- | ----- |
+| `query_analyzers` (live query-time analyzer selection) | Stable | **Yes** | Presets `default` / `simple` / `ascii_fold` / `keyword` / `english_basic`; `default` preserves v1.4 behavior exactly; `english_basic` is a small built-in helper, **not** full NLP |
+| `search_snippets` (opt-in plain-text snippets/highlights) | Stable | **Yes** | Field-allowlisted, server-capped, plain text (no HTML claim); opt-in only |
+
+Honest support matrix:
+
+- **Live analyzer selection requires AuraDB v1.5 + Aura Connector v0.9.** The
+  connector gates a non-default analyzer on the server's `query_analyzers`
+  capability and otherwise raises a capability error — it is never silently dropped.
+- **Snippets require the `search_snippets` capability**; a snippet request against a
+  server that does not advertise it is refused with a capability error.
+- **Aura Connector 0.8.0 remains fully compatible** with a v1.5 server for all
+  existing features. It does not know about analyzers or snippets and does not need
+  to: a 0.8.0 client sends no analyzer/snippet fields and behaves exactly as before.
+- These are search-quality features on the **single-node production line**. They add
+  **no** production-HA, production-ANN, or all-backend-parity claim: multi-node
+  remains an HA candidate preview, exact vector search remains the baseline, and the
+  analyzers make no language-aware NLP claim.
+
 ## Required connector features
 
 - AWP 1 framing (`AURA` magic, 44-byte header, 128-bit request id).

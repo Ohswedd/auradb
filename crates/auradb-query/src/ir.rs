@@ -6,7 +6,10 @@
 //! [`CountQuery`] / [`ExistsQuery`]; writes use [`Mutation`].
 
 use auradb_core::{Document, Value};
+use auradb_index::{Analyzer, AnalyzerPreset};
 use serde::{Deserialize, Serialize};
+
+use crate::snippet::Snippet;
 
 /// A comparison operator.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -203,6 +206,31 @@ pub struct TextSearch {
     /// BM25 `b` override (defaults to [`BM25_DEFAULT_B`]).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub b: Option<f32>,
+    /// Optional query-time analyzer preset (`default`, `simple`, `ascii_fold`,
+    /// `keyword`, `english_basic`). Absent or `default` preserves v1.x behavior
+    /// exactly. Additive and defaulted so older connectors are unaffected; the
+    /// server validates the name and applies it symmetrically to the query and the
+    /// index.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub analyzer: Option<String>,
+}
+
+impl TextSearch {
+    /// The resolved query-time analyzer (defaults to [`AnalyzerPreset::Default`]).
+    /// Returns a structured error for an unknown analyzer name.
+    pub fn resolved_analyzer(&self) -> Result<Analyzer, String> {
+        resolve_analyzer(self.analyzer.as_deref())
+    }
+}
+
+/// Parse an optional analyzer name into an [`Analyzer`], defaulting to
+/// [`AnalyzerPreset::Default`] when absent or `"default"`. The error is a plain
+/// message so callers can wrap it in their own error type.
+pub(crate) fn resolve_analyzer(name: Option<&str>) -> Result<Analyzer, String> {
+    match name {
+        None | Some("default") | Some("") => Ok(Analyzer::new(AnalyzerPreset::Default)),
+        Some(other) => Analyzer::parse(other).map_err(|e| e.to_string()),
+    }
 }
 
 /// The score-fusion strategy for a hybrid query.
@@ -269,12 +297,22 @@ pub struct HybridSearch {
     /// BM25 `b` override (defaults to [`BM25_DEFAULT_B`]).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub b: Option<f32>,
+    /// Optional query-time analyzer preset applied to the text signal (see
+    /// [`TextSearch::analyzer`]). Additive and defaulted.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub analyzer: Option<String>,
 }
 
 impl HybridSearch {
     /// The vector metric, defaulting to `cosine`.
     pub fn metric_name(&self) -> &str {
         self.metric.as_deref().unwrap_or("cosine")
+    }
+
+    /// The resolved query-time analyzer for the text signal (defaults to
+    /// [`AnalyzerPreset::Default`]). Returns a structured error for an unknown name.
+    pub fn resolved_analyzer(&self) -> Result<Analyzer, String> {
+        resolve_analyzer(self.analyzer.as_deref())
     }
 }
 
@@ -328,6 +366,32 @@ pub struct FindQuery {
     /// Additive and defaulted so older connectors that omit it are unaffected.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub timeout_ms: Option<u64>,
+    /// Opt-in request for search snippets/highlights on a ranked text (or hybrid)
+    /// query. Absent means no snippets are produced (existing behavior). Additive
+    /// and defaulted so older connectors are unaffected.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub snippet: Option<SnippetRequest>,
+}
+
+/// An opt-in request for plain-text search snippets/highlights, attached to a
+/// [`FindQuery`] alongside a `text_search` or `hybrid` clause.
+///
+/// Snippets are only ever produced for the stored text fields named in
+/// [`fields`](SnippetRequest::fields) (the allowlist) — a field absent from the
+/// list is never read, so internal or unrequested fields cannot leak. Fragment
+/// count and length are server-clamped. Snippet text is plain text; the highlight
+/// ranges are byte offsets into the fragment text.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SnippetRequest {
+    /// The stored text fields eligible for snippets (the allowlist). A field that
+    /// is absent, non-textual, or internal is skipped, never returned.
+    pub fields: Vec<String>,
+    /// Maximum fragments per field. Defaulted and clamped by the server.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_fragments: Option<usize>,
+    /// Maximum characters per fragment. Defaulted and clamped by the server.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fragment_chars: Option<usize>,
 }
 
 impl FindQuery {
@@ -346,6 +410,7 @@ impl FindQuery {
             projection: None,
             includes: Vec::new(),
             timeout_ms: None,
+            snippet: None,
         }
     }
 
@@ -717,6 +782,11 @@ pub struct Row {
     /// Hydrated related records keyed by relationship name.
     #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
     pub includes: std::collections::BTreeMap<String, Vec<Document>>,
+    /// Opt-in plain-text snippets/highlights, one per snippet-eligible field, when
+    /// the query carried a [`SnippetRequest`]. Empty (and omitted from the wire)
+    /// otherwise, so existing clients are unaffected.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub snippets: Vec<Snippet>,
 }
 
 /// A page of query results.
@@ -762,6 +832,7 @@ mod tests {
             projection: Some(vec!["id".into(), "title".into()]),
             includes: vec!["owner".into()],
             timeout_ms: None,
+            snippet: None,
         };
         let json = serde_json::to_string(&q).unwrap();
         let back: FindQuery = serde_json::from_str(&json).unwrap();
@@ -778,6 +849,7 @@ mod tests {
             rank: TextRank::default(),
             k1: None,
             b: None,
+            analyzer: None,
         }));
         let json = serde_json::to_string(&q).unwrap();
         let back: FindQuery = serde_json::from_str(&json).unwrap();
@@ -799,6 +871,7 @@ mod tests {
             operator: TextOperator::default(),
             k1: None,
             b: None,
+            analyzer: None,
         };
         let json = serde_json::to_string(&h).unwrap();
         let back: HybridSearch = serde_json::from_str(&json).unwrap();
@@ -823,6 +896,7 @@ mod tests {
             rank: TextRank::default(),
             k1: None,
             b: None,
+            analyzer: None,
         }));
         assert!(q.validate_search_clauses().is_err());
     }
@@ -858,5 +932,88 @@ mod tests {
         let back: Mutation = serde_json::from_str(&json).unwrap();
         assert_eq!(m, back);
         assert_eq!(back.collection(), "C");
+    }
+
+    #[test]
+    fn serde_missing_analyzer_defaults() {
+        // A text_search from an older client omits `analyzer`; it deserializes to
+        // None and resolves to the default analyzer.
+        let json = r#"{"field":"body","query":"x","operator":"or","rank":"bm25"}"#;
+        let ts: TextSearch = serde_json::from_str(json).unwrap();
+        assert!(ts.analyzer.is_none());
+        assert_eq!(ts.resolved_analyzer().unwrap().name(), "default");
+        // A default analyzer is omitted from the serialized form (byte-compatible).
+        let out = serde_json::to_value(&ts).unwrap();
+        assert!(out.get("analyzer").is_none());
+    }
+
+    #[test]
+    fn serde_analyzer_roundtrips_when_set() {
+        let ts = TextSearch {
+            field: "body".into(),
+            query: "café".into(),
+            operator: TextOperator::Or,
+            rank: TextRank::Bm25,
+            k1: None,
+            b: None,
+            analyzer: Some("ascii_fold".into()),
+        };
+        let json = serde_json::to_string(&ts).unwrap();
+        assert!(json.contains("ascii_fold"));
+        let back: TextSearch = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.analyzer.as_deref(), Some("ascii_fold"));
+        assert_eq!(back.resolved_analyzer().unwrap().name(), "ascii_fold");
+    }
+
+    #[test]
+    fn serde_unknown_extra_fields_compat() {
+        // A request from a NEWER client carrying fields this build does not know
+        // must still deserialize (forward-compatible), ignoring the unknown field.
+        let json = r#"{"collection":"Doc","text_search":{"field":"body","query":"x",
+            "analyzer":"simple","future_field":{"nested":true}},"future_top":42}"#;
+        let q: FindQuery = serde_json::from_str(json).unwrap();
+        assert_eq!(q.collection, "Doc");
+        let ts = q.text_search.unwrap();
+        assert_eq!(ts.analyzer.as_deref(), Some("simple"));
+    }
+
+    #[test]
+    fn serde_missing_snippet_request_defaults() {
+        // No snippet field -> None (no snippets), and it is omitted on the wire.
+        let q = FindQuery::new("Doc");
+        assert!(q.snippet.is_none());
+        let json = serde_json::to_value(&q).unwrap();
+        assert!(json.get("snippet").is_none());
+        // A request with a snippet clause round-trips.
+        let mut q2 = FindQuery::new("Doc");
+        q2.snippet = Some(SnippetRequest {
+            fields: vec!["body".into()],
+            max_fragments: Some(2),
+            fragment_chars: None,
+        });
+        let back: FindQuery = serde_json::from_str(&serde_json::to_string(&q2).unwrap()).unwrap();
+        assert_eq!(back.snippet, q2.snippet);
+    }
+
+    #[test]
+    fn old_clients_ignore_snippet_response_fields() {
+        // A Row carrying snippets serializes them under `snippets`; a Row without
+        // snippets omits the field entirely so an older client never sees it.
+        let plain = Row {
+            id: "1".into(),
+            fields: Document::new(),
+            score: None,
+            text_score: None,
+            vector_score: None,
+            rank: None,
+            includes: Default::default(),
+            snippets: Vec::new(),
+        };
+        let json = serde_json::to_value(&plain).unwrap();
+        assert!(json.get("snippets").is_none());
+        // And a legacy row JSON (no `snippets` key) still deserializes.
+        let legacy = r#"{"id":"1","fields":{}}"#;
+        let back: Row = serde_json::from_str(legacy).unwrap();
+        assert!(back.snippets.is_empty());
     }
 }

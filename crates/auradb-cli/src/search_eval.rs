@@ -18,9 +18,9 @@ use std::path::Path;
 use anyhow::{bail, Context, Result};
 use auradb::core::{CollectionSchema, Document, FieldDef, FieldType, IndexDef, IndexKind, Value};
 use auradb::query::{
-    mrr_at_k, ndcg_at_k, recall_at_k, relevant_set, FindQuery, FusionMode, HybridSearch,
-    HybridWeights, Row, TextOperator, TextRank, TextSearch, VectorSearch, BM25_DEFAULT_B,
-    BM25_DEFAULT_K1,
+    mrr_at_k, ndcg_at_k, recall_at_k, relevant_set, Analyzer, AnalyzerPreset, FindQuery,
+    FusionMode, HybridSearch, HybridWeights, Row, TextOperator, TextRank, TextSearch, VectorSearch,
+    BM25_DEFAULT_B, BM25_DEFAULT_K1,
 };
 use auradb::Engine;
 use serde::{Deserialize, Serialize};
@@ -164,6 +164,12 @@ pub struct SearchEvalReport {
     pub dataset: String,
     /// The evaluated retrieval mode (`bm25`, `vector_exact`, or `hybrid`).
     pub mode: String,
+    /// The query-time analyzer applied to corpus and query text (`default`,
+    /// `simple`, `ascii_fold`, `keyword`, `english_basic`). `default` preserves the
+    /// v1.4 baseline. The analyzer only affects the text-bearing modes (`bm25`,
+    /// `hybrid`) — including `keyword`, which the harness pre-analyzes symmetrically
+    /// into whole-field terms — and for `vector_exact` it is recorded but has no effect.
+    pub analyzer: String,
     /// The number of queries evaluated.
     pub queries: usize,
     /// The number of corpus documents ingested.
@@ -257,6 +263,23 @@ fn parse_qrels(path: &Path) -> Result<Vec<Qrel>> {
     Ok(qrels)
 }
 
+/// Apply the selected analyzer to text destined for the full-text index or a query.
+///
+/// The `default` analyzer is a no-op (the raw text is handed to the engine exactly
+/// as before), which keeps `--analyzer default` byte-identical to omitting the flag
+/// and preserves the v1.4 baseline. Any other analyzer normalizes the text into its
+/// engine-safe retrieval terms (see [`Analyzer::index_terms`]) joined by spaces, so
+/// the engine's BM25 then ranks over the analyzer's tokens. The transform is applied
+/// symmetrically to corpus text and query text, which is what makes a non-default
+/// analyzer a consistent, honest evaluation rather than a query-only mismatch.
+fn analyzed(analyzer: Analyzer, text: &str) -> String {
+    if analyzer.preset() == AnalyzerPreset::Default {
+        text.to_string()
+    } else {
+        analyzer.index_terms(text).join(" ")
+    }
+}
+
 /// The concatenated, full-text-indexed searchable text for one corpus document:
 /// title, body, tags, and category joined with spaces. Documented in the fixture
 /// README so dataset authors know what BM25 sees.
@@ -308,7 +331,12 @@ fn corpus_vector_dim(docs: &[CorpusDoc]) -> Result<Option<usize>> {
     Ok(dim)
 }
 
-fn ingest(engine: &Engine, docs: &[CorpusDoc], vector_dim: Option<usize>) -> Result<()> {
+fn ingest(
+    engine: &Engine,
+    docs: &[CorpusDoc],
+    vector_dim: Option<usize>,
+    analyzer: Analyzer,
+) -> Result<()> {
     let mut schema = CollectionSchema::new(COLLECTION)
         .with_field(FieldDef {
             name: "id".into(),
@@ -333,7 +361,10 @@ fn ingest(engine: &Engine, docs: &[CorpusDoc], vector_dim: Option<usize>) -> Res
     for d in docs {
         let mut fields = Document::new();
         fields.insert("id".into(), Value::Text(d.id.clone()));
-        fields.insert(TEXT_FIELD.into(), Value::Text(searchable_text(d)));
+        fields.insert(
+            TEXT_FIELD.into(),
+            Value::Text(analyzed(analyzer, &searchable_text(d))),
+        );
         if let Some(v) = &d.vector {
             fields.insert(VECTOR_FIELD.into(), Value::Vector(v.clone()));
         }
@@ -363,6 +394,7 @@ fn build_query(
     k1: Option<f32>,
     b: Option<f32>,
     weights: WeightsReport,
+    analyzer: Analyzer,
 ) -> Option<FindQuery> {
     let mut q = FindQuery::new(COLLECTION);
     q.limit = Some(k);
@@ -370,11 +402,12 @@ fn build_query(
         EvalMode::Bm25 => {
             q.text_search = Some(Box::new(TextSearch {
                 field: TEXT_FIELD.into(),
-                query: query.text.clone(),
+                query: analyzed(analyzer, &query.text),
                 operator: TextOperator::Or,
                 rank: TextRank::Bm25,
                 k1,
                 b,
+                analyzer: None,
             }));
         }
         EvalMode::VectorExact => {
@@ -390,7 +423,7 @@ fn build_query(
             let vector = query.vector.clone()?;
             q.hybrid = Some(Box::new(HybridSearch {
                 text_field: TEXT_FIELD.into(),
-                text_query: query.text.clone(),
+                text_query: analyzed(analyzer, &query.text),
                 vector_field: VECTOR_FIELD.into(),
                 vector,
                 top_k: k,
@@ -403,6 +436,7 @@ fn build_query(
                 operator: TextOperator::Or,
                 k1,
                 b,
+                analyzer: None,
             }));
         }
     }
@@ -417,6 +451,9 @@ fn build_query(
 /// the collection it creates). Returns an error for malformed datasets, unknown
 /// modes, or invalid BM25/weight parameters, so callers (and CI) get a non-zero
 /// exit on a bad dataset.
+/// `auradb search eval` with the default analyzer — the v1.4-compatible entry
+/// point. Equivalent to [`cmd_search_eval_with_analyzer`] with `analyzer = None`
+/// (the `default` analyzer), preserving the existing behavior and call sites.
 #[allow(clippy::too_many_arguments)]
 pub fn cmd_search_eval(
     data_dir: &Path,
@@ -430,10 +467,46 @@ pub fn cmd_search_eval(
     text_weight: f32,
     vector_weight: f32,
 ) -> Result<String> {
+    cmd_search_eval_with_analyzer(
+        data_dir,
+        corpus,
+        queries,
+        qrels,
+        mode,
+        k,
+        k1,
+        b,
+        text_weight,
+        vector_weight,
+        None,
+    )
+}
+
+/// `auradb search eval` with an explicit query-time analyzer. `analyzer` is a preset
+/// name (`default`, `simple`, `ascii_fold`, `keyword`, `english_basic`); `None` means
+/// `default` and preserves the v1.4 baseline exactly. Every analyzer is valid in the
+/// text-bearing modes (`bm25`, `hybrid`).
+#[allow(clippy::too_many_arguments)]
+pub fn cmd_search_eval_with_analyzer(
+    data_dir: &Path,
+    corpus: &Path,
+    queries: &Path,
+    qrels: &Path,
+    mode: &str,
+    k: usize,
+    k1: Option<f32>,
+    b: Option<f32>,
+    text_weight: f32,
+    vector_weight: f32,
+    analyzer: Option<&str>,
+) -> Result<String> {
     if k == 0 {
         bail!("k must be >= 1");
     }
     let mode = EvalMode::parse(mode)?;
+    // Unknown analyzer is a structured, loud failure (no silent fallback to default).
+    let analyzer =
+        Analyzer::parse(analyzer.unwrap_or("default")).map_err(|e| anyhow::anyhow!("{e}"))?;
 
     // Validate BM25 parameter overrides up front (defaults preserve current
     // behaviour: None means the engine's built-in BM25_DEFAULT_K1 / _B).
@@ -460,6 +533,49 @@ pub fn cmd_search_eval(
         vector: vector_weight,
     };
 
+    let data = prepare_dataset(corpus, queries, qrels, mode)?;
+
+    let report = evaluate(
+        data_dir,
+        &dataset_label(corpus),
+        &data.docs,
+        &data.query_rows,
+        &data.grades,
+        &data.warnings,
+        EvalConfig {
+            mode,
+            k,
+            k1,
+            b,
+            weights,
+            analyzer,
+            vector_dim: data.vector_dim,
+        },
+    )?;
+    Ok(serde_json::to_string_pretty(&report)?)
+}
+
+/// A parsed, validated relevance dataset ready for one or more evaluation passes.
+struct DatasetPrep {
+    docs: Vec<CorpusDoc>,
+    query_rows: Vec<QueryRow>,
+    /// `grades[query_id][doc_id] = grade`.
+    grades: HashMap<String, HashMap<String, u32>>,
+    /// Dataset-level warnings (qrels referencing unknown ids).
+    warnings: Vec<String>,
+    /// The common corpus vector dimensionality, when every document has a vector.
+    vector_dim: Option<usize>,
+}
+
+/// Parse and validate the corpus/queries/qrels files once. Shared by `search eval`
+/// and `search eval compare-analyzers` so both legs see identical parsing,
+/// validation, and dataset-level warnings.
+fn prepare_dataset(
+    corpus: &Path,
+    queries: &Path,
+    qrels: &Path,
+    mode: EvalMode,
+) -> Result<DatasetPrep> {
     let docs = parse_corpus(corpus)?;
     let query_rows = parse_queries(queries)?;
     let judgments = parse_qrels(qrels)?;
@@ -477,7 +593,6 @@ pub fn cmd_search_eval(
     let doc_ids: HashSet<&str> = docs.iter().map(|d| d.id.as_str()).collect();
     let query_ids: HashSet<&str> = query_rows.iter().map(|q| q.id.as_str()).collect();
 
-    // grades[query_id][doc_id] = grade.
     let mut grades: HashMap<String, HashMap<String, u32>> = HashMap::new();
     let mut warnings: Vec<String> = Vec::new();
     for r in &judgments {
@@ -501,20 +616,190 @@ pub fn cmd_search_eval(
             .insert(r.doc_id.clone(), r.relevance as u32);
     }
 
-    let engine = Engine::open(data_dir)?;
-    ingest(&engine, &docs, vector_dim)?;
+    Ok(DatasetPrep {
+        docs,
+        query_rows,
+        grades,
+        warnings,
+        vector_dim,
+    })
+}
 
+/// One analyzer's leg in an analyzer-comparison report: its name and the aggregate
+/// metrics it produced over the shared dataset.
+#[derive(Debug, Clone, Serialize)]
+pub struct AnalyzerLeg {
+    /// The analyzer applied for this leg (`default`, `simple`, `ascii_fold`,
+    /// `keyword`, `english_basic`).
+    pub analyzer: String,
+    /// The aggregate metrics under this analyzer.
+    pub metrics: AggregateMetrics,
+    /// Warnings produced while evaluating under this analyzer.
+    pub warnings: Vec<String>,
+}
+
+/// The machine-readable analyzer-comparison report emitted by
+/// `auradb search eval compare-analyzers`.
+#[derive(Debug, Clone, Serialize)]
+pub struct AnalyzerComparison {
+    /// The dataset label.
+    pub dataset: String,
+    /// The retrieval mode used for every leg.
+    pub mode: String,
+    /// The rank cutoff `k`.
+    pub k: usize,
+    /// One leg per requested analyzer, in request order. Numbers are
+    /// dataset-specific regression signals, not a universal benchmark.
+    pub analyzers: Vec<AnalyzerLeg>,
+}
+
+/// `auradb search eval compare-analyzers` — evaluate the same dataset under several
+/// analyzers and report each analyzer's metrics side by side.
+///
+/// Each analyzer is evaluated in its own subdirectory of `data_dir` (the harness
+/// owns a fresh collection per leg). `analyzers` is a comma-separated list of preset
+/// names; an unknown or duplicate name is a structured error.
+#[allow(clippy::too_many_arguments)]
+pub fn cmd_compare_analyzers(
+    data_dir: &Path,
+    corpus: &Path,
+    queries: &Path,
+    qrels: &Path,
+    mode: &str,
+    k: usize,
+    k1: Option<f32>,
+    b: Option<f32>,
+    text_weight: f32,
+    vector_weight: f32,
+    analyzers: &str,
+) -> Result<String> {
+    if k == 0 {
+        bail!("k must be >= 1");
+    }
+    let mode = EvalMode::parse(mode)?;
+
+    // Parse and validate the analyzer list up front (loud on unknown/duplicate).
+    let mut seen = HashSet::new();
+    let mut presets: Vec<Analyzer> = Vec::new();
+    for name in analyzers
+        .split(',')
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+    {
+        let analyzer = Analyzer::parse(name).map_err(|e| anyhow::anyhow!("{e}"))?;
+        if !seen.insert(analyzer.name()) {
+            bail!("--analyzers lists {:?} more than once", analyzer.name());
+        }
+        presets.push(analyzer);
+    }
+    if presets.is_empty() {
+        bail!("--analyzers must name at least one analyzer (comma-separated)");
+    }
+
+    if !(text_weight.is_finite() && vector_weight.is_finite())
+        || text_weight < 0.0
+        || vector_weight < 0.0
+        || (text_weight == 0.0 && vector_weight == 0.0)
+    {
+        bail!("--text-weight and --vector-weight must be finite, >= 0, and not both zero");
+    }
+    let weights = WeightsReport {
+        text: text_weight,
+        vector: vector_weight,
+    };
+
+    let data = prepare_dataset(corpus, queries, qrels, mode)?;
+
+    let mut legs = Vec::with_capacity(presets.len());
+    for analyzer in presets {
+        let leg_dir = data_dir.join(analyzer.name());
+        let report = evaluate(
+            &leg_dir,
+            &dataset_label(corpus),
+            &data.docs,
+            &data.query_rows,
+            &data.grades,
+            &data.warnings,
+            EvalConfig {
+                mode,
+                k,
+                k1,
+                b,
+                weights,
+                analyzer,
+                vector_dim: data.vector_dim,
+            },
+        )?;
+        legs.push(AnalyzerLeg {
+            analyzer: report.analyzer,
+            metrics: report.metrics,
+            warnings: report.warnings,
+        });
+    }
+
+    let comparison = AnalyzerComparison {
+        dataset: dataset_label(corpus),
+        mode: mode.as_str().to_string(),
+        k,
+        analyzers: legs,
+    };
+    Ok(serde_json::to_string_pretty(&comparison)?)
+}
+
+/// The analyzer-and-ranking configuration for one evaluation pass. Bundled so the
+/// shared [`evaluate`] core (used by both `search eval` and the analyzer-comparison
+/// mode) takes a single config rather than a long argument list.
+#[derive(Debug, Clone, Copy)]
+struct EvalConfig {
+    mode: EvalMode,
+    k: usize,
+    k1: Option<f32>,
+    b: Option<f32>,
+    weights: WeightsReport,
+    analyzer: Analyzer,
+    vector_dim: Option<usize>,
+}
+
+/// Run one evaluation pass over an already-parsed dataset and return its report.
+///
+/// `data_dir` must be empty (the harness owns the collection it creates). The
+/// dataset-level `base_warnings` (e.g. qrels referencing unknown ids) are carried
+/// in; per-query warnings are appended here. This is the shared core behind a
+/// single `search eval` run and each leg of `search eval compare-analyzers`.
+fn evaluate(
+    data_dir: &Path,
+    dataset: &str,
+    docs: &[CorpusDoc],
+    query_rows: &[QueryRow],
+    grades: &HashMap<String, HashMap<String, u32>>,
+    base_warnings: &[String],
+    cfg: EvalConfig,
+) -> Result<SearchEvalReport> {
+    let EvalConfig {
+        mode,
+        k,
+        k1,
+        b,
+        weights,
+        analyzer,
+        vector_dim,
+    } = cfg;
+
+    let engine = Engine::open(data_dir)?;
+    ingest(&engine, docs, vector_dim, analyzer)?;
+
+    let mut warnings = base_warnings.to_vec();
     let mut per_query: Vec<PerQueryMetrics> = Vec::with_capacity(query_rows.len());
     let mut sum_mrr = 0.0;
     let mut sum_ndcg = 0.0;
     let mut sum_recall = 0.0;
     let mut scored_queries = 0usize;
 
-    for query in &query_rows {
+    for query in query_rows {
         let query_grades = grades.get(&query.id).cloned().unwrap_or_default();
         let relevant = relevant_set(&query_grades);
 
-        let top_docs = match build_query(mode, query, k, k1, b, weights) {
+        let top_docs = match build_query(mode, query, k, k1, b, weights, analyzer) {
             Some(q) => {
                 let rows = engine
                     .find(&q)
@@ -586,9 +871,10 @@ pub fn cmd_search_eval(
         None
     };
 
-    let report = SearchEvalReport {
-        dataset: dataset_label(corpus),
+    Ok(SearchEvalReport {
+        dataset: dataset.to_string(),
         mode: mode.as_str().to_string(),
+        analyzer: analyzer.name().to_string(),
         queries: query_rows.len(),
         documents: docs.len(),
         k,
@@ -598,8 +884,7 @@ pub fn cmd_search_eval(
         metrics,
         per_query,
         warnings,
-    };
-    Ok(serde_json::to_string_pretty(&report)?)
+    })
 }
 
 /// Derive a short dataset label from the corpus file name, stripping a trailing

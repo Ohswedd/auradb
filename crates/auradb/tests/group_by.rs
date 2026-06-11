@@ -237,6 +237,7 @@ fn group_by_search_candidates() {
         rank: TextRank::Bm25,
         k1: None,
         b: None,
+        analyzer: None,
     }));
     let r = engine.aggregate(&q).unwrap();
     assert!(r.search_scoped);

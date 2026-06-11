@@ -77,6 +77,7 @@ fn text_query() -> ReadRequest {
         rank: TextRank::Bm25,
         k1: None,
         b: None,
+        analyzer: None,
     }));
     ReadRequest::Find(q)
 }
@@ -95,6 +96,7 @@ fn hybrid_query() -> ReadRequest {
         operator: TextOperator::Or,
         k1: None,
         b: None,
+        analyzer: None,
     }));
     ReadRequest::Find(q)
 }
@@ -174,6 +176,7 @@ fn search_metrics_render_no_query_payload() {
         rank: TextRank::Bm25,
         k1: None,
         b: None,
+        analyzer: None,
     }));
     send(ctx, &mut session, Opcode::Query, &ReadRequest::Find(q));
     // The Prometheus exposition is counters/histograms only — never the query

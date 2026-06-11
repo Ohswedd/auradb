@@ -16,9 +16,42 @@ proprietary text. Keep it that way (see "Adding a dataset" below).
 | `small_corpus.jsonl`  | one document per line | the searchable documents |
 | `small_queries.jsonl` | one query per line    | the evaluation queries |
 | `small_qrels.jsonl`   | one judgment per line | graded relevance judgments |
+| `analyzer_corpus.jsonl`  | one document per line | analyzer-behavior documents |
+| `analyzer_queries.jsonl` | one query per line    | analyzer-behavior queries |
+| `analyzer_qrels.jsonl`   | one judgment per line | analyzer-behavior judgments |
 
-All three are [JSON Lines](https://jsonlines.org/): one JSON object per line, no
-enclosing array. IDs are stable; do not renumber existing rows.
+All are [JSON Lines](https://jsonlines.org/): one JSON object per line, no
+enclosing array. IDs are stable; do not renumber existing rows. The `analyzer_*`
+set shares the schema below and carries a small synthetic vector on every document
+and query, so it exercises the `bm25`, `vector_exact`, and `hybrid` paths — the
+hybrid path is how the `keyword` analyzer is evaluated alongside the rest.
+
+### Analyzer dataset (`analyzer_*.jsonl`)
+
+The `analyzer_*` fixtures exercise the v1.5.0 analyzer presets (`auradb search eval
+--analyzer …`). They are short, plain-text documents chosen so each preset's
+behavior is visible and the metric *differences* between presets are deterministic
+regression signals:
+
+- **case** — `UPPER CASE` text matched by a lowercase query (all presets lowercase).
+- **punctuation / hyphenation** — `well-formed` splits into `well` + `formed`.
+- **ASCII accents** — `café` / `naïve` are matched by `cafe` / `naive` **only**
+  under `ascii_fold`; `simple`/`default` (which do not fold) miss them, so
+  `ascii_fold` recall is higher on this set.
+- **keyword exactness** — `keyword` matches a field only when the whole field
+  normalizes to the query (e.g. `aq-001 "backup restore"` → `ad-001`), and misses
+  partial-term queries, so its recall is lower than `simple` here. That is the
+  point of `keyword`, not a defect. Because every row carries a vector, `keyword`
+  is also evaluable in `hybrid` mode, where its whole-field text signal is fused
+  with the exact vector signal.
+- **conservative plural fold** — `english_basic` folds `lenses`/`lens` to the same
+  real term `lens` (so `aq-007 "lens"` → `ad-009`) and never truncates the bare-`s`
+  singular to `len`; the negative probe `aq-008 "len"` therefore retrieves nothing.
+  It is deterministic and intentionally not a full stemmer.
+
+Because `simple` tokenizes identically to `default`, the two produce identical
+metrics on this set. These numbers describe *these* documents only — they are not a
+universal benchmark and not a relevance guarantee on any other corpus.
 
 ## Schemas
 

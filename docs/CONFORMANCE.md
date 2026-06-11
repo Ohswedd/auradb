@@ -151,7 +151,44 @@ Connector v0.7.x API (never the in-memory reference backend). Each prints a
   `QueryProfile` is well typed when present (advisory fields may be absent), and
   the client-side query IR is still exposed via `.explain()`.
 
-These require Aura Connector **v0.7.0**. The cluster search-analytics drill
+These require Aura Connector **v0.7.0**.
+
+### v1.5.0 analyzer & snippet harnesses
+
+AuraDB v1.5.0 adds two connector-driven harnesses for the live, over-the-wire
+query-time analyzer and snippet surface. They require **Aura Connector v0.9.0** and a
+running v1.5.0 server, use dedicated collections so they never collide with other
+suites, print a `PASS`/`FAIL` line per check, and exit non-zero on failure. They are
+**release gates**: each fails (does not skip) if the server does not advertise the
+capability it needs.
+
+- **`run_connector_analyzers.py`** — live query-time analyzer selection via
+  `search_text(analyzer=…)` / `.analyzer(…)`: the `query_analyzers` capability is
+  present; `default` matches an existing (no-analyzer) search; `simple` case
+  behavior; `ascii_fold` recovers an unaccented query against an accented document
+  (where `simple` does not); `keyword` whole-field exact match; `english_basic`
+  plural recall and the `english_basic_lens_regression` (a bare-`s` singular like
+  `lens` is not truncated to `len`); the `keyword` analyzer in **hybrid** search
+  (`hybrid_keyword_analyzer_success`, the vector component still contributing, and
+  the profile/explain reporting `analyzer="keyword"`); the chained `.analyzer()` live
+  path; a profiled analyzer query; and the structured client-side unknown-analyzer
+  error.
+- **`run_connector_snippets.py`** — live opt-in snippets via
+  `QueryBuilder.snippets(...)` + `aura.search_snippets(row)`: the `search_snippets`
+  capability is present; opt-in only (no request → no snippets); a basic highlighted
+  fragment whose range slices the matched text; the field allowlist and the
+  no-hidden-fields guarantee (a `secret` field is never returned); fragment/char
+  caps; Unicode safety; missing-field safety; and the typed result models.
+
+Run them alongside the other suites:
+
+```bash
+python tests/conformance/python/run_connector_analyzers.py --addr <leader-client-addr>
+python tests/conformance/python/run_connector_snippets.py  --addr <leader-client-addr>
+```
+
+These are not CI-required (they need a running server), but they are local release
+gates for v1.5.0. The cluster search-analytics drill
 `scripts/smoke_cluster_search_analytics.sh` runs the search/facets/pagination/
 group-by/cursor-resume suite against a three-node Compose cluster leader, then
 performs a bounded leader-change drill (stop the leader, wait for a new one,

@@ -5,7 +5,7 @@ use std::cmp::Ordering;
 use std::time::{Duration, Instant};
 
 use auradb_core::{Cardinality, CollectionSchema, Error, Record, RecordId, Result, Value};
-use auradb_index::{CollectionIndexes, HnswParams, Metric};
+use auradb_index::{Analyzer, AnalyzerPreset, CollectionIndexes, HnswParams, Metric};
 
 /// Default HNSW `efSearch` for the approximate vector preview when a query does
 /// not specify one (clamped up to at least `k` at the call site).
@@ -90,7 +90,17 @@ use crate::ir::{
 };
 use crate::plan::{Access, PlanNode};
 use crate::planner;
+use crate::snippet::{build_snippet, Snippet, SnippetOptions};
 use crate::stats::CollectionStats;
+
+/// Server-side hard caps on snippet output. A [`crate::ir::SnippetRequest`] may ask
+/// for fewer fragments or shorter fragments, never more — the caps bound how much of
+/// a document a snippet can ever echo, independent of what the client requests.
+const SNIPPET_MAX_FRAGMENTS_CAP: usize = 10;
+const SNIPPET_MAX_FRAGMENT_CHARS_CAP: usize = 1000;
+/// Defaults applied when the request omits a limit.
+const SNIPPET_DEFAULT_MAX_FRAGMENTS: usize = 3;
+const SNIPPET_DEFAULT_FRAGMENT_CHARS: usize = 200;
 
 /// Read-only access to the engine's data and indexes, implemented by `auradb`.
 pub trait DataSource {
@@ -273,6 +283,12 @@ pub struct VectorPlan {
     pub exact_fallback: bool,
 }
 
+/// Serde default for the EXPLAIN `analyzer` field so plans serialized before v1.5
+/// (which had no analyzer) deserialize as `default`.
+fn default_analyzer_name() -> String {
+    AnalyzerPreset::Default.name().to_string()
+}
+
 /// Ranked full-text clause summary in an EXPLAIN plan.
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct TextSearchPlan {
@@ -282,7 +298,11 @@ pub struct TextSearchPlan {
     pub rank: String,
     /// The term operator (`or` or `and`).
     pub operator: String,
-    /// Distinct query terms after tokenization.
+    /// The effective query-time analyzer (`default`, `simple`, `ascii_fold`,
+    /// `keyword`, `english_basic`). `default` for queries that do not select one.
+    #[serde(default = "default_analyzer_name")]
+    pub analyzer: String,
+    /// Query terms after analysis under the effective analyzer.
     pub query_terms: usize,
     /// Indexed documents available for ranking (corpus size).
     pub indexed_documents: usize,
@@ -310,6 +330,9 @@ pub struct HybridPlan {
     pub weight_vector: f32,
     /// Requested fused result count.
     pub top_k: usize,
+    /// The effective query-time analyzer applied to the text signal.
+    #[serde(default = "default_analyzer_name")]
+    pub analyzer: String,
     /// Text candidate documents (present only for `EXPLAIN ANALYZE`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub text_candidates: Option<usize>,
@@ -505,7 +528,8 @@ fn select_candidates(
                 .text_search
                 .as_ref()
                 .expect("ranked-text access only chosen for a text_search query");
-            let candidates = ranked_text_candidates(indexes, ts)?;
+            let analyzer = ts.resolved_analyzer().map_err(Error::InvalidRequest)?;
+            let candidates = ranked_text_candidates(ds, &query.collection, indexes, ts, analyzer)?;
             let summary = TextSearchPlan {
                 field: field.clone(),
                 rank: match ts.rank {
@@ -518,7 +542,8 @@ fn select_candidates(
                     "or"
                 }
                 .into(),
-                query_terms: auradb_index::tokenize(&ts.query).len(),
+                analyzer: analyzer.name().to_string(),
+                query_terms: analyzer.index_terms(&ts.query).len(),
                 indexed_documents: indexes
                     .text_index_stats(field)
                     .map(|s| s.documents)
@@ -537,7 +562,17 @@ fn select_candidates(
                 .hybrid
                 .as_ref()
                 .expect("hybrid access only chosen for a hybrid query");
-            let (candidates, text_n, vec_n) = hybrid_candidates(indexes, hs)?;
+            let analyzer = hs.resolved_analyzer().map_err(Error::InvalidRequest)?;
+            let (candidates, text_n, vec_n) =
+                hybrid_candidates(ds, &query.collection, indexes, hs, analyzer)?;
+            // The text signal is BM25 over the persisted postings for every per-token
+            // analyzer; `keyword` instead contributes whole-field exact matches, so the
+            // EXPLAIN/profile text_source names the keyword path with no silent fallback.
+            let text_source = if analyzer.preset() == AnalyzerPreset::Keyword {
+                format!("keyword:{}", hs.text_field)
+            } else {
+                format!("bm25:{}", hs.text_field)
+            };
             let summary = HybridPlan {
                 text_field: hs.text_field.clone(),
                 vector_field: hs.vector_field.clone(),
@@ -545,11 +580,12 @@ fn select_candidates(
                     crate::ir::FusionMode::ReciprocalRankFusion => "reciprocal_rank_fusion".into(),
                     crate::ir::FusionMode::WeightedSum => "weighted_sum".into(),
                 },
-                text_source: format!("bm25:{}", hs.text_field),
+                text_source,
                 vector_source: format!("exact_vector:{}", hs.vector_field),
                 weight_text: hs.weights.text,
                 weight_vector: hs.weights.vector,
                 top_k: hs.top_k,
+                analyzer: analyzer.name().to_string(),
                 text_candidates: Some(text_n),
                 vector_candidates: Some(vec_n),
             };
@@ -772,21 +808,43 @@ pub fn execute_find_within(
     Ok(run_find(ds, query, deadline)?.0)
 }
 
-/// Resolve BM25-ranked text candidates for a `text_search` clause.
-fn ranked_text_candidates(indexes: &CollectionIndexes, ts: &TextSearch) -> Result<Vec<Scored>> {
+/// Resolve ranked text candidates for a `text_search` clause under `analyzer`.
+///
+/// `default`/`simple` use the existing default-tokenized search verbatim (so the
+/// baseline is byte-identical). The per-token presets (`ascii_fold`,
+/// `english_basic`) retrieve over a transformed view of the persisted default
+/// postings. `keyword` is whole-field, so it gathers candidates from the default
+/// index and confirms each against the stored field text (see [`keyword_candidates`]).
+fn ranked_text_candidates(
+    ds: &dyn DataSource,
+    collection: &str,
+    indexes: &CollectionIndexes,
+    ts: &TextSearch,
+    analyzer: Analyzer,
+) -> Result<Vec<Scored>> {
     if auradb_index::tokenize(&ts.query).is_empty() {
         return Err(Error::InvalidRequest(
             "text_search query has no searchable terms".into(),
         ));
     }
     let require_all = ts.operator.require_all();
-    let results = match ts.rank {
-        TextRank::TermFrequency => indexes.text_search(&ts.field, &ts.query)?,
-        TextRank::Bm25 => {
-            let k1 = ts.k1.unwrap_or(BM25_DEFAULT_K1);
-            let b = ts.b.unwrap_or(BM25_DEFAULT_B);
-            indexes.text_bm25_search(&ts.field, &ts.query, require_all, k1, b)?
+    let bm25 = matches!(ts.rank, TextRank::Bm25);
+    let k1 = ts.k1.unwrap_or(BM25_DEFAULT_K1);
+    let b = ts.b.unwrap_or(BM25_DEFAULT_B);
+    let results = match analyzer.preset() {
+        AnalyzerPreset::Default | AnalyzerPreset::Simple => {
+            if bm25 {
+                indexes.text_bm25_search(&ts.field, &ts.query, require_all, k1, b)?
+            } else {
+                indexes.text_search(&ts.field, &ts.query)?
+            }
         }
+        AnalyzerPreset::Keyword => keyword_candidates(
+            ds, collection, indexes, &ts.field, &ts.query, analyzer, k1, b,
+        )?,
+        AnalyzerPreset::AsciiFold | AnalyzerPreset::EnglishBasic => indexes
+            .text_search_analyzed(&ts.field, &ts.query, analyzer, bm25, require_all, k1, b)?
+            .expect("per-token analyzer always yields a result set"),
     };
     Ok(results
         .into_iter()
@@ -794,14 +852,60 @@ fn ranked_text_candidates(indexes: &CollectionIndexes, ts: &TextSearch) -> Resul
         .collect())
 }
 
+/// Resolve `keyword`-analyzer candidates: whole-field exact match.
+///
+/// The query collapses to a single normalized term. A matching document must
+/// contain every component token of the query (a necessary condition, used to
+/// gather candidates cheaply from the default index) **and** its whole field must
+/// normalize to exactly the query's keyword term. Matches are returned with a
+/// uniform score, ordered by record id for determinism.
+#[allow(clippy::too_many_arguments)]
+fn keyword_candidates(
+    ds: &dyn DataSource,
+    collection: &str,
+    indexes: &CollectionIndexes,
+    field: &str,
+    query: &str,
+    analyzer: Analyzer,
+    k1: f32,
+    b: f32,
+) -> Result<Vec<(RecordId, f32)>> {
+    let q_terms = analyzer.index_terms(query);
+    let Some(q_term) = q_terms.first() else {
+        return Ok(Vec::new());
+    };
+    // Candidate gather: documents containing all component tokens of the query.
+    let candidates = indexes.text_bm25_search(field, query, true, k1, b)?;
+    let mut out: Vec<(RecordId, f32)> = Vec::new();
+    for (id, _) in candidates {
+        if let Some(record) = ds.get(collection, id) {
+            if let Some(Value::Text(s)) = record.fields.get(field) {
+                if analyzer.index_terms(s).first() == Some(q_term) {
+                    out.push((id, 1.0));
+                }
+            }
+        }
+    }
+    out.sort_by_key(|(id, _)| *id);
+    Ok(out)
+}
+
 /// The reciprocal-rank-fusion smoothing constant. A larger value flattens the
 /// influence of high ranks; 60 is the value from the original RRF paper.
 const RRF_K: f32 = 60.0;
 
-/// Resolve fused hybrid candidates plus the per-signal candidate counts.
+/// Resolve fused hybrid candidates plus the per-signal candidate counts. The text
+/// signal is retrieved under `analyzer`: per-token presets (`default`, `simple`,
+/// `ascii_fold`, `english_basic`) retrieve over the persisted postings, while
+/// `keyword` uses the same whole-field exact-match path as plain keyword text search
+/// (see [`keyword_candidates`]). The vector signal is unaffected by the analyzer, and
+/// the two are fused exactly as before.
 fn hybrid_candidates(
+    ds: &dyn DataSource,
+    collection: &str,
     indexes: &CollectionIndexes,
     hs: &HybridSearch,
+    analyzer: Analyzer,
 ) -> Result<(Vec<Scored>, usize, usize)> {
     if auradb_index::tokenize(&hs.text_query).is_empty() {
         return Err(Error::InvalidRequest(
@@ -824,13 +928,33 @@ fn hybrid_candidates(
     // vector index below; the text index validates its own field.
     let k1 = hs.k1.unwrap_or(BM25_DEFAULT_K1);
     let b = hs.b.unwrap_or(BM25_DEFAULT_B);
-    let text = indexes.text_bm25_search(
-        &hs.text_field,
-        &hs.text_query,
-        hs.operator.require_all(),
-        k1,
-        b,
-    )?;
+    let require_all = hs.operator.require_all();
+    let text = match analyzer.preset() {
+        AnalyzerPreset::Default | AnalyzerPreset::Simple => {
+            indexes.text_bm25_search(&hs.text_field, &hs.text_query, require_all, k1, b)?
+        }
+        AnalyzerPreset::AsciiFold | AnalyzerPreset::EnglishBasic => indexes
+            .text_search_analyzed(
+                &hs.text_field,
+                &hs.text_query,
+                analyzer,
+                true,
+                require_all,
+                k1,
+                b,
+            )?
+            .expect("per-token analyzer always yields a result set"),
+        AnalyzerPreset::Keyword => keyword_candidates(
+            ds,
+            collection,
+            indexes,
+            &hs.text_field,
+            &hs.text_query,
+            analyzer,
+            k1,
+            b,
+        )?,
+    };
     // Vector signal (exact). Fetch a generous candidate pool so fusion has both
     // signals to combine, then truncate after fusion.
     let metric = Metric::parse(hs.metric_name())?;
@@ -995,6 +1119,7 @@ pub fn materialize_page(
             )?;
             includes.insert(rel_name.clone(), related);
         }
+        let snippets = build_row_snippets(query, record)?;
         rows.push(Row {
             id: cand.id.to_string(),
             fields,
@@ -1007,9 +1132,77 @@ pub fn materialize_page(
                 None
             },
             includes,
+            snippets,
         });
     }
     Ok(rows)
+}
+
+/// Build the opt-in plain-text snippets for one result `record`, honoring the
+/// query's [`crate::ir::SnippetRequest`]. Returns an empty vector unless the query
+/// both carries a snippet request and has a ranked text (or hybrid) clause to take
+/// the query text and analyzer from.
+///
+/// The redaction boundary is strict: a snippet is only ever built for a field named
+/// in the request's allowlist, that field must exist and be textual, and any
+/// internal (`_`-prefixed) name is excluded entirely. Fragment count and length are
+/// clamped to server caps. Fields that are absent, non-textual, or yield no match
+/// are skipped (never a panic, never an empty placeholder).
+fn build_row_snippets(query: &FindQuery, record: &Record) -> Result<Vec<Snippet>> {
+    let Some(req) = &query.snippet else {
+        return Ok(Vec::new());
+    };
+    let (text_query, analyzer) = if let Some(ts) = &query.text_search {
+        (
+            ts.query.as_str(),
+            ts.resolved_analyzer().map_err(Error::InvalidRequest)?,
+        )
+    } else if let Some(hs) = &query.hybrid {
+        (
+            hs.text_query.as_str(),
+            hs.resolved_analyzer().map_err(Error::InvalidRequest)?,
+        )
+    } else {
+        // No ranked text clause: there is nothing to highlight against.
+        return Ok(Vec::new());
+    };
+    // Allowlist: exactly the requested fields, minus any internal `_`-prefixed name.
+    let allowed: Vec<&str> = req
+        .fields
+        .iter()
+        .map(String::as_str)
+        .filter(|f| !f.starts_with('_'))
+        .collect();
+    if allowed.is_empty() {
+        return Ok(Vec::new());
+    }
+    // Read only the allowed, present, textual fields — nothing else is touched.
+    let mut fields: std::collections::BTreeMap<String, String> = std::collections::BTreeMap::new();
+    for f in &allowed {
+        if let Some(Value::Text(s)) = record.fields.get(*f) {
+            fields.insert((*f).to_string(), s.clone());
+        }
+    }
+    let opts = SnippetOptions {
+        max_fragments: req
+            .max_fragments
+            .unwrap_or(SNIPPET_DEFAULT_MAX_FRAGMENTS)
+            .clamp(1, SNIPPET_MAX_FRAGMENTS_CAP),
+        max_fragment_chars: req
+            .fragment_chars
+            .unwrap_or(SNIPPET_DEFAULT_FRAGMENT_CHARS)
+            .clamp(1, SNIPPET_MAX_FRAGMENT_CHARS_CAP),
+    };
+    let mut out = Vec::new();
+    for f in &allowed {
+        if let Some(snip) = build_snippet(f, &allowed, &fields, text_query, analyzer, &opts) {
+            // Only surface fields that actually produced a highlighted fragment.
+            if !snip.fragments.is_empty() {
+                out.push(snip);
+            }
+        }
+    }
+    Ok(out)
 }
 
 /// Materialize the first page of a result (rank starts at 1). Kept for callers
